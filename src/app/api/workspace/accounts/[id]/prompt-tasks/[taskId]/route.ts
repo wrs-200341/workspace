@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
-import { getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
+import { deleteProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
 
@@ -28,4 +28,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const next = applyTaskAction({ ...task, pid: 'pending', title: task.prompt || 'prompt generation', owner: 'operator-unassigned', model: task.model || task.provider }, action);
   const updated = updateProviderTask(taskId, { status: next.status, progress: next.progress, error: next.error, providerTaskId: next.providerTaskId, outputUrls: next.outputUrls, outputBase64: next.outputBase64 });
   return NextResponse.json({ success: true, data: updated });
+}
+
+export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string; taskId: string }> }) {
+  const auth = await requireApiRole(['admin', 'workspace', 'operator']);
+  if (auth instanceof Response) return auth;
+  const { id, taskId } = await params;
+  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  const task = getProviderTask(taskId);
+  if (!task || task.accountId !== id || task.mode !== 'prompt') return NextResponse.json({ success: false, error: 'task_not_found' }, { status: 404 });
+  deleteProviderTask(taskId);
+  return NextResponse.json({ success: true, data: { taskId, deleted: true } });
 }

@@ -30,6 +30,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
   const [downloadingIndex, setDownloadingIndex] = useState<number | null>(null);
+  const [selectedReferenceIndex, setSelectedReferenceIndex] = useState(0);
   const endpoint = `/api/workspace/accounts/${accountId}/${mode === 'video' ? 'video-tasks' : 'image-tasks'}/${encodeURIComponent(taskId)}`;
 
   const load = useCallback(async () => {
@@ -109,6 +110,9 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
     if (reference.startsWith('product-image:')) return `/api/workspace/product-images/preview?assetId=${encodeURIComponent(reference)}`;
     return `/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(reference)}`;
   }), [accountId, references]);
+  useEffect(() => {
+    setSelectedReferenceIndex((current) => referenceUrls.length ? Math.min(current, referenceUrls.length - 1) : 0);
+  }, [referenceUrls.length]);
   // Display only outputs that can actually be previewed/downloaded. Legacy
   // outputCount metadata without a URL or stored Base64 payload is not a
   // production result and must not appear as a real count.
@@ -132,7 +136,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   const metadataChildPrompt = typeof metadata.childPrompt === 'string' ? metadata.childPrompt : '';
   const metadataFinalPrompt = typeof metadata.finalPrompt === 'string' ? metadata.finalPrompt : '';
 
-  return <div className="task-review-page">
+  return <div className={`task-review-page ${mode === 'video' ? 'video-task-review' : ''}`}>
     <div className="page-heading task-review-heading"><div><Link href={`/workspace/accounts/${accountId}/production?mode=${mode}`} className="panel-meta task-review-back"><ArrowLeft size={13} /> 返回生产工作区</Link><div className="eyebrow task-review-eyebrow">Production / task review</div><h1>{task?.prompt?.slice(0, 80) || '任务详情'}</h1><p className="subtitle">{task ? `${task.model ?? task.provider ?? 'provider'} · ${task.providerTaskId ?? task.id}` : `任务 ${taskId} 不在当前队列中`}</p></div><div className="toolbar"><span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status ?? 'unknown'}</span></div></div>
     {message && <div className="workspace-alert task-review-alert" role="status"><CircleAlert size={16} /><div><strong>{message}</strong></div></div>}
     {task?.error && <div className="workspace-alert task-review-alert" role="alert"><CircleAlert size={16} /><div><strong>供应商返回错误</strong><span>{task.error}</span></div></div>}
@@ -151,8 +155,13 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
             {metadataFinalPrompt && metadataFinalPrompt !== metadataPrompt && <label>最终提交提示词<textarea readOnly value={metadataFinalPrompt} /></label>}
           </div>
         </section>
-        <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">参考图</h2><div className="panel-meta">{referenceUrls.length} 张</div></div></div>
-        <div className="task-reference-list">{referenceUrls.length > 0 ? referenceUrls.map((url, index) => <ZoomableMedia key={`${url}-${index}`} src={url} alt={`参考图 ${index + 1}`} />) : <div className="task-review-empty">未使用参考图</div>}</div>
+        <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">参考图</h2><div className="panel-meta">{referenceUrls.length} 张 · 点击缩略图预览</div></div></div>
+        {referenceUrls.length > 0 ? <>
+          <div className="task-reference-selected"><ZoomableMedia src={referenceUrls[selectedReferenceIndex]} alt={`参考图 ${selectedReferenceIndex + 1}`} /></div>
+          <div className="task-reference-thumbnails" role="listbox" aria-label="选择参考图">
+            {referenceUrls.map((url, index) => <button key={`${url}-${index}`} type="button" className={`task-reference-thumbnail ${selectedReferenceIndex === index ? 'active' : ''}`} onClick={() => setSelectedReferenceIndex(index)} aria-label={`查看参考图 ${index + 1}`} aria-selected={selectedReferenceIndex === index}><img src={url} alt={`参考图 ${index + 1} 缩略图`} /></button>)}
+          </div>
+        </> : <div className="task-review-empty">未使用参考图</div>}
       </aside>
     </div>
   </div>;
@@ -166,8 +175,8 @@ function ZoomableMedia({ src, alt, video = false }: { src: string; alt: string; 
     event.preventDefault();
     changeScale(event.deltaY < 0 ? 0.2 : -0.2);
   }
-  const mediaStyle = { transform: `scale(${scale})` };
-  return <div className="task-media-zoom" onWheel={onWheel}>
+  const mediaStyle = video ? undefined : { transform: `scale(${scale})` };
+  return <div className={`task-media-zoom ${video ? 'task-video-media' : ''}`} onWheel={video ? undefined : onWheel}>
     {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} style={mediaStyle} /> : <img src={src} alt={alt} draggable={false} style={mediaStyle} />}
     <div className="task-zoom-controls" aria-label="预览缩放控制"><button type="button" className="icon-button" onClick={() => changeScale(-0.2)} disabled={scale <= 1} aria-label="缩小" title="缩小"><ZoomOut size={14} /></button><span>{Math.round(scale * 100)}%</span><button type="button" className="icon-button" onClick={() => changeScale(0.2)} disabled={scale >= 4} aria-label="放大" title="放大"><ZoomIn size={14} /></button><button type="button" className="icon-button" onClick={() => setScale(1)} disabled={scale === 1} aria-label="重置缩放" title="重置缩放"><ResetZoom size={14} /></button></div>
   </div>;

@@ -106,6 +106,8 @@ export function ProductionForm({ accountId, mode }: Props) {
   const initialProvider = (mode === 'image' ? providers.find((item) => item.id === 'yuanai-image') : providers[0])?.id ?? 'grok-video';
   const initialProviderEntry = providers.find((item) => item.id === initialProvider) ?? providers[0];
   const [prompt, setPrompt] = useState('');
+  const promptDraftKey = `workspace-production-prompt:${accountId}:${mode}`;
+  const [promptHydrated, setPromptHydrated] = useState(false);
   const [originalPrompt, setOriginalPrompt] = useState('');
   const [childPrompt, setChildPrompt] = useState('');
   const [finalPrompt, setFinalPrompt] = useState('');
@@ -137,6 +139,22 @@ export function ProductionForm({ accountId, mode }: Props) {
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const [assetPickerKind, setAssetPickerKind] = useState<'image' | 'inventory-video' | 'audio'>('image');
   const [assetPickerTab, setAssetPickerTab] = useState<'material' | 'product'>('material');
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = window.localStorage.getItem(promptDraftKey);
+    if (!restoreTaskId && saved) {
+      setPrompt(saved);
+      setOriginalPrompt(saved);
+    }
+    setPromptHydrated(true);
+  }, [promptDraftKey, restoreTaskId]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !promptHydrated) return;
+    if (prompt.trim()) window.localStorage.setItem(promptDraftKey, prompt);
+    else window.localStorage.removeItem(promptDraftKey);
+  }, [prompt, promptDraftKey, promptHydrated]);
 
   const selectedProvider = providers.find((item) => item.id === provider) ?? providers[0];
   const selectedImageModel = provider === 'pomoai-gemini-image' ? 'gemini-image' : 'grok-image';
@@ -326,6 +344,9 @@ export function ProductionForm({ accountId, mode }: Props) {
         ];
         setSelectedAssetIds([...new Set(ids)]);
         restoredTaskRef.current = restoreTaskId;
+        // A restored queue item becomes a new draft; remove the original task
+        // so it is not left in the queue as a duplicate.
+        void fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${endpoint}/${encodeURIComponent(restoreTaskId)}`, { method: 'DELETE' }).catch(() => undefined);
         setMessage('已恢复任务配置，可修改后重新提交');
       })
       .catch(() => undefined);
@@ -529,7 +550,7 @@ export function ProductionForm({ accountId, mode }: Props) {
     {mode === 'image' && <label className="form-row">生成数量<select className="select" value={count} onChange={(event) => setCount(Number(event.target.value))}>{[1, 2, 3, 4].map((value) => <option value={value} key={value}>{value} 条</option>)}</select></label>}
     {mode !== 'prompt' && <div className="routing-section"><div className="production-fieldset-title">模型与生产参数</div><div className="routing-label">{mode === 'video' ? '视频模型' : '图片模型'}</div><div className="routing-cards">{(mode === 'video' ? VIDEO_ROUTING_CARDS : IMAGE_ROUTING_CARDS).map((card) => { const active = mode === 'video' ? (card.id === 'grok' ? card.providers.includes(provider) : card.id === videoModelId) : card.id === selectedImageModel; const enabled = card.providers.length > 0 && card.providers.some((item) => providers.some((providerItem) => providerItem.id === item)); return <button key={card.id} type="button" className={`routing-card ${active ? 'active' : ''}`} disabled={!enabled} onClick={() => { if (mode === 'video') selectVideoModel(card.id === 'grok' ? 'grok-imagine-video-1.5（按次）' : card.id); else { const next = card.id === 'grok-image' ? providers.find((item) => item.id === 'yuanai-image') ?? providers.find((item) => item.id === 'mgrouter-grok-image') : providers.find((item) => item.id === 'pomoai-gemini-image'); if (next) setProvider(next.id); } }}><strong>{card.label}</strong><span>{enabled ? `${card.providers.length} 个供应商` : '待接入'}</span></button>; })}</div><div className="routing-provider-row">{mode === 'video' && <label>模型<select className="select" value={videoModelId} onChange={(event) => selectVideoModel(event.target.value)}>{videoModelsForProvider(provider).map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>}<label>供应商<select className="select" value={provider} onChange={(event) => setProvider(event.target.value as ProviderId)}>{(mode === 'video' ? providerOptionsForVideoModel(providers, videoModelId) : providers.filter((item) => IMAGE_ROUTING_CARDS.find((card) => card.id === selectedImageModel)?.providers.includes(item.id))).map((item) => <option value={item.id} key={item.id}>{item.name}{mode === 'video' ? ` · ${item.supports.referenceImages} 图` : ''}</option>)}</select></label></div><div className="production-parameter-row"> <label>比例<select className="select" value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)}>{ratios.map((ratio) => <option key={ratio}>{ratio}</option>)}</select></label><label>{mode === 'video' ? '时长' : '分辨率'}<select className="select" value={mode === 'video' ? duration : resolution} onChange={(event) => mode === 'video' ? setDuration(event.target.value) : setResolution(event.target.value)}>{mode === 'video' ? durationOptions.map((value) => <option value={value} key={value}>{value} 秒</option>) : resolutionOptions.map((value) => <option value={value} key={value}>{String(value).toUpperCase()}</option>)}</select></label>{mode === 'video' && <label>分辨率<select className="select" value={resolution} onChange={(event) => setResolution(event.target.value)}>{resolutionOptions.map((value) => <option value={value} key={value}>{String(value).toUpperCase()}</option>)}</select></label>}{mode === 'video' && <label>生成数量<select className="select" value={count} onChange={(event) => setCount(Number(event.target.value))}>{[1, 2, 3, 4].map((value) => <option value={value} key={value}>{value} 条</option>)}</select></label>}</div></div>}
     {mode === 'video' && <div className="prompt-mode-bar" role="group" aria-label="提示词模式"><button type="button" className={`prompt-mode-button ${promptMode === 'manual' ? 'active' : ''}`} onClick={() => { setPromptMode('manual'); setChildPrompt(''); setFinalPrompt(''); }}>手写提示词</button><button type="button" className={`prompt-mode-button ${promptMode === 'asset-template-child-prompt' ? 'active' : ''}`} onClick={() => { setPromptMode('asset-template-child-prompt'); setChildPrompt(''); setFinalPrompt(''); }}>自动生成子提示词</button></div>}
-     <label>{mode === 'prompt' ? '商品 / 提示词上下文' : mode === 'image' ? '图片生成提示词' : promptMode === 'manual' ? '视频提示词' : '商品 / 场景上下文'}<textarea className="select" rows={5} value={prompt} onChange={(event) => { setPrompt(event.target.value); if (!originalPrompt) setOriginalPrompt(event.target.value); }} placeholder={mode === 'prompt' ? '输入商品标题、卖点和目标人群，生成子提示词' : promptMode === 'manual' ? '直接写入可提交给视频模型的完整提示词' : '输入商品卖点、场景和目标人群，自动生成视频子提示词'} /></label>
+     <label>{mode === 'prompt' ? '商品 / 提示词上下文' : mode === 'image' ? '图片生成提示词' : promptMode === 'manual' ? '视频提示词' : '商品 / 场景上下文'}<textarea className="select production-prompt-textarea" rows={8} value={prompt} onChange={(event) => { setPrompt(event.target.value); if (!originalPrompt) setOriginalPrompt(event.target.value); }} placeholder={mode === 'prompt' ? '输入商品标题、卖点和目标人群，生成子提示词' : promptMode === 'manual' ? '直接写入可提交给视频模型的完整提示词' : '输入商品卖点、场景和目标人群，自动生成视频子提示词'} /></label>
      {promptTemplateTools}
     {mode === 'video' && promptMode === 'manual' && <div className="form-row"><label>账号资产提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">不使用模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}{item.accountName ? ` · ${item.accountName}` : ''}</option>)}</select><small className="field-help">可选择当前运营账号下所有工作区的提示词模板，载入后仍可继续手写修改。</small></label></div>}
     {mode === 'video' && promptMode === 'asset-template-child-prompt' && <div className="form-row"><label>账号资产提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">请选择模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}{item.accountName ? ` · ${item.accountName}` : ''}</option>)}</select></label><label>子提示词模型<select className="select" value={promptModel} onChange={(event) => setPromptModel(event.target.value)}><option value="gpt-2999">GPT-2999</option><option value="gemini-2.5-flash">Gemini 2.5 Flash</option></select></label></div>}

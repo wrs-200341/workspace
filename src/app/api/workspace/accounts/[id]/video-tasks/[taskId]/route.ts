@@ -7,6 +7,7 @@ import { syncProviderTask } from '@/lib/providers/client';
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
+import { saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string; taskId: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -44,6 +45,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!['retry', 'cancel', 'save-inventory', 'pause', 'resume'].includes(action)) return NextResponse.json({ success: false, error: 'invalid_task_action' }, { status: 400 });
   const persisted = getProviderTask(taskId);
   if (persisted && persisted.accountId === id && persisted.mode === 'video') {
+    if (action === 'save-inventory' && persisted.status === 'completed' && !persisted.inventorySavedAt) {
+      try {
+        const assets = await saveVideoTaskOutputsToAssets(id, persisted);
+        if (assets.length === 0) return NextResponse.json({ success: false, error: 'video_outputs_unavailable' }, { status: 409 });
+        const updated = updateProviderTask(taskId, { status: persisted.status, progress: persisted.progress, inventorySavedAt: new Date().toISOString(), metadata: { ...(persisted.metadata ?? {}), inventoryAssetIds: assets.map((asset) => asset.id) } });
+        return NextResponse.json({ success: true, data: updated, assets });
+      } catch (error) {
+        return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'video_inventory_save_failed' }, { status: 400 });
+      }
+    }
     const next = applyTaskAction({ ...persisted, pid: 'pending', title: persisted.prompt || 'video generation', owner: 'operator-unassigned', mode: 'video', model: persisted.model || persisted.provider }, action);
     const updated = updateProviderTask(taskId, { status: next.status, progress: next.progress, error: next.error, inventorySavedAt: next.inventorySavedAt, providerTaskId: next.providerTaskId, outputUrls: next.outputUrls, outputBase64: next.outputBase64 });
     return NextResponse.json({ success: true, data: updated });
