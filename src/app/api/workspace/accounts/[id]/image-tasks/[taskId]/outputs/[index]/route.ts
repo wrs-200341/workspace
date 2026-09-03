@@ -13,6 +13,9 @@ function imageExtension(mimeType: string): string {
   const normalized = mimeType.toLowerCase();
   if (normalized === 'image/jpeg' || normalized === 'image/jpg') return 'jpg';
   if (normalized === 'image/webp') return 'webp';
+  if (normalized === 'image/gif') return 'gif';
+  if (normalized === 'image/avif') return 'avif';
+  if (normalized === 'image/bmp' || normalized === 'image/x-ms-bmp') return 'bmp';
   return 'png';
 }
 
@@ -79,10 +82,13 @@ async function readLimitedBytes(response: Response): Promise<Uint8Array> {
   return bytes;
 }
 
-function sniffImageMime(bytes: Uint8Array): 'image/png' | 'image/jpeg' | 'image/webp' | null {
+function sniffImageMime(bytes: Uint8Array): 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif' | 'image/avif' | 'image/bmp' | null {
   if (bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, index) => bytes[index] === value)) return 'image/png';
   if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return 'image/jpeg';
   if (bytes.length >= 12 && new TextDecoder().decode(bytes.slice(0, 4)) === 'RIFF' && new TextDecoder().decode(bytes.slice(8, 12)) === 'WEBP') return 'image/webp';
+  if (bytes.length >= 6 && ['GIF87a', 'GIF89a'].includes(new TextDecoder().decode(bytes.slice(0, 6)))) return 'image/gif';
+  if (bytes.length >= 12 && new TextDecoder().decode(bytes.slice(4, 8)) === 'ftyp' && ['avif', 'avis'].includes(new TextDecoder().decode(bytes.slice(8, 12)))) return 'image/avif';
+  if (bytes.length >= 2 && bytes[0] === 0x42 && bytes[1] === 0x4d) return 'image/bmp';
   return null;
 }
 
@@ -99,7 +105,7 @@ async function readRemoteImage(url: string): Promise<{ bytes: Uint8Array; mimeTy
   const declaredType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
   const bytes = await readLimitedBytes(response);
   const sniffedType = sniffImageMime(bytes);
-  if (!sniffedType || !['image/png', 'image/jpeg', 'image/webp'].includes(declaredType) || declaredType !== sniffedType) throw new Error('image_output_invalid');
+  if (!sniffedType || !declaredType.startsWith('image/') || declaredType !== sniffedType) throw new Error('image_output_invalid');
   return { bytes, mimeType: sniffedType };
 }
 

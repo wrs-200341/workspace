@@ -2,7 +2,7 @@
 const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   provider_not_configured: '该供应商尚未配置有效密钥，请检查服务端供应商配置后重试。',
   provider_unauthorized: '供应商鉴权失败：API Key 无效、已过期或没有权限，请更新供应商密钥。',
-  provider_400: '供应商拒绝了请求：请求参数或 JSON 格式不正确，请检查模型、时长、比例和参考图。',
+  provider_400: '供应商拒绝了请求（HTTP 400）：可能是内容审核拒绝或请求校验失败，请查看任务详情中的完整供应商响应。',
   provider_401: '供应商鉴权失败：API Key 无效、已过期或没有权限，请更新供应商密钥。',
   provider_403: '供应商拒绝访问：当前 API Key 没有调用权限，请检查供应商账户权限。',
   provider_404: '供应商接口或模型不存在，请检查 Base URL 和模型配置。',
@@ -27,6 +27,8 @@ const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   fallback_reference_limit: '切换备用供应商失败：备用供应商最多支持 3 张参考图。',
   image_outputs_unavailable: '图片任务没有可保存的输出结果，请等待任务完成或重新生成。',
   video_outputs_unavailable: '视频任务没有可保存的输出结果，请等待任务完成或重新生成。',
+  provider_resume_unsupported: '该任务已提交给供应商，不能本地重复提交；请等待当前任务完成。',
+  scheduler_queue_full: '当前运营账号的生产队列已达到安全上限，请稍后再提交。',
 };
 
 export function formatProviderError(code: string | undefined): string {

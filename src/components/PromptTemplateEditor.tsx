@@ -10,6 +10,7 @@ export function PromptTemplateEditor({ accountId, initialAssets = [], initialCat
   const [assets, setAssets] = useState<WorkspaceAsset[]>(initialAssets.filter((asset) => asset.kind === 'prompt'));
   const [category, setCategory] = useState<PromptAssetCategory>(initialCategory);
   const [selectedId, setSelectedId] = useState<string | null>(initialAssets.find((asset) => asset.kind === 'prompt' && (asset.category ?? 'video') === initialCategory)?.id ?? null);
+  const [creatingNew, setCreatingNew] = useState(false);
   const [name, setName] = useState('');
   const [content, setContent] = useState('');
   const [message, setMessage] = useState('');
@@ -28,8 +29,8 @@ export function PromptTemplateEditor({ accountId, initialAssets = [], initialCat
   }, [initialCategory]);
 
   useEffect(() => {
-    if (!selected) setSelectedId(visibleAssets[0]?.id ?? null);
-  }, [selected, visibleAssets]);
+    if (!selected && !creatingNew) setSelectedId(visibleAssets[0]?.id ?? null);
+  }, [creatingNew, selected, visibleAssets]);
 
   useEffect(() => {
     if (!selected) {
@@ -42,6 +43,7 @@ export function PromptTemplateEditor({ accountId, initialAssets = [], initialCat
   }, [selected]);
 
   function startNew() {
+    setCreatingNew(true);
     setSelectedId(null);
     setName(category === 'image' ? '新的生图提示词模板' : '新的生视频提示词模板');
     setContent('');
@@ -65,6 +67,7 @@ export function PromptTemplateEditor({ accountId, initialAssets = [], initialCat
       if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.error || '保存失败');
       const next = payload.data;
       setAssets((current) => editing ? current.map((asset) => asset.id === next.id ? next : asset) : [...current, next]);
+      setCreatingNew(false);
       setSelectedId(next.id);
       setName(next.name);
       setContent(next.content ?? '');
@@ -84,6 +87,7 @@ export function PromptTemplateEditor({ accountId, initialAssets = [], initialCat
       const remaining = assets.filter((asset) => asset.id !== selected.id);
       setAssets(remaining);
       const next = remaining[0] ?? null;
+      setCreatingNew(false);
       setSelectedId(next?.id ?? null);
       setName(next?.name ?? '新提示词模板');
       setContent(next?.content ?? '');
@@ -97,7 +101,7 @@ export function PromptTemplateEditor({ accountId, initialAssets = [], initialCat
     <aside className="prompt-template-list" aria-label="已保存提示词模板">
       <div className="prompt-template-list-header"><span>已保存模板</span><button type="button" className="prompt-template-new" onClick={startNew}><Plus size={14} /> 新建</button></div>
       <div className="prompt-template-category-tabs" role="tablist" aria-label="提示词模板类型"><button type="button" role="tab" aria-selected={category === 'image'} className={category === 'image' ? 'active' : ''} onClick={() => { setCategory('image'); setMessage(''); }}>生图模板</button><button type="button" role="tab" aria-selected={category === 'video'} className={category === 'video' ? 'active' : ''} onClick={() => { setCategory('video'); setMessage(''); }}>生视频模板</button></div>
-      {visibleAssets.length ? visibleAssets.map((asset) => <button type="button" key={asset.id} className={`prompt-template-list-item ${asset.id === selectedId ? 'active' : ''}`} onClick={() => { setSelectedId(asset.id); setMessage(''); }}><FileText size={15} /><span>{asset.name}</span></button>) : <div className="prompt-template-list-empty">暂无模板</div>}
+      {visibleAssets.length ? visibleAssets.map((asset) => <button type="button" key={asset.id} className={`prompt-template-list-item ${asset.id === selectedId ? 'active' : ''}`} onClick={() => { setCreatingNew(false); setSelectedId(asset.id); setMessage(''); }}><FileText size={15} /><span>{asset.name}</span></button>) : <div className="prompt-template-list-empty">暂无模板</div>}
     </aside>
     <section className="prompt-template-editor-pane" aria-label={selected ? `编辑模板 ${selected.name}` : '新建提示词模板'}>
       <div className="prompt-template-editor-heading"><div><div className="eyebrow">{selected ? 'EDIT TEMPLATE' : 'NEW TEMPLATE'}</div><h3>{selected ? '编辑提示词模板' : '新建提示词模板'}</h3></div><span>{content.length.toLocaleString()} / 30,000</span></div>

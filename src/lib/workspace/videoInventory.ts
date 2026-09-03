@@ -3,7 +3,7 @@ import { createUploadedAsset, getAsset, listAssets, readAssetFile, type Workspac
 import { listProviderTasks, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
 import { downloadProviderVideoContent } from '@/lib/providers/client';
 import { assertPublicTarget, type LookupAddress } from './externalImageImport';
-import { inventoryFileName } from './inventoryNaming';
+import { inventoryFileName, taskNameForInventory } from './inventoryNaming';
 
 const MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
 const MAX_OUTPUTS_PER_TASK = 4;
@@ -96,6 +96,19 @@ function validInventoryAssets(accountId: string, task: ProviderTask): WorkspaceA
     });
 }
 
+/** Return only persisted, readable inventory assets belonging to this task. */
+export function listVideoTaskInventoryAssets(accountId: string, task: ProviderTask): WorkspaceAsset[] {
+  if (task.accountId !== accountId || task.mode !== 'video') return [];
+  const byId = validInventoryAssets(accountId, task);
+  if (byId.length > 0 || !task.inventorySavedAt) return byId;
+  const base = taskNameForInventory(task).toLowerCase();
+  return listAssets(accountId, 'inventory-video').filter((asset) => {
+    const stem = asset.name.replace(/\.[^.]+$/, '').toLowerCase();
+    if (stem !== base && !stem.startsWith(`${base}_`)) return false;
+    try { return Boolean(readAssetFile(accountId, asset.id)); } catch { return false; }
+  });
+}
+
 /** Persist completed video outputs as account-scoped inventory-video assets. */
 export async function saveVideoTaskOutputsToAssets(accountId: string, task: ProviderTask, dependencies: VideoInventoryDependencies = {}): Promise<WorkspaceAsset[]> {
   if (task.mode !== 'video' || task.status !== 'completed' || task.accountId !== accountId) return [];
@@ -171,7 +184,7 @@ export function repairSavedVideoTaskInventory(accountIds?: readonly string[], de
     for (const task of listProviderTasks({ mode: 'video' })) {
       if (scope && !scope.has(task.accountId)) continue;
       if (task.status !== 'completed' || !task.inventorySavedAt) continue;
-      const current = validInventoryAssets(task.accountId, task);
+      const current = listVideoTaskInventoryAssets(task.accountId, task);
       const declaredIds = declaredInventoryAssetIds(task);
       if (declaredIds.length > 0 && current.length === declaredIds.length) continue;
       const created = await saveVideoTaskOutputsToAssets(task.accountId, task, dependencies);

@@ -4,13 +4,14 @@ import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount, workspaceOwnerId
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { businessDate } from '@/lib/workspace/tasks';
 import { isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
-import { syncProviderTask } from '@/lib/providers/client';
+import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } from '@/lib/providers/client';
 import { updateProviderTask } from '@/lib/providers/taskStore';
+import { pumpProviderTasks } from '@/lib/providers/concurrency';
 
 const SYNC_THROTTLE_MS = 10_000;
 const liveSyncInFlight = new Map<string, Promise<void>>();
 const liveSyncLastStartedAt = new Map<string, number>();
-let liveSyncQueue: Promise<void> = Promise.resolve();
+let liveSyncRunning = false;
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -35,9 +36,10 @@ function toQueueTask<T extends Record<string, unknown>>(task: T) {
 }
 
 function syncLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
-  const run = liveSyncQueue.then(() => runLiveImageTasks(tasks));
-  liveSyncQueue = run.catch(() => undefined);
-  return run;
+  if (liveSyncRunning) return Promise.resolve();
+  liveSyncRunning = true;
+  const run = runLiveImageTasks(tasks).finally(() => { liveSyncRunning = false; });
+  return run.catch(() => undefined);
 }
 
 async function runLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
@@ -52,8 +54,20 @@ async function runLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTask
     const run = (async () => {
       try {
         const status = await syncProviderTask(task.provider as ProviderId, task.providerTaskId!);
-        updateProviderTask(task.id, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error });
-      } catch { /* retain last-known local state */ }
+        updateProviderTask(task.id, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined });
+        pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
+      } catch (error) {
+        const providerResponse = providerResponseSnapshot(error);
+        const statusCode = typeof providerResponse.status === 'number' ? providerResponse.status : 0;
+        const terminal = statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429;
+        updateProviderTask(task.id, {
+          status: terminal ? 'failed' : task.status,
+          progress: terminal ? 100 : task.progress,
+          error: sanitizeProviderError(error instanceof Error ? error.message : 'provider_request_failed'),
+          providerResponse,
+        });
+        pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
+      }
     })();
     liveSyncInFlight.set(key, run);
     try { await run; } finally { liveSyncInFlight.delete(key); }

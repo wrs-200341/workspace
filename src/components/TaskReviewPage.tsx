@@ -23,6 +23,7 @@ type ReviewTask = {
   outputCount?: number;
   error?: string;
   metadata?: Record<string, unknown>;
+  providerResponse?: unknown;
 };
 
 export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string; taskId: string; mode: 'video' | 'image' }) {
@@ -135,13 +136,16 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
         ...productImageAssetIds,
         ...(referenceAssetIds.length || productImageAssetIds.length ? [] : genericAssetIds),
       ];
-    // A provider task may persist an asset id that only exists in the
-    // short-lived public reference bridge. Prefer that token when available;
-    // otherwise fall back to the account asset endpoint for local files.
-    const bridgedIds = persistedIds.map((assetId, index) => referenceTokens[index] ? `reference-token:${referenceTokens[index]}` : assetId);
+    const persistedKinds = referenceAssetOrder.length
+      ? referenceAssetOrder.map((item) => item.kind)
+      : persistedIds.map((assetId) => productImageAssetIds.includes(assetId) ? 'product-image' as const : 'image' as const);
+    // Prefer the durable account/product asset URLs for review. Public bridge
+    // tokens are short-lived and are only used when a task has no persisted
+    // local asset id (for example an externally supplied reference URL).
+    const durableIds = persistedIds.map((assetId, index) => persistedKinds[index] === 'product-image' ? `product-image:${assetId}` : assetId);
     const values = [
       ...stringArray(metadata.referenceImages),
-      ...bridgedIds,
+      ...durableIds,
       ...stringArray(metadata.externalReferenceImages),
       ...(persistedIds.length ? [] : referenceTokens.map((token) => `reference-token:${token}`)),
     ];
@@ -188,6 +192,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
     </div>
     {message && <div className="workspace-alert task-review-alert" role="status"><CircleAlert size={16} /><div><strong>{message}</strong></div></div>}
     {task?.error && <div className="workspace-alert task-review-alert" role="alert"><CircleAlert size={16} /><div><strong>供应商返回错误</strong><span>{task.error}</span></div></div>}
+    {Boolean(task?.providerResponse) && <details className="task-provider-response"><summary>查看完整供应商响应</summary><pre>{JSON.stringify(task?.providerResponse, null, 2) ?? ''}</pre></details>}
     <div className="task-review-stage">
       <section className="panel task-review-pane task-output-pane">
         <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">输出预览</h2><div className="panel-meta">任务成品</div></div><Film size={16} color="#1e40af" /></div>

@@ -13,7 +13,7 @@ function taskSequence(value: unknown): number {
 }
 
 /** The same human-readable name shown for a task in the production queue. */
-type TaskNameInput = Pick<ProviderTask, 'id' | 'accountId' | 'mode' | 'prompt' | 'createdAt' | 'metadata'>;
+export type TaskNameInput = Pick<ProviderTask, 'id' | 'accountId' | 'mode' | 'prompt' | 'createdAt' | 'metadata'>;
 
 function taskNameBase(task: TaskNameInput): string {
   const metadata = task.metadata ?? {};
@@ -49,11 +49,29 @@ function taskNameSequenceFor(task: TaskNameInput): number {
   }
 }
 
-export function taskNameForInventory(task: TaskNameInput): string {
+/** Precompute occurrence numbers for a task snapshot so list projections do not
+ * re-read and re-parse tasks.json once per task. */
+export function taskNameSequenceMap(tasks: readonly TaskNameInput[]): ReadonlyMap<string, number> {
+  const grouped = new Map<string, TaskNameInput[]>();
+  for (const task of tasks) {
+    const key = taskNameKey(task);
+    grouped.set(key, [...(grouped.get(key) ?? []), task]);
+  }
+  const result = new Map<string, number>();
+  for (const group of grouped.values()) {
+    group.sort((left, right) => left.createdAt.localeCompare(right.createdAt)
+      || taskSequence(left.metadata?.sequence) - taskSequence(right.metadata?.sequence)
+      || left.id.localeCompare(right.id));
+    group.forEach((task, index) => result.set(task.id, Math.max(taskSequence(task.metadata?.taskNameSequence ?? task.metadata?.sequence), index + 1)));
+  }
+  return result;
+}
+
+export function taskNameForInventory(task: TaskNameInput, occurrence?: number): string {
   const metadata = task.metadata ?? {};
   const hasReferenceName = typeof metadata.referenceImageName === 'string' && metadata.referenceImageName.trim();
   if (!hasReferenceName) return taskNameBase(task);
-  return `${taskNameBase(task)}_${businessDate(task.createdAt)}_${taskNameSequenceFor(task)}`;
+  return `${taskNameBase(task)}_${businessDate(task.createdAt)}_${occurrence ?? taskNameSequenceFor(task)}`;
 }
 
 /** Build a safe display filename from the task name while preserving Unicode. */

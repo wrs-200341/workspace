@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, submitVideo, downloadProviderVideoContent } from './client';
+import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, submitVideo, downloadProviderVideoContent, generateMGRouterImage } from './client';
 
 describe('provider client helpers', () => {
   it('normalizes Gemini candidate text', () => {
@@ -28,6 +28,28 @@ describe('provider client helpers', () => {
     expect(providerEndpoint('minimax-h3', 'create')).toBe('https://api.manjuai.top/v1/videos/generations');
     expect(providerEndpoint('minimax-h3', 'status')).toBe('https://api.manjuai.top/v1/videos/tasks/{id}');
     expect(sanitizeProviderError('Bearer secret-token: provider failed')).toBe('provider request failed');
+  });
+
+  it('retains the bounded raw supplier response for a rejected request', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: 'content_policy', message: 'blocked by review' } }), { status: 400, headers: { 'content-type': 'application/json' } }));
+    let caught: unknown;
+    try {
+      await generateMGRouterImage({ model: 'grok-image', prompt: 'demo', aspectRatio: '1:1', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MGROUTER_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    } catch (error) { caught = error; }
+    const info = providerErrorInfo(caught);
+    expect(info.status).toBe(400);
+    expect(info.rawBody).toContain('content_policy');
+    expect(providerResponseSnapshot(caught).body).toEqual({ error: { code: 'content_policy', message: 'blocked by review' } });
+  });
+
+  it('retains a successful HTTP response body when the supplier returns invalid JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('gateway returned plain text', { status: 200, headers: { 'content-type': 'text/plain' } }));
+    let caught: unknown;
+    try {
+      await generateMGRouterImage({ model: 'grok-image', prompt: 'demo', aspectRatio: '1:1', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MGROUTER_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    } catch (error) { caught = error; }
+    expect(providerResponseSnapshot(caught).code).toBe('provider_invalid_json');
+    expect(providerResponseSnapshot(caught).rawBody).toBe('gateway returned plain text');
   });
 
   it('submits PomoAI Gemini image requests with inline image parts', async () => {

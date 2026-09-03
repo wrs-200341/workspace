@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { CalendarDays, CheckCircle2, CircleAlert, Pause, Play, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
+import { CalendarDays, CheckCircle2, CircleAlert, Copy, Pause, Play, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatProviderError } from '@/lib/providers/errorMessages';
 
@@ -19,6 +19,7 @@ type QueueTask = {
   error?: string;
   provider?: string;
   providerTaskId?: string;
+  prompt?: string;
 };
 
 type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string };
@@ -64,6 +65,8 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   const [message, setMessage] = useState('');
   const [loadError, setLoadError] = useState('');
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
+  const [promptTask, setPromptTask] = useState<QueueTask | null>(null);
+  const [promptCopied, setPromptCopied] = useState(false);
   const focusAppliedRef = useRef<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const loadingRef = useRef(false);
@@ -99,7 +102,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
 
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load({ silent: true }), 8000);
+    const timer = window.setInterval(() => void load({ silent: true, sync: true }), 8000);
     return () => {
       window.clearInterval(timer);
       requestRef.current?.abort();
@@ -157,7 +160,19 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
     }
   }
 
+  async function copyPrompt() {
+    if (!promptTask?.prompt) return;
+    try {
+      await navigator.clipboard.writeText(promptTask.prompt);
+      setPromptCopied(true);
+      window.setTimeout(() => setPromptCopied(false), 1600);
+    } catch {
+      setPromptCopied(false);
+    }
+  }
+
   return (
+    <>
     <section className="panel production-queue-panel">
       <header className="production-queue-header">
         <div><span className="eyebrow">PRODUCTION QUEUE</span><h2>生产队列</h2><p>按上海时间汇总当前运营账号下全部工作区的任务。</p></div>
@@ -178,7 +193,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
           {task.error && <div className="queue-error"><CircleAlert size={13} />{formatProviderError(task.error)}</div>}
           <div className="production-queue-actions">
              <Link href={reviewHref(task.accountId, mode, task.id)} className="queue-link">{mode === 'prompt' ? '恢复配置' : '审核'}</Link>
-             {mode !== 'prompt' && <Link href={promptReviewHref(task.accountId, mode, task.id)} className="queue-link">提示词</Link>}
+              {mode !== 'prompt' && <button type="button" className="queue-link" onClick={() => { setPromptTask(task); setPromptCopied(false); }}>提示词</button>}
             {mode !== 'prompt' && <>{['queued', 'prompting', 'submitting', 'submitted', 'running', 'processing'].includes(task.status) && <button type="button" onClick={() => void action(task, 'pause')}><Pause size={13} /> 暂停</button>}{task.status === 'paused' && <button type="button" onClick={() => void action(task, 'resume')}><Play size={13} /> 继续</button>}</>}
              {mode !== 'prompt' && (task.status === 'failed' || task.status === 'cancelled') && <Link href={restoreHref(task.accountId, mode, task.id)} className="queue-link"><RotateCcw size={13} /> 恢复配置</Link>}
              {mode !== 'prompt' && <button type="button" onClick={() => void action(task, 'delete')} disabled={!['completed', 'failed', 'cancelled'].includes(task.status)} title={!['completed', 'failed', 'cancelled'].includes(task.status) ? '任务完成或失败后可删除' : '删除任务'}><Trash2 size={13} /> 删除</button>}
@@ -187,5 +202,13 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
         </article>)}
       </div>
     </section>
+    {promptTask && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPromptTask(null); }}>
+      <section className="modal-card queue-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="queue-prompt-title">
+        <div className="panel-header"><div><h2 id="queue-prompt-title" className="panel-title">任务提示词</h2><div className="panel-meta">{promptTask.title}</div></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setPromptTask(null)}><X size={15} /></button></div>
+        <pre className="queue-prompt-content">{promptTask.prompt || '该任务没有保存提示词'}</pre>
+        <div className="modal-actions"><button type="button" className="primary-button" onClick={() => void copyPrompt()} disabled={!promptTask.prompt}><Copy size={14} /> {promptCopied ? '已复制' : '复制'}</button><button type="button" className="ghost-button" onClick={() => setPromptTask(null)}>关闭</button></div>
+      </section>
+    </div>}
+    </>
   );
 }

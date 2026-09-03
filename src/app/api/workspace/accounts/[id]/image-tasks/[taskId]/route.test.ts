@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockUpdateProviderTask, mockSaveImageTaskOutputsToAssets } = vi.hoisted(() => ({
+const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockUpdateProviderTask, mockSaveImageTaskOutputsToAssets, mockListImageTaskInventoryAssets } = vi.hoisted(() => ({
   mockRequireApiRole: vi.fn(),
   mockCanAccessWorkspaceAccount: vi.fn(),
   mockGetProviderTask: vi.fn(),
   mockUpdateProviderTask: vi.fn(),
   mockSaveImageTaskOutputsToAssets: vi.fn(),
+  mockListImageTaskInventoryAssets: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
@@ -15,7 +16,7 @@ vi.mock('@/lib/providers/taskStore', () => ({ getProviderTask: mockGetProviderTa
 vi.mock('@/lib/workspace/taskActions', () => ({ applyTaskAction: vi.fn() }));
 vi.mock('@/lib/workspace/serverTasks', () => ({ getServerWorkspaceTasks: vi.fn(() => []) }));
 vi.mock('@/lib/workspace/productionRestore', () => ({ productionRestoreConfig: vi.fn() }));
-vi.mock('@/lib/workspace/imageInventory', () => ({ saveImageTaskOutputsToAssets: mockSaveImageTaskOutputsToAssets }));
+vi.mock('@/lib/workspace/imageInventory', () => ({ saveImageTaskOutputsToAssets: mockSaveImageTaskOutputsToAssets, listImageTaskInventoryAssets: mockListImageTaskInventoryAssets }));
 
 import { POST } from './route';
 
@@ -34,6 +35,7 @@ describe('image task inventory API', () => {
     mockGetProviderTask.mockReset().mockReturnValue({ ...task });
     mockUpdateProviderTask.mockReset().mockReturnValue({ ...task, inventorySavedAt: '2026-09-03T00:00:00.000Z', metadata: { inventoryAssetIds: ['asset-1'] } });
     mockSaveImageTaskOutputsToAssets.mockReset().mockResolvedValue([{ id: 'asset-1', kind: 'image' }]);
+    mockListImageTaskInventoryAssets.mockReset().mockReturnValue([]);
   });
 
   it('persists generated image assets and links them from the task metadata', async () => {
@@ -63,4 +65,3 @@ describe('image task inventory API', () => {
     expect(mockSaveImageTaskOutputsToAssets).not.toHaveBeenCalled();
   });
 });
-

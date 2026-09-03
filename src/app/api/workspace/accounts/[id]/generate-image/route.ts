@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { generateMGRouterImage, generateYuanAIImage, generatePomoAIImage, normalizeProviderResponse, sanitizeProviderError } from '@/lib/providers/client';
+import { generateMGRouterImage, generateYuanAIImage, generatePomoAIImage, normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
@@ -13,6 +13,7 @@ import { storeImageBase64Outputs } from '@/lib/providers/outputStore';
 import { getProductImageAbsolutePath, listProductImageAssets, publishProductImageReference } from '@/lib/workspace/productImages';
 import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
+import { enqueueProviderTask } from '@/lib/providers/concurrency';
 
 const IMAGE_PROVIDERS: readonly ProviderId[] = ['mgrouter-grok-image', 'yuanai-image', 'pomoai-gemini-image'];
 
@@ -93,8 +94,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       : [];
     const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
     const promptText = body.prompt.trim();
-    const tasks = Array.from({ length: count }, (_, index) => createProviderTask({ accountId: id, mode: 'image', provider, model, prompt: promptText, status: 'submitting', progress: 5, metadata: { ...baseMetadata, sequence: index + 1 } }));
-    void tasks.reduce((chain, task) => chain.then(() => submitImageTask({ accountId: id, taskId: task.id, provider, model, prompt: promptText, normalized, images, assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, yuanReferenceFiles, pomoReferences })), Promise.resolve());
+    const tasks = Array.from({ length: count }, (_, index) => createProviderTask({ accountId: id, mode: 'image', provider, model, prompt: promptText, status: 'queued', progress: 0, metadata: { ...baseMetadata, sequence: index + 1 } }));
+    tasks.forEach((task) => enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'image', model, run: () => submitImageTask({ accountId: id, taskId: task.id, provider, model, prompt: promptText, normalized, images, assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, yuanReferenceFiles, pomoReferences }) }));
     const first = tasks[0];
     return NextResponse.json({ success: true, data: { accountId: id, taskId: first.id, taskIds: tasks.map((task) => task.id), count: tasks.length, status: first.status, provider: first.provider, execution: 'pending', model: first.model, progress: first.progress } }, { status: 202 });
   } catch (error) {
@@ -123,11 +124,13 @@ type ImageSubmissionInput = {
 
 async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
   let lastError: unknown;
+  let providerResponse: unknown;
   const maxYuanAttempts = input.provider === 'yuanai-image' ? 3 : 1;
   for (let attempt = 0; attempt < maxYuanAttempts; attempt += 1) {
     try {
       if (attempt > 0) await delay(300 * attempt);
       const result = await submitImageProvider(input.provider, input.model, input.prompt, input.normalized, input.images, input.yuanReferenceFiles, input.pomoReferences);
+      providerResponse = result.response;
       const providerStatus = normalizeProviderResponse(input.provider, result.response);
       if (providerStatus.status === 'failed') throw new Error(providerStatus.error ?? 'provider_upstream_failed');
       await completeImageTask(input, input.provider, input.model, result, { attempts: attempt + 1 });
@@ -139,9 +142,13 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
         status: attempt + 1 < maxYuanAttempts ? 'submitting' : 'failed',
         progress: attempt + 1 < maxYuanAttempts ? 8 : 100,
         error: attempt + 1 < maxYuanAttempts ? undefined : sanitizeProviderError(error instanceof Error ? error.message : ''),
+        providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }),
         metadata: { ...(current?.metadata ?? {}), retryCount: attempt + 1, lastAttemptProvider: input.provider, lastAttemptError: sanitizeProviderError(error instanceof Error ? error.message : '') },
       });
-      if (input.provider !== 'yuanai-image' || !isTransientImageError(error)) break;
+      // YuanAI is retried twice for every upstream failure, including HTTP
+      // 400 content-review responses. A persistent failure then falls back to
+      // MGRouter with its compatible resolution/reference limits.
+      if (input.provider !== 'yuanai-image') break;
     }
   }
 
@@ -170,6 +177,7 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
         metadata: { ...(current?.metadata ?? {}), supplierId: fallbackProvider, modelId: fallbackConfig.model, resolution: fallbackResolution, fallbackFrom: 'yuanai-image', fallbackProvider, fallbackResolution, fallbackAfterRetries: maxYuanAttempts },
       });
       const result = await generateMGRouterImage({ model: fallbackConfig.model, prompt: input.prompt, aspectRatio: input.normalized.aspectRatio!, resolution: fallbackResolution, referenceImages: uniqueReferences });
+      providerResponse = result.response;
       const fallbackStatus = normalizeProviderResponse(fallbackProvider, result.response);
       if (fallbackStatus.status === 'failed') throw new Error(fallbackStatus.error ?? 'provider_upstream_failed');
       await completeImageTask({ ...input, provider: fallbackProvider, model: fallbackConfig.model }, fallbackProvider, fallbackConfig.model, result, { attempts: maxYuanAttempts + 1, fallback: true });
@@ -177,13 +185,13 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
     } catch (error) {
       lastError = error;
       const current = getProviderTask(input.taskId);
-      updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), metadata: { ...(current?.metadata ?? {}), execution: 'failed', fallbackError: sanitizeProviderError(error instanceof Error ? error.message : '') } });
+      updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }), metadata: { ...(current?.metadata ?? {}), execution: 'failed', fallbackError: sanitizeProviderError(error instanceof Error ? error.message : '') } });
       return;
     }
   }
 
   const current = getProviderTask(input.taskId);
-  updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(lastError instanceof Error ? lastError.message : ''), metadata: { ...(current?.metadata ?? {}), execution: 'failed' } });
+  updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(lastError instanceof Error ? lastError.message : ''), providerResponse: providerResponseSnapshot(lastError, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }), metadata: { ...(current?.metadata ?? {}), execution: 'failed' } });
 }
 
 async function submitImageProvider(provider: ProviderId, model: string, prompt: string, normalized: { aspectRatio?: string; resolution?: string }, images: string[], yuanReferenceFiles: ImageSubmissionInput['yuanReferenceFiles'], pomoReferences: ImageSubmissionInput['pomoReferences']) {
@@ -195,7 +203,7 @@ async function submitImageProvider(provider: ProviderId, model: string, prompt: 
 async function completeImageTask(input: ImageSubmissionInput, provider: ProviderId, model: string, result: Awaited<ReturnType<typeof generateMGRouterImage>>, details: { attempts: number; fallback?: boolean }): Promise<void> {
   const status = normalizeProviderResponse(provider, result.response);
   const current = getProviderTask(input.taskId);
-  const task = updateProviderTask(input.taskId, { provider, model, status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, metadata: { ...(current?.metadata ?? {}), execution: result.mode, attempts: details.attempts, ...(details.fallback ? { fallback: true } : {}) } });
+  const task = updateProviderTask(input.taskId, { provider, model, status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: undefined, metadata: { ...(current?.metadata ?? {}), execution: result.mode, attempts: details.attempts, ...(details.fallback ? { fallback: true } : {}) } });
   if (!task) return;
   if (result.mode === 'live' && status.outputBase64.length > 0) {
     const stored = storeImageBase64Outputs(input.accountId, input.taskId, status.outputBase64);
@@ -203,11 +211,6 @@ async function completeImageTask(input: ImageSubmissionInput, provider: Provider
   } else if (result.mode === 'mock') {
     void processMockProviderTask(input.taskId);
   }
-}
-
-function isTransientImageError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  return /provider_(408|409|425|429|5\d\d)|provider_upstream_failed|timeout|timed?out|abort|network|fetch failed/.test(message);
 }
 
 function delay(milliseconds: number): Promise<void> {

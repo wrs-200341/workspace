@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { normalizeProviderResponse, sanitizeProviderError, submitVideo } from '@/lib/providers/client';
+import { normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError, submitVideo } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
@@ -14,10 +14,11 @@ import { getProductImageAbsolutePath, listProductImageAssets } from '@/lib/works
 import { readAssetFile } from '@/lib/workspace/assetStore';
 import fs from 'node:fs';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
+import { lookupProductSummary } from '@/lib/workspace/productSummary';
+import { enqueueProviderTask } from '@/lib/providers/concurrency';
 
 type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'quality-v4' | 'oairegbox-omni';
 const VIDEO_PROVIDERS: readonly VideoProvider[] = ['grok-video', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'quality-v4', 'oairegbox-omni'];
-let submissionChain: Promise<void> = Promise.resolve();
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -78,6 +79,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const count = typeof input.count === 'number' && Number.isFinite(input.count) ? Math.min(4, Math.max(1, Math.round(input.count))) : 1;
     const ownerId = workspaceOwnerIdForAccount(id);
     const referenceImageName = firstReferenceImageName({ accountId: id, referenceAssetIds: orderedReferenceAssetIds, assetIds, productImageAssetIds: orderedProductImageAssetIds, rawReferenceImages });
+    const productSummary = lookupProductSummary(referenceImageName);
+    const promptWithSummary = productSummary
+      ? `${input.prompt.trim()}\n\n商品资料（来自 Excel）\n标题：${productSummary.title}\n描述：${productSummary.description}`.trim()
+      : input.prompt.trim();
     const tasks = [];
     for (let index = 0; index < count; index += 1) {
       const publishedImages = isProviderLiveEnabled(provider) ? orderedReferenceAssetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['image'] })) : [];
@@ -124,9 +129,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           referenceAudioCount: referenceAudios.length,
         });
       }
-      const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: input.prompt, status: 'submitting', progress: 5, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: typeof input.finalPrompt === 'string' ? input.finalPrompt : input.prompt, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } });
+      const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: promptWithSummary, status: 'queued', progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: promptWithSummary, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } });
       tasks.push(task);
-      submissionChain = submissionChain.then(() => submitVideoTask({ taskId: task.id, provider, model, prompt: input.prompt, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos })).catch(() => undefined);
+      enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'video', model, run: () => submitVideoTask({ taskId: task.id, provider, model, prompt: promptWithSummary, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos }) });
       continue;
     }
     const first = tasks[0];
@@ -141,14 +146,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 }
 
 async function submitVideoTask(input: { taskId: string; provider: VideoProvider; model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; referenceImages: string[]; referenceFiles?: Array<{ bytes: Uint8Array; mimeType: string; fileName: string }>; referenceAudios: string[]; referenceVideos: string[] }): Promise<void> {
+  let providerResponse: unknown;
   try {
     const submitted = await submitVideo({ provider: input.provider, model: input.model, prompt: input.prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: input.referenceImages, referenceFiles: input.referenceFiles, referenceAudios: input.referenceAudios, referenceVideos: input.referenceVideos, media: [...input.referenceImages.map((url) => ({ type: 'reference_image' as const, url })), ...input.referenceVideos.map((url) => ({ type: 'reference_video' as const, url })), ...input.referenceAudios.map((url) => ({ type: 'audio' as const, url }))] });
+    providerResponse = submitted.response;
     const status = normalizeProviderResponse(input.provider, submitted.response);
     const current = getProviderTask(input.taskId);
-    const updated = updateProviderTask(input.taskId, { status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, metadata: { ...(current?.metadata ?? {}), execution: submitted.mode } });
+    const updated = updateProviderTask(input.taskId, { status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: providerResponse, method: 'POST' }) : undefined, metadata: { ...(current?.metadata ?? {}), execution: submitted.mode } });
     if (updated && submitted.mode === 'mock') void processMockProviderTask(input.taskId);
   } catch (error) {
-    updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), metadata: { ...(getProviderTask(input.taskId)?.metadata ?? {}), execution: 'failed' } });
+    updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }), metadata: { ...(getProviderTask(input.taskId)?.metadata ?? {}), execution: 'failed' } });
   }
 }
 

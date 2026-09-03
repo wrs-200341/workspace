@@ -149,6 +149,94 @@ export type NormalizedProviderStatus = {
   error?: string;
 };
 
+export type ProviderErrorInfo = {
+  code: string;
+  status?: number;
+  statusText?: string;
+  body?: unknown;
+  rawBody?: string;
+  endpoint?: string;
+  method?: string;
+  receivedAt: string;
+};
+
+/** Error carrying the supplier's bounded response for task diagnostics. */
+export class ProviderRequestError extends Error {
+  readonly info: ProviderErrorInfo;
+
+  constructor(info: ProviderErrorInfo) {
+    super(info.code);
+    this.name = 'ProviderRequestError';
+    this.info = info;
+  }
+}
+
+export function providerErrorInfo(error: unknown, fallback?: { body?: unknown; endpoint?: string; method?: string }): ProviderErrorInfo {
+  if (error instanceof ProviderRequestError) return error.info;
+  const code = error instanceof Error && /^[a-z][a-z0-9_]{2,64}$/.test(error.message) ? error.message : 'provider_request_failed';
+  return {
+    code,
+    ...(fallback?.body !== undefined ? { body: fallback.body } : {}),
+    ...(fallback?.endpoint ? { endpoint: fallback.endpoint } : {}),
+    ...(fallback?.method ? { method: fallback.method } : {}),
+    receivedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Keep a diagnostic response useful without persisting credentials or an
+ * unbounded supplier payload. Error bodies are already limited to 1 MiB at
+ * the HTTP boundary; this second guard protects the task store as well.
+ */
+export function providerResponseSnapshot(error: unknown, fallback?: { body?: unknown; endpoint?: string; method?: string }): Record<string, unknown> {
+  const info = providerErrorInfo(error, fallback);
+  const redactRaw = (value: string): string => value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+    .replace(/((?:authorization|api[-_]?key|apikey|access[_-]?token|token|secret|password|cookie|set[-_]?cookie|session|jwt)\s*[=:]\s*)(["']?)[^&\s,"'}]+/gi, '$1$2[redacted]')
+    .replace(/("(?:authorization|api[_-]?key|apikey|access[_-]?token|token|secret|password|cookie|set[-_]?cookie|session|jwt)"\s*:\s*")[^"]*(")/gi, '$1[redacted]$2');
+  const redact = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(redact);
+    if (typeof value === 'string') return redactRaw(value);
+    if (!value || typeof value !== 'object') return value;
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => {
+      if (/authorization|api[_-]?key|token|secret|password|cookie|set[-_]?cookie|session|jwt/i.test(key)) return [key, '[redacted]'];
+      return [key, redact(item)];
+    }));
+  };
+  const safeEndpoint = (value: string): string => {
+    try {
+      const parsed = new URL(value);
+      parsed.search = '';
+      parsed.hash = '';
+      return parsed.toString();
+    } catch {
+      return value.replace(/[?#].*$/, '');
+    }
+  };
+  const snapshot: Record<string, unknown> = {
+    code: info.code,
+    ...(info.status !== undefined ? { status: info.status } : {}),
+    ...(info.statusText ? { statusText: info.statusText } : {}),
+    ...(info.endpoint ? { endpoint: safeEndpoint(info.endpoint) } : {}),
+    ...(info.method ? { method: info.method } : {}),
+    ...(info.body !== undefined ? { body: redact(info.body) } : {}),
+    ...(info.rawBody ? { rawBody: redactRaw(info.rawBody) } : {}),
+    receivedAt: info.receivedAt,
+  };
+  const serialized = JSON.stringify(snapshot);
+  if (Buffer.byteLength(serialized, 'utf8') <= MAX_ERROR_RESPONSE_BYTES) return snapshot;
+  return {
+    code: info.code,
+    ...(info.status !== undefined ? { status: info.status } : {}),
+    ...(info.statusText ? { statusText: info.statusText } : {}),
+    ...(info.endpoint ? { endpoint: safeEndpoint(info.endpoint) } : {}),
+    ...(info.method ? { method: info.method } : {}),
+    rawBody: truncateUtf8(redactRaw(info.rawBody ?? serialized), MAX_ERROR_RESPONSE_BYTES),
+    truncated: true,
+    receivedAt: info.receivedAt,
+  };
+}
+
 /**
  * Convert the different response envelopes used by the historical providers
  * into the workspace task contract. The parser is deliberately permissive on
@@ -339,11 +427,14 @@ export function sanitizeProviderError(message: string): string {
  * the workspace UI to tell configuration, model availability, and upstream
  * execution failures apart.
  */
-async function providerHttpError(response: Response): Promise<Error> {
+async function providerHttpError(response: Response, request?: { endpoint?: string; method?: string }): Promise<Error> {
   let code = `provider_${response.status}`;
+  let rawBody = '';
+  let body: unknown;
   try {
-    const text = await readTextLimited(response, MAX_ERROR_RESPONSE_BYTES);
-    const payload = JSON.parse(text) as Record<string, unknown>;
+    rawBody = await readTextLimited(response, MAX_ERROR_RESPONSE_BYTES);
+    body = JSON.parse(rawBody) as unknown;
+    const payload = asRecord(body) ?? {};
     const nested = payload.error && typeof payload.error === 'object' ? payload.error as Record<string, unknown> : undefined;
     const upstreamCode = String(nested?.code ?? payload.code ?? '').toLowerCase();
     const upstreamMessage = String(nested?.message ?? payload.message ?? '').toLowerCase();
@@ -353,15 +444,33 @@ async function providerHttpError(response: Response): Promise<Error> {
     else if (upstreamCode.includes('model_not_found') || upstreamMessage.includes('no available channel')) code = 'provider_model_unavailable';
     else if (upstreamCode.includes('fail_to_fetch_task') || upstreamCode.includes('upstream_task_failed') || upstreamMessage.includes('fail to fetch task')) code = 'provider_upstream_failed';
     else if (upstreamCode.includes('invalid_request') || upstreamCode.includes('invalid_json') || upstreamMessage.includes('invalid request') || upstreamMessage.includes('invalid json')) code = 'provider_invalid_request';
-  } catch { /* keep the HTTP status code */ }
-  return new Error(code);
+  } catch { /* keep the HTTP status code and raw body */ }
+  return new ProviderRequestError({
+    code,
+    status: response.status,
+    ...(response.statusText ? { statusText: response.statusText } : {}),
+    ...(body !== undefined ? { body } : {}),
+    ...(rawBody ? { rawBody } : {}),
+    ...(request?.endpoint ? { endpoint: request.endpoint } : {}),
+    ...(request?.method ? { method: request.method } : {}),
+    receivedAt: new Date().toISOString(),
+  });
 }
 
 async function readJsonLimited(response: Response): Promise<unknown> {
   const contentLength = Number(response.headers.get('content-length') || 0);
   if (contentLength > MAX_RESPONSE_BYTES) throw new Error('provider_response_too_large');
   const text = await readTextLimited(response, MAX_RESPONSE_BYTES);
-  try { return JSON.parse(text); } catch { throw new Error('provider_invalid_json'); }
+  try { return JSON.parse(text); } catch {
+    throw new ProviderRequestError({ code: 'provider_invalid_json', rawBody: text, receivedAt: new Date().toISOString() });
+  }
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
+  let result = value.slice(0, maxBytes);
+  while (result && Buffer.byteLength(result, 'utf8') > maxBytes) result = result.slice(0, -1);
+  return result;
 }
 
 async function readTextLimited(response: Response, maxBytes: number): Promise<string> {
@@ -399,19 +508,20 @@ async function requestProvider(url: string, apiKey: string, body: Record<string,
 
 async function requestProviderWithFetcher(fetcher: typeof fetch, url: string, apiKey: string, body: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
   const response = await fetcher(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
-  if (!response.ok) throw await providerHttpError(response);
+  if (!response.ok) throw await providerHttpError(response, { endpoint: url, method: 'POST' });
   return readJsonLimited(response);
 }
 
-export async function syncProviderTask(provider: ProviderId, providerTaskId: string, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<NormalizedProviderStatus> {
+export async function syncProviderTask(provider: ProviderId, providerTaskId: string, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<NormalizedProviderStatus & { response: unknown }> {
   const env = dependencies.env ?? process.env;
   const fetcher = dependencies.fetch ?? fetch;
   const config = getProviderConfig(provider, env);
   if (!config.apiKey) throw new Error('provider_not_configured');
   const endpoint = providerEndpoint(provider, 'status', env).replace('{id}', encodeURIComponent(providerTaskId));
   const response = await fetcher(endpoint, { method: 'GET', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), cache: 'no-store' });
-  if (!response.ok) throw await providerHttpError(response);
-  return normalizeProviderResponse(provider, await readJsonLimited(response));
+  if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'GET' });
+  const payload = await readJsonLimited(response);
+  return { ...normalizeProviderResponse(provider, payload), response: payload };
 }
 
 /**
@@ -439,12 +549,38 @@ export async function downloadProviderVideoContent(
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
     cache: 'no-store',
   });
-  if (!response.ok) throw await providerHttpError(response);
+  if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'GET' });
   const declaredLength = Number(response.headers.get('content-length') || 0);
   if (declaredLength > MAX_VIDEO_CONTENT_BYTES) throw new Error('provider_response_too_large');
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (!bytes.length || bytes.byteLength > MAX_VIDEO_CONTENT_BYTES) throw new Error('provider_video_content_invalid');
   const mimeType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() || 'video/mp4';
+  if (!mimeType.startsWith('video/')) throw new Error('provider_video_content_invalid');
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.length || bytes.byteLength > MAX_VIDEO_CONTENT_BYTES) throw new Error('provider_video_content_invalid');
+    return { bytes, mimeType };
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (!next.value?.byteLength) continue;
+      total += next.value.byteLength;
+      if (total > MAX_VIDEO_CONTENT_BYTES) {
+        await reader.cancel();
+        throw new Error('provider_response_too_large');
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (!total) throw new Error('provider_video_content_invalid');
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
   return { bytes, mimeType };
 }
 
@@ -523,8 +659,9 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
     return { mode: 'mock', provider: input.provider, response: { id: `mock_${Date.now()}`, status: 'queued', payload: body } };
   }
   if (body instanceof FormData) {
-    const response = await (dependencies.fetch ?? fetch)(providerEndpoint(input.provider, 'create', env), { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body, signal: AbortSignal.timeout(25_000), cache: 'no-store' });
-    if (!response.ok) throw await providerHttpError(response);
+    const endpoint = providerEndpoint(input.provider, 'create', env);
+    const response = await (dependencies.fetch ?? fetch)(endpoint, { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body, signal: AbortSignal.timeout(25_000), cache: 'no-store' });
+    if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
     return { mode: 'live', provider: input.provider, response: await readJsonLimited(response) };
   }
   return { mode: 'live', provider: input.provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, providerEndpoint(input.provider, 'create', env), config.apiKey, body) };
@@ -563,7 +700,7 @@ async function fetcherRequest(fetcher: typeof fetch, endpoint: string, apiKey: s
   const headers: Record<string, string> = { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'WorkspaceProduction/1.0' };
   if (bearer) headers.authorization = `Bearer ${apiKey}`; else { headers.authorization = `Bearer ${apiKey}`; headers['x-goog-api-key'] = apiKey; }
   const response = await fetcher(endpoint, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
-  if (!response.ok) throw await providerHttpError(response);
+  if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
   return readJsonLimited(response);
 }
 
@@ -575,7 +712,7 @@ export async function generateGeminiPrompt(input: { prompt: string; model?: stri
   if (!config.apiKey) return { mode: 'mock', text: `${input.prompt.trim()}\n\n镜头稳定，突出商品细节、使用步骤和明确的行动引导。` };
   const endpoint = `${config.baseUrl.replace(/\/$/, '')}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
   const response = await (dependencies.fetch ?? fetch)(endpoint, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify({ contents: [{ parts: [{ text: input.prompt.trim() }] }] }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), cache: 'no-store' });
-  if (!response.ok) throw await providerHttpError(response);
+  if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
   const payload = await readJsonLimited(response);
   return { mode: 'live', text: normalizeGeminiResponse(payload), response: payload };
 }
@@ -616,7 +753,7 @@ export async function generateYuanAIImage(input: { model: string; prompt: string
   const endpoint = (references.length > 0 || fileReferences.length > 0) ? `${config.baseUrl.replace(/\/$/, '')}/v1/images/edits` : providerEndpoint('yuanai-image', 'create', env);
   if (body instanceof FormData) {
     const response = await fetcher(endpoint, { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body, signal: AbortSignal.timeout(IMAGE_GENERATION_TIMEOUT_MS), cache: 'no-store' });
-    if (!response.ok) throw await providerHttpError(response);
+    if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
     return { mode: 'live', provider: 'yuanai-image', response: await readJsonLimited(response) };
   }
   return { mode: 'live', provider: 'yuanai-image', response: await requestProviderWithFetcher(fetcher, endpoint, config.apiKey, body, IMAGE_GENERATION_TIMEOUT_MS) };

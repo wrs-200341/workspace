@@ -20,6 +20,8 @@ export type ProviderTask = {
   outputUrls: string[];
   outputBase64: string[];
   error?: string;
+  /** Bounded supplier response snapshot retained for post-failure diagnosis. */
+  providerResponse?: unknown;
   inventorySavedAt?: string;
   metadata?: Record<string, unknown>;
   createdAt: string;
@@ -38,6 +40,7 @@ export type CreateProviderTaskInput = {
   outputUrls?: readonly string[];
   outputBase64?: readonly string[];
   error?: string;
+  providerResponse?: unknown;
   inventorySavedAt?: string;
   metadata?: Record<string, unknown>;
   id?: string;
@@ -167,6 +170,7 @@ function normalizeStoredTask(value: unknown): ProviderTask {
     outputUrls: normalizeStringArray(value.outputUrls),
     outputBase64: normalizeStringArray(value.outputBase64),
     ...(text(value.error) ? { error: text(value.error) } : {}),
+    ...(record(value.providerResponse) ? { providerResponse: clone(value.providerResponse) } : {}),
     ...(text(value.inventorySavedAt) ? { inventorySavedAt: text(value.inventorySavedAt) } : {}),
     ...(record(value.metadata) ? { metadata: clone(value.metadata) } : {}),
     createdAt: requiredText(value.createdAt, 'task_created_at_invalid'),
@@ -193,6 +197,7 @@ export function createProviderTask(input: CreateProviderTaskInput): ProviderTask
     outputUrls: normalizeStringArray(input.outputUrls),
     outputBase64: normalizeStringArray(input.outputBase64),
     ...(text(input.error) ? { error: text(input.error) } : {}),
+    ...(record(input.providerResponse) ? { providerResponse: clone(input.providerResponse) } : {}),
     ...(text(input.inventorySavedAt) ? { inventorySavedAt: text(input.inventorySavedAt) } : {}),
     ...(record(input.metadata) ? { metadata: clone(input.metadata) } : {}),
     createdAt,
@@ -242,6 +247,7 @@ export function updateProviderTask(id: string, patch: ProviderTaskPatch): Provid
     ...(candidate.outputUrls !== undefined ? { outputUrls: normalizeStringArray(candidate.outputUrls) } : {}),
     ...(candidate.outputBase64 !== undefined ? { outputBase64: normalizeStringArray(candidate.outputBase64) } : {}),
     ...(hasOwn(candidate, 'error') ? (text(candidate.error) ? { error: text(candidate.error) } : { error: undefined }) : {}),
+    ...(hasOwn(candidate, 'providerResponse') ? (record(candidate.providerResponse) ? { providerResponse: clone(candidate.providerResponse) } : { providerResponse: undefined }) : {}),
     ...(hasOwn(candidate, 'inventorySavedAt') ? (text(candidate.inventorySavedAt) ? { inventorySavedAt: text(candidate.inventorySavedAt) } : { inventorySavedAt: undefined }) : {}),
     ...(hasOwn(candidate, 'metadata') ? (record(candidate.metadata) ? { metadata: clone(candidate.metadata) } : { metadata: undefined }) : {}),
     // Never permit callers to rewrite identity or original creation time.

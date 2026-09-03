@@ -9,6 +9,7 @@ export type WorkspaceTask = {
   owner: string;
   mode: 'image' | 'prompt' | 'video';
   model: string;
+  prompt?: string;
   status: WorkspaceTaskStatus;
   progress: number;
   createdAt: string;
