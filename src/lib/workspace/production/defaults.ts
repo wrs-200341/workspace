@@ -19,3 +19,9 @@ export function getDefaultImageResolution(resolutions: readonly string[]): strin
   const fourK = resolutions.find((value) => value.trim().toLowerCase() === '4k');
   return fourK?.trim().toLowerCase() || resolutions.at(-1)?.trim().toLowerCase() || '';
 }
+
+/** Video generation defaults to 720p whenever the selected model supports it. */
+export function getDefaultVideoResolution(resolutions: readonly string[]): string {
+  const hd = resolutions.find((value) => value.trim().toLowerCase() === '720p');
+  return hd?.trim() || resolutions[0]?.trim() || '720p';
+}

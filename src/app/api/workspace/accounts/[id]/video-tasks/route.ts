@@ -9,7 +9,7 @@ import { normalizeProviderResponse, submitVideo, syncProviderTask } from '@/lib/
 import { validateGenerationRequest } from '@/lib/providers/validation';
 import { publishAssetReference } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
-import { getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
+import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -66,7 +66,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     : getDefaultProductionAspectRatio(config.supports.ratios);
   const resolution = typeof body.resolution === 'string' && body.resolution.trim()
     ? body.resolution.trim()
-    : (isSdMini ? '720p' : config.supports.resolutions[config.supports.resolutions.length - 1]);
+    : getDefaultVideoResolution(config.supports.resolutions);
   try {
     const ownerId = workspaceOwnerIdForAccount(id);
     const referenceImageName = firstReferenceImageName({ accountId: id, assetIds, rawReferenceImages });

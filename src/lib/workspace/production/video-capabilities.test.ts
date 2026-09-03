@@ -35,7 +35,7 @@ describe('recovered video production capabilities', () => {
     expect(capability.referenceVideos).toEqual({ min: 0, max: 0, required: false });
     expect(capability.referenceAudios).toEqual({ min: 0, max: 0, required: false });
     expect(getDefaultVideoDuration(capability)).toBe(10);
-    expect(getDefaultVideoResolution(capability)).toBe('480p');
+    expect(getDefaultVideoResolution(capability)).toBe('720p');
   });
 
   it('enforces sd-mini duration-specific resolution rules', () => {
@@ -74,7 +74,7 @@ describe('recovered video production capabilities', () => {
     expect(getVideoDurationOptions(capability)).toEqual([5, 8, 10, 15]);
     expect(getDefaultVideoDuration(capability)).toBe(10);
     expect(getDefaultVideoAspectRatio(capability.aspectRatios)).toBe('9:16');
-    expect(getDefaultVideoResolution(capability)).toBe('480P');
+    expect(getDefaultVideoResolution(capability)).toBe('720P');
   });
 
   it('rejects values outside a supplier/model capability', () => {

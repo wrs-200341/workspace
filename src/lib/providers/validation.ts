@@ -1,5 +1,5 @@
 import { getProviderConfig, type ProviderId } from './config';
-import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
+import { getDefaultImageResolution, getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 
 export type GenerationValidationInput = {
   provider: ProviderId;
@@ -101,9 +101,10 @@ export function validateGenerationRequest(input: GenerationValidationInput): Gen
     const aspectRatio = input.aspectRatio ?? getDefaultProductionAspectRatio(supportedRatios);
     if (!supportedRatios.includes(aspectRatio)) throw new Error('unsupported_aspect_ratio');
     result.aspectRatio = aspectRatio;
+    const durationForDefault = result.duration ?? input.duration ?? input.seconds;
     const resolution = input.resolution ?? (config.kind === 'image'
       ? getDefaultImageResolution(config.supports.resolutions)
-      : (isSdMini ? '480p' : config.supports.resolutions[0]));
+      : (isSdMini && durationForDefault !== 10 ? '480p' : getDefaultVideoResolution(config.supports.resolutions)));
     const isGrokPerSecond = input.provider === 'grok-video' && isGrokPerSecondModel(input.model);
     if (isSdMini) {
       // 720p is available only for 10-second jobs; 5s and 15s are 480p-only.

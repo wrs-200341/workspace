@@ -8,7 +8,7 @@ import { validateGenerationRequest } from '@/lib/providers/validation';
 import { publishAssetReference } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getVideoCapability, validateVideoCapability } from '@/lib/workspace/production/video-capabilities';
-import { getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
+import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { publishProductImageReference } from '@/lib/workspace/productImages';
 import { getProductImageAbsolutePath, listProductImageAssets } from '@/lib/workspace/productImages';
 import { readAssetFile } from '@/lib/workspace/assetStore';
@@ -60,9 +60,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     : getDefaultProductionAspectRatio(config.supports.ratios);
   const resolution = typeof input.resolution === 'string' && input.resolution.trim()
     ? input.resolution.trim()
-    : isSdMini || provider === 'quality-v4'
-      ? '480p'
-      : config.supports.resolutions[config.supports.resolutions.length - 1];
+    : getDefaultVideoResolution(config.supports.resolutions);
   try {
     const count = typeof input.count === 'number' && Number.isFinite(input.count) ? Math.min(4, Math.max(1, Math.round(input.count))) : 1;
     const ownerId = workspaceOwnerIdForAccount(id);

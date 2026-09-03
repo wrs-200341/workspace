@@ -92,7 +92,7 @@ describe('provider generation capability validation', () => {
       referenceVideos: [],
       referenceAudios: [],
     };
-    expect(validateGenerationRequest({ ...base, seconds: 10 })).toEqual({ duration: 10, aspectRatio: '16:9', resolution: '480p' });
+    expect(validateGenerationRequest({ ...base, seconds: 10 })).toEqual({ duration: 10, aspectRatio: '16:9', resolution: '720p' });
     expect(validateGenerationRequest({ ...base, seconds: 10, resolution: '720p' })).toEqual({ duration: 10, aspectRatio: '16:9', resolution: '720p' });
     expect(validateGenerationRequest({ ...base, seconds: 5 })).toEqual({ duration: 5, aspectRatio: '16:9', resolution: '480p' });
     expect(validateGenerationRequest({ ...base, seconds: 15 })).toEqual({ duration: 15, aspectRatio: '16:9', resolution: '480p' });
@@ -104,7 +104,7 @@ describe('provider generation capability validation', () => {
   });
 
   it('uses sd-mini defaults when duration and ratio/resolution are supplied explicitly', () => {
-    expect(validateGenerationRequest({ provider: 'grok-video', model: 'sd-mini', duration: 10 })).toEqual({ duration: 10, aspectRatio: '9:16', resolution: '480p' });
+    expect(validateGenerationRequest({ provider: 'grok-video', model: 'sd-mini', duration: 10 })).toEqual({ duration: 10, aspectRatio: '9:16', resolution: '720p' });
     expect(validateGenerationRequest({ provider: 'grok-video', model: 'sd-mini', duration: 10, aspectRatio: 'auto', resolution: '720p' })).toEqual({ duration: 10, aspectRatio: 'auto', resolution: '720p' });
   });
 
