@@ -223,15 +223,18 @@ h1 { font-size:30px; line-height:1.15; margin:7px 0 0; letter-spacing:-.03em; }
 .task-output-list { flex:1; min-height:0; display:flex; align-items:center; justify-content:center; gap:10px; padding:12px; overflow:auto; background:#f8fafc; }
 .task-reference-list { flex:1; min-height:0; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); align-content:start; gap:10px; padding:12px; overflow:auto; background:#f8fafc; }
 .task-reference-selected { flex:1; min-height:0; display:flex; padding:12px; background:#f8fafc; }
-.task-reference-selected .task-media-zoom { width:auto; height:100%; max-width:100%; aspect-ratio:9 / 16; min-height:0; margin:0 auto; }
-.task-reference-selected .task-media-zoom img { width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; }
+.image-task-review .task-reference-selected .task-media-zoom,
+.video-task-review .task-reference-selected .task-media-zoom { width:auto; height:100%; max-width:100%; aspect-ratio:9 / 16; min-height:0; margin:0 auto; }
+.image-task-review .task-reference-selected .task-media-zoom img,
+.video-task-review .task-reference-selected .task-media-zoom img { width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; }
 .task-reference-thumbnails { flex:none; display:flex; gap:8px; overflow-x:auto; padding:0 12px 12px; background:#f8fafc; }
 .task-reference-thumbnail { flex:none; width:72px; height:72px; padding:2px; border:1px solid #dbe2ec; background:#fff; cursor:pointer; transition:border-color .2s, box-shadow .2s; }
 .task-reference-thumbnail:hover { border-color:#8da7df; }
 .task-reference-thumbnail.active { border-color:var(--blue); box-shadow:0 0 0 2px rgba(30,64,175,.16); }
 .task-reference-thumbnail img { display:block; width:100%; height:100%; object-fit:contain; background:#f4f1e9; }
 .task-media-zoom { position:relative; min-height:0; display:grid; place-items:center; overflow:hidden; overscroll-behavior:contain; touch-action:none; background:#eef2f7; border:1px solid #e1e6ef; }
-.task-output-list .task-media-zoom { width:auto; height:100%; max-width:100%; aspect-ratio:9 / 16; min-height:0; margin:0 auto; }
+.image-task-review .task-output-list .task-media-zoom,
+.video-task-review .task-output-list .task-media-zoom { width:auto; height:100%; max-width:100%; aspect-ratio:9 / 16; min-height:0; margin:0 auto; }
 .task-reference-list .task-media-zoom { aspect-ratio:1; min-height:130px; }
 .task-media-zoom img,.task-media-zoom video { display:block; width:100%; height:100%; max-width:none; max-height:none; object-fit:contain; transform-origin:center; transition:transform .12s ease-out; user-select:none; }
 .task-media-zoom video { background:#10151e; }

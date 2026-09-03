@@ -160,7 +160,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   const restoreHref = task
     ? `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}&restoreTaskId=${encodeURIComponent(task.id)}`
     : `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}`;
-  return <div className={`task-review-page ${mode === 'video' ? 'video-task-review' : ''}`}>
+  return <div className={`task-review-page ${mode === 'video' ? 'video-task-review' : 'image-task-review'}`}>
     <div className="task-review-topbar">
       <Link href={`/workspace/accounts/${accountId}/production?mode=${mode}`} className="panel-meta task-review-back"><ArrowLeft size={13} /> 返回生产工作区</Link>
       <span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status ?? 'unknown'}</span>
