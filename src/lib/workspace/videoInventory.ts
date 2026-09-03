@@ -1,6 +1,7 @@
 import { createUploadedAsset, type WorkspaceAsset } from './assetStore';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 import { downloadProviderVideoContent } from '@/lib/providers/client';
+import { inventoryFileName } from './inventoryNaming';
 
 const MAX_OUTPUT_BYTES = 200 * 1024 * 1024;
 
@@ -60,7 +61,7 @@ export async function saveVideoTaskOutputsToAssets(accountId: string, task: Prov
   const assets: WorkspaceAsset[] = [];
   for (const output of outputs) {
     const asset = createUploadedAsset(accountId, 'inventory-video', {
-      name: `generated-${task.id}-${output.index}.mp4`,
+      name: inventoryFileName(task, output.index, 'mp4'),
       type: output.mimeType || 'video/mp4',
       size: output.bytes.length,
       arrayBuffer: Uint8Array.from(output.bytes).buffer,

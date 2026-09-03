@@ -33,6 +33,7 @@ describe('image task inventory persistence', () => {
     const assets = await saveImageTaskOutputsToAssets(accountId, task({ outputBase64: ['data:image/png;base64,aGVsbG8='] }));
     expect(assets).toHaveLength(1);
     expect(assets[0].kind).toBe('image');
+    expect(assets[0].name).toBe('product.png');
     expect(listAssets(accountId, 'image')).toHaveLength(1);
   });
 
@@ -48,4 +49,3 @@ describe('image task inventory persistence', () => {
     expect(await saveImageTaskOutputsToAssets(accountId, task({ metadata: { inventoryAssetIds: ['asset-existing'] }, outputBase64: ['data:image/png;base64,aGVsbG8='] }))).toEqual([]);
   });
 });
-

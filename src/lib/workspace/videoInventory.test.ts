@@ -20,6 +20,7 @@ describe('video task inventory persistence', () => {
     const assets = await saveVideoTaskOutputsToAssets('video-account', task());
     expect(assets).toHaveLength(1);
     expect(assets[0].kind).toBe('inventory-video');
+    expect(assets[0].name).toBe('demo.mp4');
     expect(fs.existsSync(`${root}/uploads/video-account`)).toBe(true);
   });
 

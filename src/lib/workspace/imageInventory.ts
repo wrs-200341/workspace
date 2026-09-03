@@ -1,6 +1,7 @@
 import { createUploadedAsset, type WorkspaceAsset } from './assetStore';
 import { readStoredOutput } from '@/lib/providers/outputStore';
 import type { ProviderTask } from '@/lib/providers/taskStore';
+import { inventoryFileName } from './inventoryNaming';
 
 const MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
 
@@ -60,7 +61,7 @@ export async function saveImageTaskOutputsToAssets(accountId: string, task: Prov
   for (const output of outputs) {
     const extension = extensionForMime(output.mimeType);
     const asset = createUploadedAsset(accountId, 'image', {
-      name: `generated-${task.id}-${output.index}.${extension}`,
+      name: inventoryFileName(task, output.index, extension),
       type: output.mimeType,
       size: output.bytes.length,
       arrayBuffer: Uint8Array.from(output.bytes).buffer,

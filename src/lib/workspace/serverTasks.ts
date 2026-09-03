@@ -1,28 +1,15 @@
 import { listProviderTasks, type ProviderTask } from '@/lib/providers/taskStore';
 import { getWorkspaceAccountById } from './data';
 import { listStoredAccounts } from './accountStore';
-import { businessDate, getWorkspaceTasks, type WorkspaceTask } from './tasks';
-
-function taskSequence(value: unknown): number {
-  const numeric = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN;
-  return Number.isFinite(numeric) ? Math.max(1, Math.round(numeric)) : 1;
-}
-
-function taskImageStem(value: string): string {
-  const fileName = value.split(/[\\/]/).pop()?.trim() ?? value.trim();
-  const stem = fileName.replace(/\.[^.]+$/, '').trim();
-  return stem || fileName;
-}
+import { getWorkspaceTasks, type WorkspaceTask } from './tasks';
+import { taskNameForInventory } from './inventoryNaming';
 
 export function providerTaskToWorkspaceTask(task: ProviderTask): WorkspaceTask {
   const account = getWorkspaceAccountById(task.accountId) ?? listStoredAccounts().find((candidate) => candidate.id === task.accountId);
   const metadata = task.metadata ?? {};
   const owner = typeof metadata.ownerId === 'string' ? metadata.ownerId : account?.ownerId ?? 'operator-unassigned';
   const outputCount = task.outputUrls.length + task.outputBase64.length;
-  const referenceImageName = typeof metadata.referenceImageName === 'string' ? taskImageStem(metadata.referenceImageName) : '';
-  const title = referenceImageName
-    ? `${referenceImageName}_${businessDate(task.createdAt)}_${taskSequence(metadata.sequence)}`
-    : task.prompt?.slice(0, 80) || `${task.mode} generation`;
+  const title = taskNameForInventory(task);
   return {
     id: task.id,
     accountId: task.accountId,
