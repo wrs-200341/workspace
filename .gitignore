@@ -10,3 +10,15 @@ tsconfig.tsbuildinfo
 data/
 logs/
 recovery/runtime/
+# Historical chat dumps and provider evidence may contain credentials or
+# personal data; keep them local for recovery work and out of GitHub.
+recovery/*_thread_decoded.tmp
+recovery/*_history_decoded.tmp
+recovery/3000_dialog_summary.txt
+recovery/3000_user_threads.txt
+recovery/all_keyword_history.txt
+recovery/history_messages.txt
+recovery/provider-history-evidence.md
+recovery/provider-thread-details.txt
+recovery/provider-concrete-messages.txt
+recovery/quality-v4-docs.txt
