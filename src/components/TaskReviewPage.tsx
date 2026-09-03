@@ -124,13 +124,11 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
       // kind-specific ids, so never render their video/audio ids as images.
       ...(referenceAssetIds.length || productImageAssetIds.length ? [] : genericAssetIds),
       ...stringArray(metadata.externalReferenceImages),
-      ...stringArray(metadata.referenceTokens).map((token) => `reference-token:${token}`),
     ];
     return [...new Set(values)];
   }, [metadata]);
   const referenceUrls = useMemo(() => references.map((reference) => {
     if (/^https?:\/\//i.test(reference)) return reference;
-    if (reference.startsWith('reference-token:')) return `/api/workspace/references/${encodeURIComponent(reference.slice('reference-token:'.length))}`;
     if (reference.startsWith('product-image:')) return `/api/workspace/product-images/preview?assetId=${encodeURIComponent(reference)}`;
     return `/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(reference)}`;
   }), [accountId, references]);
@@ -180,7 +178,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
         {referenceUrls.length > 0 ? <>
           <div className="task-reference-selected"><ZoomableMedia src={referenceUrls[selectedReferenceIndex]} alt={`参考图 ${selectedReferenceIndex + 1}`} /></div>
           <div className="task-reference-thumbnails" role="listbox" aria-label="选择参考图">
-            {referenceUrls.map((url, index) => <button key={`${url}-${index}`} type="button" className={`task-reference-thumbnail ${selectedReferenceIndex === index ? 'active' : ''}`} onClick={() => setSelectedReferenceIndex(index)} aria-label={`查看参考图 ${index + 1}`} aria-selected={selectedReferenceIndex === index}><img src={url} alt={`参考图 ${index + 1} 缩略图`} /></button>)}
+            {referenceUrls.map((url, index) => <ReferenceThumbnail key={`${url}-${index}`} src={url} index={index} active={selectedReferenceIndex === index} onSelect={() => setSelectedReferenceIndex(index)} />)}
           </div>
         </> : <div className="task-review-empty">未使用参考图</div>}
       </aside>
@@ -189,6 +187,12 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
 }
 
 function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
+function ReferenceThumbnail({ src, index, active, onSelect }: { src: string; index: number; active: boolean; onSelect: () => void }) {
+  const [failed, setFailed] = useState(false);
+  return <button type="button" className={`task-reference-thumbnail ${active ? 'active' : ''}`} onClick={onSelect} aria-label={`查看参考图 ${index + 1}`} aria-selected={active}>
+    {failed ? <span className="task-thumbnail-fallback">不可用</span> : <img src={src} alt={`参考图 ${index + 1} 缩略图`} onError={() => setFailed(true)} />}
+  </button>;
+}
 function ZoomableMedia({ src, alt, video = false }: { src: string; alt: string; video?: boolean }) {
   const [scale, setScale] = useState(1);
   const [imageFailed, setImageFailed] = useState(false);
