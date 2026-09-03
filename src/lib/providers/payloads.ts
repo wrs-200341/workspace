@@ -175,13 +175,13 @@ export function buildOAIRegboxMultipartFormData(input: OAIRegboxInput): FormData
 export function buildMiniMaxVideoPayload(input: MiniMaxVideoInput): Record<string, unknown> {
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error('minimax_prompt_required');
-  if (!Number.isInteger(input.duration) || input.duration < 5 || input.duration > 15) throw new Error('minimax_invalid_duration');
+  if (!Number.isInteger(input.duration) || input.duration < 4 || input.duration > 15) throw new Error('minimax_invalid_duration');
   const ratios = ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'];
   if (!ratios.includes(input.aspectRatio)) throw new Error('minimax_invalid_aspect_ratio');
   const images = [...(input.referenceImages ?? [])];
   const audios = [...(input.referenceAudios ?? [])];
   if (images.length > 5) throw new Error('minimax_too_many_reference_images');
-  if (audios.length > 1) throw new Error('minimax_too_many_reference_audios');
+  if (audios.length > 3) throw new Error('minimax_too_many_reference_audios');
   for (const url of [...images, ...audios]) {
     let parsed: URL;
     try { parsed = new URL(url); } catch { throw new Error('minimax_reference_urls_must_be_https'); }
@@ -190,7 +190,7 @@ export function buildMiniMaxVideoPayload(input: MiniMaxVideoInput): Record<strin
   return {
     model: input.model,
     prompt,
-    resolution: (input.resolution ?? '720P').toUpperCase(),
+    resolution: (input.resolution ?? '720p').toLowerCase(),
     duration: input.duration,
     ratio: input.aspectRatio,
     ...(images.length ? { image_urls: images } : {}),

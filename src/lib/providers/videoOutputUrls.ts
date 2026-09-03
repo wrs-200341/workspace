@@ -10,7 +10,7 @@ export function canonicalVideoOutputUrl(provider: string, value: string): string
   if (!trimmed) return '';
   try {
     const parsed = new URL(trimmed);
-    if ((provider === 'wan3-video' || provider === 'minimax-h3') && parsed.hostname.toLowerCase() === 'media.manjuai.top') {
+    if (provider === 'wan3-video' && parsed.hostname.toLowerCase() === 'media.manjuai.top') {
       parsed.pathname = parsed.pathname.replace(/^\/downloads\//i, '/videos/');
       parsed.search = '';
       parsed.hash = '';
@@ -39,5 +39,5 @@ export function dedupeVideoOutputUrls(provider: string, urls: readonly string[])
 
 export function countVideoOutputs(provider: string, urls: readonly string[], base64: readonly string[], hasProviderTaskId = false): number {
   const count = dedupeVideoOutputUrls(provider, urls).length + base64.filter((value) => value.trim()).length;
-  return count > 0 ? count : hasProviderTaskId && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(provider) ? 1 : 0;
+  return count > 0 ? count : hasProviderTaskId && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3'].includes(provider) ? 1 : 0;
 }

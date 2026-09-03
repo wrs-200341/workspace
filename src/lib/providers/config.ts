@@ -36,10 +36,12 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
   { id: 'pomoai-gemini-image', name: 'PomoAI Gemini Image', kind: 'image', model: process.env.POMOAI_MODEL || 'gemini-3.1-flash-image', baseUrl: 'https://www.pomoai.ai', liveEnv: 'POMOAI_API_KEY', supports: { referenceImages: 3, referenceVideos: 0, referenceAudios: 0, ratios: ['9:16', '16:9', '1:1'], resolutions: ['1k'] } },
   { id: 'gpt-2999-prompt', name: 'GPT / 2999 API (Responses)', kind: 'prompt', model: process.env.GPT_PROMPT_MODEL || 'gpt-5.5', baseUrl: 'https://2999api.com', liveEnv: 'GPT_PROMPT_API_KEY', supports: { referenceImages: 0, referenceVideos: 0, referenceAudios: 0, ratios: [], resolutions: [] } },
   { id: 'oairegbox-omni', name: 'OAIRegBox Omni', kind: 'video', model: process.env.OAIREGBOX_MODEL || 'omni-fast-no-water', baseUrl: 'https://newapi-2.oairegbox.cc/v1', liveEnv: 'OAIREGBOX_API_KEY', supports: { referenceImages: 5, referenceVideos: 0, referenceAudios: 0, durations: [10], ratios: ['9:16', '16:9'], resolutions: ['720p'] } },
-  // MiniMax H3 is exposed by the ManjuAI gateway used by the supplied key.
-  // The live model catalog reports minimax-h3-r2v and the API uses the
-  // Wan-compatible /v1/videos/generations contract.
-  { id: 'minimax-h3', name: 'MiniMax H3', kind: 'video', model: process.env.MINIMAX_MODEL || 'minimax-h3-r2v', baseUrl: 'https://api.manjuai.top/v1', liveEnv: 'MINIMAX_API_KEY', supports: { referenceImages: 10, referenceVideos: 5, referenceAudios: 5, durations: [5, 8, 10, 15], ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'], resolutions: ['720P'] } },
+  // MiniMax H3 is served by the secure-skill gateway.  It uses the stable
+  // OpenAI-compatible async video contract (`/v1/videos`), while Wan 3
+  // remains the ManjuAI integration above.  H3 does not accept reference
+  // videos; image/audio limits are enforced by the production capability
+  // table and request validator.
+  { id: 'minimax-h3', name: 'MiniMax H3 / secure-skill', kind: 'video', model: process.env.MINIMAX_MODEL || 'minimax-h3', baseUrl: 'https://token.secure-skill.com', liveEnv: 'MINIMAX_API_KEY', supports: { referenceImages: 5, referenceVideos: 0, referenceAudios: 3, durations: [4, 6, 8, 10, 12, 15], ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'], resolutions: ['720p'] } },
 ];
 
 export function getProviderCatalog(): ProviderCatalogEntry[] { return CATALOG.map((provider) => ({ ...provider, supports: { ...provider.supports, durations: provider.supports.durations ? [...provider.supports.durations] : undefined, ratios: [...provider.supports.ratios], resolutions: [...provider.supports.resolutions] } })); }

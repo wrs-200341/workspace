@@ -25,8 +25,9 @@ describe('provider client helpers', () => {
     expect(providerEndpoint('pomoai-gemini-image', 'create')).toBe('https://www.pomoai.ai/v1beta/models/gemini-3.1-flash-image:generateContent');
     expect(providerEndpoint('gpt-2999-prompt', 'create')).toBe('https://2999api.com/v1/responses');
     expect(providerEndpoint('oairegbox-omni', 'create')).toBe('https://newapi-2.oairegbox.cc/v1/videos');
-    expect(providerEndpoint('minimax-h3', 'create')).toBe('https://api.manjuai.top/v1/videos/generations');
-    expect(providerEndpoint('minimax-h3', 'status')).toBe('https://api.manjuai.top/v1/videos/tasks/{id}');
+    expect(providerEndpoint('minimax-h3', 'create')).toBe('https://token.secure-skill.com/v1/videos');
+    expect(providerEndpoint('minimax-h3', 'status')).toBe('https://token.secure-skill.com/v1/videos/{id}');
+    expect(providerEndpoint('minimax-h3', 'content')).toBe('https://token.secure-skill.com/v1/videos/{id}/content');
     expect(sanitizeProviderError('Bearer secret-token: provider failed')).toBe('provider request failed');
   });
 
@@ -197,38 +198,31 @@ describe('provider client helpers', () => {
     expect(result.mode).toBe('live');
   });
 
-  it('submits MiniMax H3 requests through the ManjuAI gateway', async () => {
+  it('submits MiniMax H3 requests through the secure-skill gateway', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      expect(String(url)).toBe('https://api.manjuai.top/v1/videos/generations');
+      expect(String(url)).toBe('https://token.secure-skill.com/v1/videos');
       expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key', 'content-type': 'application/json' });
       expect(JSON.parse(String(init?.body))).toEqual({
-        model: 'minimax-h3-r2v', prompt: 'demo', ratio: '16:9', resolution: '720P', duration: 10,
-        media: [{ type: 'reference_image', url: 'https://assets.example/a.png' }], prompt_extend: true,
+        model: 'minimax-h3', prompt: 'demo', ratio: '16:9', resolution: '720p', duration: 10,
+        image_urls: ['https://assets.example/a.png'],
       });
       return Response.json({ id: 'minimax-task', status: 'queued' });
     });
-    const result = await submitVideo({ provider: 'minimax-h3', model: 'minimax-h3-r2v', prompt: 'demo', duration: 10, aspectRatio: '16:9', resolution: '720P', referenceImages: ['https://assets.example/a.png'] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MINIMAX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    const result = await submitVideo({ provider: 'minimax-h3', model: 'minimax-h3', prompt: 'demo', duration: 10, aspectRatio: '16:9', resolution: '720p', referenceImages: ['https://assets.example/a.png'] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MINIMAX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result).toMatchObject({ mode: 'live', provider: 'minimax-h3' });
   });
 
-  it('passes video and audio references for MiniMax R2V on the ManjuAI gateway', async () => {
+  it('rejects reference videos for MiniMax H3', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      expect(JSON.parse(String(init?.body))).toMatchObject({
-        media: [
-          { type: 'reference_image', url: 'https://assets.example/a.png' },
-          { type: 'reference_video', url: 'https://assets.example/a.mp4' },
-          { type: 'audio', url: 'https://assets.example/a.mp3' },
-        ],
-      });
-      return Response.json({ id: 'minimax-r2v-task', status: 'queued' });
+      return Response.json({ id: 'minimax-task', status: 'queued' });
     });
     await expect(submitVideo({
-      provider: 'minimax-h3', model: 'minimax-h3-r2v', prompt: 'demo', duration: 10,
-      aspectRatio: '16:9', resolution: '720P',
+      provider: 'minimax-h3', model: 'minimax-h3', prompt: 'demo', duration: 10,
+      aspectRatio: '16:9', resolution: '720p',
       referenceImages: ['https://assets.example/a.png'],
       referenceVideos: ['https://assets.example/a.mp4'],
       referenceAudios: ['https://assets.example/a.mp3'],
-    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MINIMAX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).resolves.toMatchObject({ mode: 'live', provider: 'minimax-h3' });
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MINIMAX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).rejects.toThrow('minimax_reference_media_unsupported');
   });
 
   it('submits OAIRegBox multipart files without overriding the multipart boundary', async () => {
@@ -369,6 +363,20 @@ describe('provider client helpers', () => {
     });
     const result = await downloadProviderVideoContent('mgrouter-grok-video', 'mg-task', {
       env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MGROUTER_API_KEY: 'test-key' },
+      fetch: fetchMock as typeof fetch,
+    });
+    expect(result.mimeType).toBe('video/mp4');
+  });
+
+  it('downloads MiniMax H3 content through secure-skill', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://token.secure-skill.com/v1/videos/h3-task/content');
+      expect(init?.method).toBe('GET');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key' });
+      return new Response(new Uint8Array([0, 0, 0, 24, 102, 116, 121, 112]), { status: 200, headers: { 'content-type': 'video/mp4' } });
+    });
+    const result = await downloadProviderVideoContent('minimax-h3', 'h3-task', {
+      env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MINIMAX_API_KEY: 'test-key' },
       fetch: fetchMock as typeof fetch,
     });
     expect(result.mimeType).toBe('video/mp4');

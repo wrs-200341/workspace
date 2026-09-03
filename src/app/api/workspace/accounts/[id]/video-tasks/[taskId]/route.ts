@@ -7,7 +7,7 @@ import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } fro
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
-import { cacheVideoTaskOutputsLocally, listVideoTaskInventoryAssets, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
+import { cacheVideoTaskOutputsBeforeCompletion, listVideoTaskInventoryAssets, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
 import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask } from '@/lib/providers/concurrency';
 
@@ -46,8 +46,11 @@ function queueDetailProviderSync(taskId: string, task: NonNullable<ReturnType<ty
   const run = (async () => {
     try {
       const status = await syncProviderTask(task.provider, task.providerTaskId!);
-      const updated = updateProviderTask(taskId, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined });
-      if (updated?.status === 'completed') void cacheVideoTaskOutputsLocally(updated.accountId, updated).catch(() => undefined);
+      const normalizedStatus = status.status === 'unknown' ? task.status : status.status;
+      const cacheTask = { ...task, status: 'completed' as const, progress: 100, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64 };
+      const cache = normalizedStatus === 'completed' ? await cacheVideoTaskOutputsBeforeCompletion(task.accountId, cacheTask) : null;
+      const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
+      const updated = updateProviderTask(taskId, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
       pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
     } catch (error) {
       const message = error instanceof Error ? error.message : '';

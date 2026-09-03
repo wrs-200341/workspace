@@ -1,14 +1,26 @@
 import fs from 'node:fs';
-import { describe, expect, it, beforeEach } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { getWorkspacePath } from '@/lib/storagePaths';
 import { storeImageBase64Outputs, readStoredOutput, readStoredVideoOutput, storeVideoOutput } from './outputStore';
 
 const png = Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]).toString('base64');
 const mp4 = Buffer.from([0,0,0,24,0x66,0x74,0x79,0x70,0,0,0,0]).toString('base64');
+const testRoot = `D:\\all_projects\\workspace\\data\\output-store-test-${process.pid}`;
+const previousDataRoot = process.env.WORKSPACE_DATA_ROOT;
 
 describe('provider output store', () => {
   beforeEach(() => {
+    // Never point test cleanup at the real production data root.  These tests
+    // run in the same workspace process as the app and used to delete every
+    // generated image under data/generated before each case.
+    process.env.WORKSPACE_DATA_ROOT = testRoot;
     fs.rmSync(getWorkspacePath('generated'), { recursive: true, force: true });
+  });
+
+  afterAll(() => {
+    fs.rmSync(testRoot, { recursive: true, force: true });
+    if (previousDataRoot === undefined) delete process.env.WORKSPACE_DATA_ROOT;
+    else process.env.WORKSPACE_DATA_ROOT = previousDataRoot;
   });
 
   it('stores validated base64 images under D-drive workspace data', () => {

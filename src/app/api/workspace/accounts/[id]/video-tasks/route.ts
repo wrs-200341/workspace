@@ -12,7 +12,7 @@ import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { pumpProviderTasks } from '@/lib/providers/concurrency';
-import { cacheVideoTaskOutputsLocally } from '@/lib/workspace/videoInventory';
+import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 
 const SYNC_THROTTLE_MS = 10_000;
 const liveSyncInFlight = new Map<string, Promise<void>>();
@@ -66,8 +66,13 @@ async function runLiveVideoTasks(tasks: ReturnType<typeof getServerWorkspaceTask
     const run = (async () => {
       try {
         const status = await syncProviderTask(task.provider as ProviderId, task.providerTaskId!);
-        const updated = updateProviderTask(task.id, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined });
-        if (updated?.status === 'completed') void cacheVideoTaskOutputsLocally(updated.accountId, updated).catch(() => undefined);
+        const normalizedStatus = status.status === 'unknown' ? task.status : status.status;
+        const cacheTask = task.provider && task.updatedAt
+          ? { ...task, provider: task.provider as ProviderId, mode: 'video' as const, status: 'completed' as const, progress: 100, updatedAt: task.updatedAt, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64 }
+          : null;
+        const cache = normalizedStatus === 'completed' && cacheTask ? await cacheVideoTaskOutputsBeforeCompletion(task.accountId, cacheTask) : null;
+        const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
+        const updated = updateProviderTask(task.id, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
       } catch (error) {
         const providerResponse = providerResponseSnapshot(error);
@@ -126,9 +131,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const normalized = validateGenerationRequest({ provider, model, duration, aspectRatio, resolution, referenceImages, referenceAudios });
     const result = await submitVideo({ provider, model, prompt: body.prompt, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceAudios, media: [...referenceImages.map((url) => ({ type: 'reference_image' as const, url })), ...referenceAudios.map((url) => ({ type: 'audio' as const, url }))] });
     const status = normalizeProviderResponse(provider, result.response);
-    const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: body.prompt, status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: 1, execution: result.mode, ...(assetIds.length ? { assetIds, referenceTokens: publishedReferences.map((item) => item.token) } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) } });
+    const initialStatus = status.status === 'unknown' ? 'queued' : status.status;
+    const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: body.prompt, status: initialStatus, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: 1, execution: result.mode, ...(assetIds.length ? { assetIds, referenceTokens: publishedReferences.map((item) => item.token) } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) } });
+    let responseTask = task;
+    if (initialStatus === 'completed') {
+      const cache = await cacheVideoTaskOutputsBeforeCompletion(id, task);
+      responseTask = updateProviderTask(task.id, { status: cache.ready ? 'completed' : 'processing', progress: cache.ready ? 100 : 99, metadata: { ...(task.metadata ?? {}), localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } }) ?? task;
+    }
     if (result.mode === 'mock') void processMockProviderTask(task.id);
-    return NextResponse.json({ success: true, data: task }, { status: 202 });
+    return NextResponse.json({ success: true, data: responseTask }, { status: 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_asset_path_invalid', 'reference_asset_file_invalid', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];

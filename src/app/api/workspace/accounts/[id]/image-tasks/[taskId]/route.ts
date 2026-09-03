@@ -7,7 +7,7 @@ import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } fro
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
-import { listImageTaskInventoryAssets, saveImageTaskOutputsToAssets } from '@/lib/workspace/imageInventory';
+import { cacheImageTaskOutputsBeforeCompletion, listImageTaskInventoryAssets, localImageOutputUrls, saveImageTaskOutputsToAssets } from '@/lib/workspace/imageInventory';
 import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask } from '@/lib/providers/concurrency';
 
 const DETAIL_SYNC_THROTTLE_MS = 10_000;
@@ -41,7 +41,15 @@ function queueDetailProviderSync(taskId: string, task: NonNullable<ReturnType<ty
   const run = (async () => {
     try {
       const status = await syncProviderTask(task.provider, task.providerTaskId!);
-      updateProviderTask(taskId, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: undefined });
+      const normalizedStatus = status.status === 'unknown' ? task.status : status.status;
+      const cacheTask = { ...task, mode: 'image' as const, status: 'completed' as const, progress: 100, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64 };
+      const cache = normalizedStatus === 'completed' ? await cacheImageTaskOutputsBeforeCompletion(task.accountId, cacheTask) : null;
+      const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
+      const outputUrls = cache?.ready && cache.expected > 0
+        ? localImageOutputUrls(task.accountId, { ...task, outputUrls: status.outputUrls, outputBase64: status.outputBase64 })
+        : status.outputUrls;
+      const outputBase64 = cache?.ready && cache.expected > 0 ? [] : status.outputBase64;
+      updateProviderTask(taskId, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls, outputBase64, error: status.error, providerResponse: undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
       pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
     } catch (error) {
       const providerResponse = providerResponseSnapshot(error);

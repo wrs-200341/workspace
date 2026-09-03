@@ -34,14 +34,10 @@ export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' 
     return operation === 'create' ? `${wanBase}/videos/generations` : `${wanBase}/videos/tasks/{id}`;
   }
   if (id === 'minimax-h3') {
-    // Current MiniMax H3 deployments are served by ManjuAI's Wan-compatible
-    // gateway (`/videos/generations` + `/videos/tasks/:id`).  Preserve the
-    // historical secure-skill gateway shape when an operator explicitly
-    // overrides MINIMAX_BASE_URL to that origin.
-    const isManjuGateway = (() => { try { return new URL(base).hostname === 'api.manjuai.top'; } catch { return true; } })();
-    return isManjuGateway
-      ? (operation === 'create' ? `${base}/videos/generations` : `${base}/videos/tasks/{id}`)
-      : (operation === 'create' ? `${base}/videos` : `${base}/videos/{id}` + (operation === 'content' ? '/content' : ''));
+    // MiniMax H3 uses secure-skill's OpenAI-compatible async video contract.
+    // Wan 3 is the separate ManjuAI integration above.
+    const minimaxBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
+    return operation === 'create' ? `${minimaxBase}/videos` : `${minimaxBase}/videos/{id}` + (operation === 'content' ? '/content' : '');
   }
   if (id === 'yuanai-image') return operation === 'create' ? `${base}/v1/images/generations` : `${base}/v1/images/{id}`;
   if (id === 'pomoai-gemini-image') return `${base}/v1beta/models/${encodeURIComponent(getProviderConfig(id, env).model)}:generateContent`;
@@ -527,7 +523,8 @@ export async function syncProviderTask(provider: ProviderId, providerTaskId: str
 
 /**
  * Download a completed video from providers exposing the historical
- * `/videos/{id}/content` endpoint (snumom/Grok, MGRouter, and OAIRegBox). This keeps the
+ * `/videos/{id}/content` endpoint (snumom/Grok, MGRouter, OAIRegBox, and
+ * secure-skill MiniMax H3). This keeps the
  * provider credential on the server and applies a strict binary size guard;
  * callers can then persist the bytes under the D-drive workspace data root.
  */
@@ -536,7 +533,7 @@ export async function downloadProviderVideoContent(
   providerTaskId: string,
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
 ): Promise<{ bytes: Uint8Array; mimeType: string }> {
-  if (provider !== 'grok-video' && provider !== 'mgrouter-grok-video' && provider !== 'oairegbox-omni') throw new Error('provider_content_unsupported');
+  if (provider !== 'grok-video' && provider !== 'mgrouter-grok-video' && provider !== 'oairegbox-omni' && provider !== 'minimax-h3') throw new Error('provider_content_unsupported');
   const env = dependencies.env ?? process.env;
   const fetcher = dependencies.fetch ?? fetch;
   const config = getProviderConfig(provider, env);
@@ -598,7 +595,7 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   if (isSdMini && (input.referenceAudios?.length || input.referenceFiles?.length || input.media?.some((item) => item.type !== 'reference_image'))) {
     throw new Error('sdmini_reference_media_unsupported');
   }
-  if (isMiniMax && !config.baseUrl.includes('api.manjuai.top') && (input.referenceFiles?.length || input.media?.some((item) => item.type === 'reference_video'))) {
+  if (isMiniMax && (input.referenceFiles?.length || input.referenceVideos?.length || input.media?.some((item) => item.type === 'reference_video'))) {
     throw new Error('minimax_reference_media_unsupported');
   }
   if (input.provider === 'oairegbox-omni' && (input.referenceImages ?? []).length > 0 && !(input.referenceFiles?.length)) throw new Error('reference_files_required');
@@ -617,20 +614,7 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
       ? buildOAIRegboxMultipartFormData({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, references: input.referenceFiles })
       : buildOAIRegboxPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, references: [] }))
     : input.provider === 'minimax-h3'
-    ? (config.baseUrl.includes('api.manjuai.top')
-      ? buildWanVideoPayload({
-        model: input.model,
-        prompt: input.prompt.trim(),
-        duration: input.duration,
-        ratio: input.aspectRatio,
-        resolution: input.resolution,
-        media: [
-          ...references.map((url) => ({ type: 'reference_image' as const, url })),
-          ...validateReferenceUrls(input.referenceVideos ?? []).map((url) => ({ type: 'reference_video' as const, url })),
-          ...validateReferenceUrls(input.referenceAudios ?? []).map((url) => ({ type: 'audio' as const, url })),
-        ],
-      })
-      : buildMiniMaxVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) }))
+    ? buildMiniMaxVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
     : isSdMini
     ? buildSdMiniVideoPayload({ model: input.model, prompt: input.prompt.trim(), seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
     : input.provider === 'grok-video'

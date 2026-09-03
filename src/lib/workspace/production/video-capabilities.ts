@@ -159,28 +159,31 @@ const CAPABILITIES: Record<string, VideoCapability> = {
     referenceAudios: none,
   },
   'minimax:minimax-h3': {
-    duration: { min: 5, max: 15 },
+    duration: { min: 4, max: 15, values: [4, 6, 8, 10, 12, 15] },
     aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
-    resolutions: ['720P'],
-    defaultResolution: '720P',
+    resolutions: ['720p'],
+    defaultResolution: '720p',
     referenceImages: imageRefs(5),
     referenceVideos: none,
-    referenceAudios: none,
+    referenceAudios: imageRefs(3),
   },
+  // Keep legacy R2V records readable while new requests use the secure-skill
+  // MiniMax H3 model above.  The secure-skill contract explicitly rejects
+  // reference video fields, so this alias intentionally disables them too.
   'minimax-h3:minimax-h3-r2v': {
-    duration: { min: 5, max: 15, values: [5, 8, 10, 15] },
+    duration: { min: 4, max: 15, values: [4, 6, 8, 10, 12, 15] },
     aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
-    resolutions: ['720P'],
-    defaultResolution: '720P',
-    referenceImages: imageRefs(10),
-    referenceVideos: imageRefs(5),
-    referenceAudios: imageRefs(5),
+    resolutions: ['720p'],
+    defaultResolution: '720p',
+    referenceImages: imageRefs(5),
+    referenceVideos: none,
+    referenceAudios: imageRefs(3),
   },
   'minimax-h3:minimax-h3-t2v': {
-    duration: { min: 5, max: 15, values: [5, 8, 10, 15] },
+    duration: { min: 4, max: 15, values: [4, 6, 8, 10, 12, 15] },
     aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
-    resolutions: ['720P'],
-    defaultResolution: '720P',
+    resolutions: ['720p'],
+    defaultResolution: '720p',
     referenceImages: none,
     referenceVideos: none,
     referenceAudios: none,
@@ -225,6 +228,7 @@ CAPABILITIES['mgrouter-grok-video:grok-imagine-video-1.5'] = CAPABILITIES['mgrou
 CAPABILITIES['mgrouter-grok-video:grok-video'] = CAPABILITIES['mgrouter-grok-video:grok'];
 CAPABILITIES['manjuai:wan3-prime-r2v'] = CAPABILITIES['wan3-video:wan3.0-prime-r2v'];
 CAPABILITIES['wan3-video:wan3-prime-r2v'] = CAPABILITIES['wan3-video:wan3.0-prime-r2v'];
+CAPABILITIES['minimax-h3:minimax-h3'] = CAPABILITIES['minimax:minimax-h3'];
 
 export const VIDEO_CAPABILITY_CONFIGS: Readonly<Record<string, VideoCapability>> = CAPABILITIES;
 

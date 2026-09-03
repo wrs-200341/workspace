@@ -1,6 +1,6 @@
 import dns from 'node:dns/promises';
 import { createUploadedAsset, getAsset, readAssetFile, type WorkspaceAsset } from './assetStore';
-import { readStoredOutput } from '@/lib/providers/outputStore';
+import { readStoredOutput, storeImageBase64Outputs, storeImageOutput } from '@/lib/providers/outputStore';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 import { assertPublicTarget, type LookupAddress } from './externalImageImport';
 import { inventoryFileName } from './inventoryNaming';
@@ -12,6 +12,26 @@ export type ImageInventoryDependencies = {
   fetcher?: typeof fetch;
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
 };
+
+export type ImageOutputCacheResult = {
+  cached: number;
+  expected: number;
+  ready: boolean;
+};
+
+/** Build same-origin proxy URLs in the exact slot order used by the cache. */
+export function localImageOutputUrls(accountId: string, task: Pick<ProviderTask, 'id' | 'outputUrls' | 'outputBase64'>): string[] {
+  const urlOffset = task.outputBase64.length;
+  const urlSlots = task.outputUrls
+    .map((value, index) => value.trim() ? urlOffset + index : -1)
+    .filter((index) => index >= 0);
+  const base64Slots = task.outputBase64
+    .map((value, index) => value.trim() ? index : -1)
+    .filter((index) => index >= 0);
+  // The cache writes Base64 slots first and URL slots after them; preserve
+  // that same logical order when exposing the final proxy URL list.
+  return [...base64Slots, ...urlSlots].map((index) => `/api/workspace/accounts/${encodeURIComponent(accountId)}/image-tasks/${encodeURIComponent(task.id)}/outputs/${index}`);
+}
 
 function extensionForMime(mime: string): string {
   const value = mime.toLowerCase();
@@ -31,6 +51,8 @@ function decodeBase64(value: string): { bytes: Buffer; mimeType: string } | null
 }
 
 async function readOutput(accountId: string, task: ProviderTask, value: string, index: number, dependencies: ImageInventoryDependencies): Promise<{ bytes: Buffer; mimeType: string } | null> {
+  const cachedAtIndex = readStoredOutput(accountId, task.id, index);
+  if (cachedAtIndex) return { bytes: cachedAtIndex.bytes, mimeType: cachedAtIndex.mimeType };
   const local = value.match(/\/image-tasks\/[^/]+\/outputs\/(\d+)$/);
   if (local) {
     const stored = readStoredOutput(accountId, task.id, Number(local[1]));
@@ -72,6 +94,29 @@ async function readOutput(accountId: string, task: ProviderTask, value: string, 
   return { bytes: Buffer.concat(chunks, total), mimeType };
 }
 
+/** Cache all completed image outputs before exposing the task as completed. */
+export async function cacheImageTaskOutputsBeforeCompletion(accountId: string, task: ProviderTask, dependencies: ImageInventoryDependencies = {}): Promise<ImageOutputCacheResult> {
+  if (task.mode !== 'image' || task.accountId !== accountId) return { cached: 0, expected: 0, ready: false };
+  let cached = 0;
+  const expected = task.outputBase64.filter((value) => value.trim()).length + task.outputUrls.filter((value) => value.trim()).length;
+  if (task.outputBase64.length > 0) {
+    cached += storeImageBase64Outputs(accountId, task.id, task.outputBase64).length;
+  }
+  const urlOffset = task.outputBase64.length;
+  for (let index = 0; index < task.outputUrls.length; index += 1) {
+    const existing = readStoredOutput(accountId, task.id, urlOffset + index);
+    if (existing) { cached += 1; continue; }
+    // URL outputs occupy the slot range after Base64 outputs. Keep the
+    // source slot distinct so a mixed provider response cannot reuse the
+    // Base64 bytes at the same numeric index as the remote URL.
+    const output = await readOutput(accountId, task, task.outputUrls[index], urlOffset + index, dependencies).catch(() => null);
+    if (output && storeImageOutput(accountId, task.id, urlOffset + index, output.bytes, output.mimeType)) cached += 1;
+  }
+  // A completed response with no media is still a valid terminal task (for
+  // example a provider-side no-op); there is nothing to cache in that case.
+  return { cached, expected, ready: expected === 0 || cached >= expected };
+}
+
 /** Return only persisted, readable image assets declared by this task. */
 export function listImageTaskInventoryAssets(accountId: string, task: ProviderTask): WorkspaceAsset[] {
   if (task.mode !== 'image' || task.accountId !== accountId) return [];
@@ -105,7 +150,7 @@ export async function saveImageTaskOutputsToAssets(accountId: string, task: Prov
   // slot is malformed.
   const urlOffset = task.outputBase64.length;
   for (let index = 0; index < task.outputUrls.length; index += 1) {
-    const output = await readOutput(accountId, task, task.outputUrls[index], index, dependencies);
+    const output = await readOutput(accountId, task, task.outputUrls[index], urlOffset + index, dependencies);
     if (output) outputs.push({ ...output, index: urlOffset + index });
   }
   const assets: WorkspaceAsset[] = [];

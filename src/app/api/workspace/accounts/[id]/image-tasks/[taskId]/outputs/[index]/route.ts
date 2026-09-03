@@ -134,6 +134,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   }
   const remoteUrl = task.outputUrls[index];
   if (typeof remoteUrl !== 'string' || !remoteUrl.trim()) return NextResponse.json({ success: false, error: 'output_not_found' }, { status: 404 });
+  // Local API URLs are durable cache references, not remote image URLs. If the
+  // corresponding file was removed, report a cache miss instead of exposing
+  // the misleading `image_output_url_invalid` validation error.
+  if (remoteUrl.startsWith('/api/')) return NextResponse.json({ success: false, error: 'output_unavailable' }, { status: 404 });
   try {
     const remote = await readRemoteImage(remoteUrl);
     // Keep the response path usable with older deployments that do not yet

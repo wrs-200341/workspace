@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { lookupProductSummary } from '@/lib/workspace/productSummary';
 import { enqueueProviderTask } from '@/lib/providers/concurrency';
-import { cacheVideoTaskOutputsLocally } from '@/lib/workspace/videoInventory';
+import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 
 type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'quality-v4' | 'oairegbox-omni';
 const VIDEO_PROVIDERS: readonly VideoProvider[] = ['grok-video', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'quality-v4', 'oairegbox-omni'];
@@ -153,8 +153,13 @@ async function submitVideoTask(input: { taskId: string; provider: VideoProvider;
     providerResponse = submitted.response;
     const status = normalizeProviderResponse(input.provider, submitted.response);
     const current = getProviderTask(input.taskId);
-    const updated = updateProviderTask(input.taskId, { status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: providerResponse, method: 'POST' }) : undefined, metadata: { ...(current?.metadata ?? {}), execution: submitted.mode } });
-    if (updated?.status === 'completed') void cacheVideoTaskOutputsLocally(updated.accountId, updated).catch(() => undefined);
+    const normalizedStatus = status.status === 'unknown' ? 'queued' : status.status;
+    const cacheTask = current ? { ...current, status: 'completed' as const, progress: 100, providerTaskId: status.providerTaskId ?? current.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64 } : null;
+    const cache = normalizedStatus === 'completed' && cacheTask
+      ? await cacheVideoTaskOutputsBeforeCompletion(cacheTask.accountId, cacheTask)
+      : null;
+    const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
+    const updated = updateProviderTask(input.taskId, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: providerResponse, method: 'POST' }) : undefined, metadata: { ...(current?.metadata ?? {}), execution: submitted.mode, ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
     if (updated && submitted.mode === 'mock') void processMockProviderTask(input.taskId);
   } catch (error) {
     updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }), metadata: { ...(getProviderTask(input.taskId)?.metadata ?? {}), execution: 'failed' } });

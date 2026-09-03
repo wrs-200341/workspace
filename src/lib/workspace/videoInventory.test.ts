@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { listAssets } from './assetStore';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
-import { repairSavedVideoTaskInventory, saveVideoTaskOutputsToAssets } from './videoInventory';
+import { cacheVideoTaskOutputsBeforeCompletion, repairSavedVideoTaskInventory, saveVideoTaskOutputsToAssets } from './videoInventory';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
 const root = `D:\\all_projects\\workspace\\data\\video-inventory-test-${process.pid}`;
@@ -28,6 +28,13 @@ describe('video task inventory persistence', () => {
     expect(assets[0].kind).toBe('inventory-video');
     expect(assets[0].name).toBe('demo.mp4');
     expect(fs.existsSync(`${root}/uploads/video-account`)).toBe(true);
+  });
+
+  it('requires every logical output to be cached before completion is considered ready', async () => {
+    const ready = await cacheVideoTaskOutputsBeforeCompletion('video-account', task({ outputBase64: [`data:video/mp4;base64,${mp4Bytes.toString('base64')}`] }));
+    expect(ready).toEqual({ cached: 1, expected: 1, ready: true });
+    const pending = await cacheVideoTaskOutputsBeforeCompletion('video-account', task({ provider: 'wan3-video', outputBase64: [], outputUrls: [], providerTaskId: undefined }));
+    expect(pending).toEqual({ cached: 0, expected: 0, ready: false });
   });
 
   it('does not duplicate an already inventoried task', async () => {

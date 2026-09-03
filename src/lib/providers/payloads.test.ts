@@ -38,9 +38,9 @@ describe('provider payload contracts', () => {
     expect(buildWanVideoPayload({ model: 'wan3.0-prime-t2v', prompt: 'demo', ratio: '16:9', resolution: '480p', duration: 5, media: [] })).not.toHaveProperty('media');
   });
 
-  it('builds the MiniMax H3 split media payload', () => {
-    expect(buildMiniMaxVideoPayload({ model: 'minimax-h3-r2v', prompt: ' demo ', duration: 10, aspectRatio: '16:9', resolution: '720p', referenceImages: ['https://assets.example/a.png'], referenceAudios: ['https://assets.example/a.mp3'] })).toEqual({
-      model: 'minimax-h3-r2v', prompt: 'demo', ratio: '16:9', resolution: '720P', duration: 10,
+  it('builds the MiniMax H3 secure-skill payload', () => {
+    expect(buildMiniMaxVideoPayload({ model: 'minimax-h3', prompt: ' demo ', duration: 10, aspectRatio: '16:9', resolution: '720p', referenceImages: ['https://assets.example/a.png'], referenceAudios: ['https://assets.example/a.mp3'] })).toEqual({
+      model: 'minimax-h3', prompt: 'demo', ratio: '16:9', resolution: '720p', duration: 10,
       image_urls: ['https://assets.example/a.png'], audio_urls: ['https://assets.example/a.mp3'],
     });
   });

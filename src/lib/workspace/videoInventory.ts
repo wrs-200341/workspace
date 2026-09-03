@@ -3,7 +3,7 @@ import { createUploadedAsset, getAsset, listAssets, readAssetFile, type Workspac
 import { listProviderTasks, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
 import { downloadProviderVideoContent } from '@/lib/providers/client';
 import { readStoredVideoOutput, storeVideoOutput } from '@/lib/providers/outputStore';
-import { dedupeVideoOutputUrls } from '@/lib/providers/videoOutputUrls';
+import { countVideoOutputs, dedupeVideoOutputUrls } from '@/lib/providers/videoOutputUrls';
 import { assertPublicTarget, type LookupAddress } from './externalImageImport';
 import { inventoryFileName, taskNameForInventory } from './inventoryNaming';
 
@@ -11,12 +11,18 @@ const MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
 const MAX_OUTPUTS_PER_TASK = 4;
 const MAX_TOTAL_OUTPUT_BYTES = 400 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
-const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['media.manjuai.top', 'gogrok.iconmoi.com', 'snumom.com', 'video2.crack.cc.cd']);
+const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['media.manjuai.top', 'gogrok.iconmoi.com', 'snumom.com', 'video2.crack.cc.cd', 'token.secure-skill.com']);
 
 export type VideoInventoryDependencies = {
   fetcher?: typeof fetch;
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
   excludeAssetIds?: ReadonlySet<string>;
+};
+
+export type VideoOutputCacheResult = {
+  cached: number;
+  expected: number;
+  ready: boolean;
 };
 
 const outputCacheInFlight = new Map<string, Promise<number>>();
@@ -92,7 +98,7 @@ export async function cacheVideoTaskOutputsLocally(accountId: string, task: Prov
 
   // Authenticated content endpoints are more reliable than a public URL and
   // are the only output source for some Grok-compatible providers.
-  const contentProvider = !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task.provider);
+  const contentProvider = !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3'].includes(task.provider);
   if (contentProvider && urls.length === 0) {
     if (!readStoredVideoOutput(accountId, task.id, 0)) {
       try {
@@ -127,6 +133,23 @@ export async function cacheVideoTaskOutputsLocally(accountId: string, task: Prov
   return cached;
 }
 
+/**
+ * A provider may report `completed` before its public URL or content endpoint
+ * is actually readable.  Treat the local cache as the completion barrier:
+ * callers should persist `completed` only when every logical output has been
+ * downloaded and validated under data/generated.
+ */
+export async function cacheVideoTaskOutputsBeforeCompletion(accountId: string, task: ProviderTask, dependencies: VideoInventoryDependencies = {}): Promise<VideoOutputCacheResult> {
+  if (task.mode !== 'video' || task.accountId !== accountId) return { cached: 0, expected: 0, ready: false };
+  const completedTask: ProviderTask = task.status === 'completed' ? task : { ...task, status: 'completed' };
+  const expected = countVideoOutputs(task.provider, task.outputUrls, task.outputBase64, Boolean(task.providerTaskId));
+  const cached = await cacheVideoTaskOutputsLocally(accountId, completedTask, dependencies);
+  // A live provider completion without any logical output is not ready for
+  // review. Keep it processing so the next sync can obtain the output and
+  // persist it locally before exposing completed to the operator.
+  return { cached, expected, ready: expected > 0 && cached >= expected };
+}
+
 /** Cache only one logical output for the review proxy. Concurrent requests for
  * the same task/index share one provider download. */
 export function cacheVideoTaskOutputLocally(accountId: string, task: ProviderTask, index: number, dependencies: VideoInventoryDependencies = {}): Promise<number> {
@@ -137,7 +160,7 @@ export function cacheVideoTaskOutputLocally(accountId: string, task: ProviderTas
   const run = (async () => {
     if (readStoredVideoOutput(accountId, task.id, index)) return 1;
     const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
-    const contentProvider = !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task.provider);
+    const contentProvider = !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3'].includes(task.provider);
     if (contentProvider && urls.length === 0 && index === 0) {
       try {
         const downloaded = await downloadProviderVideoContent(task.provider, task.providerTaskId!);
@@ -214,7 +237,7 @@ export async function saveVideoTaskOutputsToAssets(accountId: string, task: Prov
   await cacheVideoTaskOutputsLocally(accountId, task, dependencies);
   const outputs: Array<{ bytes: Buffer; mimeType: string; index: number }> = [];
   const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
-  const contentProvider = !task.outputBase64.length && urls.length === 0 && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task.provider);
+  const contentProvider = !task.outputBase64.length && urls.length === 0 && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3'].includes(task.provider);
   const contentCached = contentProvider && Boolean(readStoredVideoOutput(accountId, task.id, 0));
   if (contentCached) {
     const local = readStoredVideoOutput(accountId, task.id, 0);

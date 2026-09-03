@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUploadedAsset, listAssets } from './assetStore';
-import { saveImageTaskOutputsToAssets } from './imageInventory';
+import { cacheImageTaskOutputsBeforeCompletion, saveImageTaskOutputsToAssets } from './imageInventory';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
 const root = `D:\\all_projects\\workspace\\data\\image-inventory-test-${process.pid}`;
@@ -30,6 +30,14 @@ function task(overrides: Partial<ProviderTask> = {}): ProviderTask {
 }
 
 describe('image task inventory persistence', () => {
+  it('caches mixed Base64 and URL outputs in distinct local slots', async () => {
+    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+    const fetcher = vi.fn().mockResolvedValue(new Response(pngBytes, { status: 200, headers: { 'content-type': 'image/png' } }));
+    const result = await cacheImageTaskOutputsBeforeCompletion(accountId, task({ outputBase64: [`data:image/png;base64,${pngBytes.toString('base64')}`], outputUrls: ['https://cdn.example.test/remote.png'] }), { fetcher, lookup: publicLookup });
+    expect(result).toEqual({ cached: 2, expected: 2, ready: true });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
   it('writes completed base64 output as a current account image asset', async () => {
     const assets = await saveImageTaskOutputsToAssets(accountId, task({ outputBase64: ['data:image/png;base64,aGVsbG8='] }));
     expect(assets).toHaveLength(1);

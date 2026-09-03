@@ -9,7 +9,7 @@ import { publishAssetReference, assertAssetReference } from '@/lib/workspace/ref
 import { getWorkspacePath } from '@/lib/storagePaths';
 import fs from 'node:fs';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
-import { storeImageBase64Outputs } from '@/lib/providers/outputStore';
+import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls } from '@/lib/workspace/imageInventory';
 import { getProductImageAbsolutePath, listProductImageAssets, publishProductImageReference } from '@/lib/workspace/productImages';
 import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
@@ -203,12 +203,26 @@ async function submitImageProvider(provider: ProviderId, model: string, prompt: 
 async function completeImageTask(input: ImageSubmissionInput, provider: ProviderId, model: string, result: Awaited<ReturnType<typeof generateMGRouterImage>>, details: { attempts: number; fallback?: boolean }): Promise<void> {
   const status = normalizeProviderResponse(provider, result.response);
   const current = getProviderTask(input.taskId);
-  const task = updateProviderTask(input.taskId, { provider, model, status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: undefined, metadata: { ...(current?.metadata ?? {}), execution: result.mode, attempts: details.attempts, ...(details.fallback ? { fallback: true } : {}) } });
+  const metadata = { ...(current?.metadata ?? {}), execution: result.mode, attempts: details.attempts, ...(details.fallback ? { fallback: true } : {}) };
+  let outputUrls = status.outputUrls;
+  let outputBase64 = status.outputBase64;
+  let localOutputCount = 0;
+  const cache = status.status === 'completed' && current
+    ? await cacheImageTaskOutputsBeforeCompletion(input.accountId, { ...current, provider, model, status: 'completed', progress: 100, providerTaskId: status.providerTaskId ?? current.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, metadata })
+    : null;
+  const cachePending = status.status === 'completed' && cache && !cache.ready;
+  if (status.status === 'completed' && cache?.ready && cache.expected > 0) {
+    // Expose only durable same-origin proxy URLs after every logical output
+    // has been persisted. Base64 and remote URL sources share one contiguous
+    // output list so mixed provider responses retain their full result set.
+    outputUrls = localImageOutputUrls(input.accountId, { id: input.taskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64 });
+    outputBase64 = [];
+    localOutputCount = cache.cached;
+  }
+  const pendingLocalCache = Boolean(cachePending);
+  const task = updateProviderTask(input.taskId, { provider, model, status: pendingLocalCache ? 'processing' : status.status === 'unknown' ? 'queued' : status.status, progress: pendingLocalCache ? 99 : status.progress, providerTaskId: status.providerTaskId, outputUrls, outputBase64, error: status.error, providerResponse: undefined, metadata: { ...metadata, ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}), ...(localOutputCount ? { localOutputCount, localOutputExpected: localOutputCount, localOutputReady: true } : {}) } });
   if (!task) return;
-  if (result.mode === 'live' && status.outputBase64.length > 0) {
-    const stored = storeImageBase64Outputs(input.accountId, input.taskId, status.outputBase64);
-    if (stored.length > 0) updateProviderTask(input.taskId, { outputBase64: [], outputUrls: stored.map((item) => `/api/workspace/accounts/${encodeURIComponent(input.accountId)}/image-tasks/${encodeURIComponent(input.taskId)}/outputs/${item.index}`), metadata: { ...(task.metadata ?? {}), execution: result.mode, generatedOutputs: stored }, status: 'completed', progress: 100 });
-  } else if (result.mode === 'mock') {
+  if (result.mode === 'mock' && localOutputCount === 0) {
     void processMockProviderTask(input.taskId);
   }
 }

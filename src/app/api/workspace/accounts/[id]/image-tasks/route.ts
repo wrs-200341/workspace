@@ -7,6 +7,7 @@ import { isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } from '@/lib/providers/client';
 import { updateProviderTask } from '@/lib/providers/taskStore';
 import { pumpProviderTasks } from '@/lib/providers/concurrency';
+import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls } from '@/lib/workspace/imageInventory';
 
 const SYNC_THROTTLE_MS = 10_000;
 const liveSyncInFlight = new Map<string, Promise<void>>();
@@ -54,7 +55,17 @@ async function runLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTask
     const run = (async () => {
       try {
         const status = await syncProviderTask(task.provider as ProviderId, task.providerTaskId!);
-        updateProviderTask(task.id, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined });
+        const normalizedStatus = status.status === 'unknown' ? task.status : status.status;
+        const cacheTask = task.provider && task.updatedAt
+          ? { ...task, provider: task.provider as ProviderId, mode: 'image' as const, status: 'completed' as const, progress: 100, updatedAt: task.updatedAt, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64 }
+          : null;
+        const cache = normalizedStatus === 'completed' && cacheTask ? await cacheImageTaskOutputsBeforeCompletion(task.accountId, cacheTask) : null;
+        const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
+        const outputUrls = cache?.ready && cache.expected > 0
+          ? localImageOutputUrls(task.accountId, { ...task, outputUrls: status.outputUrls, outputBase64: status.outputBase64 })
+          : status.outputUrls;
+        const outputBase64 = cache?.ready && cache.expected > 0 ? [] : status.outputBase64;
+        updateProviderTask(task.id, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls, outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
       } catch (error) {
         const providerResponse = providerResponseSnapshot(error);

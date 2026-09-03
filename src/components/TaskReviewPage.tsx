@@ -165,7 +165,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   // outputCount metadata without a URL or stored Base64 payload is not a
   // production result and must not appear as a real count.
   const uniqueVideoUrls = useMemo(() => mode === 'video' ? dedupeVideoOutputUrls(task?.provider ?? '', task?.outputUrls ?? []) : (task?.outputUrls ?? []).filter((value) => value.trim()), [mode, task?.outputUrls, task?.provider]);
-  const hasProviderVideoOutput = mode === 'video' && Boolean(task?.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task?.provider ?? '') && task?.status === 'completed' && uniqueVideoUrls.length === 0 && !(task?.outputBase64?.some((value) => value.trim()));
+  const hasProviderVideoOutput = mode === 'video' && Boolean(task?.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3'].includes(task?.provider ?? '') && task?.status === 'completed' && uniqueVideoUrls.length === 0 && !(task?.outputBase64?.some((value) => value.trim()));
   const outputCount = (uniqueVideoUrls.length > 0 ? uniqueVideoUrls.length : hasProviderVideoOutput ? 1 : 0) + (task?.outputBase64?.filter((value) => value.trim()).length ?? 0);
   const outputUrls = useMemo(() => {
     const urls = mode === 'video'

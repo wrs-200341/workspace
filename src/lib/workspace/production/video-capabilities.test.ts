@@ -54,6 +54,15 @@ describe('recovered video production capabilities', () => {
     expect(getVideoCapability('wan3-video', 'wan3.0-prime-r2v').referenceAudios).toEqual({ min: 0, max: 5, required: false });
   });
 
+  it('uses secure-skill MiniMax H3 limits and rejects reference video', () => {
+    const minimax = getVideoCapability('minimax-h3', 'minimax-h3');
+    expect(getVideoDurationOptions(minimax)).toEqual([4, 6, 8, 10, 12, 15]);
+    expect(minimax.resolutions).toEqual(['720p']);
+    expect(minimax.referenceImages.max).toBe(5);
+    expect(minimax.referenceVideos.max).toBe(0);
+    expect(minimax.referenceAudios.max).toBe(3);
+  });
+
   it('exposes only the reference media kinds supported by each video model', () => {
     const grok = getVideoCapability('grok-video', 'grok-imagine-video-1.5（按次）');
     expect(grok.referenceVideos.max).toBe(0);
