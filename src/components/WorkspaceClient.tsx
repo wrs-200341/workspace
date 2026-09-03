@@ -6,12 +6,17 @@ import { useMemo, useState } from 'react';
 import { ROLE_LABELS, type AuthUser } from '@/lib/auth/policy';
 import { getWorkspaceOperatorForUser, getWorkspaceOperators, type WorkspaceAccount, type WorkspaceCategory } from '@/lib/workspace/data';
 import { isCompletedNotInInventory, isInventorySavedToday, type WorkspaceTask } from '@/lib/workspace/tasks';
+import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 
 type Props = { user: AuthUser; initialAccounts: WorkspaceAccount[]; initialTasks: WorkspaceTask[] };
 
 function taskOutputCount(task: WorkspaceTask): number {
-  const urls = task.outputUrls?.filter((value) => value.trim()).length ?? 0;
-  const base64 = task.outputBase64?.filter((value) => value.trim()).length ?? 0;
+  const inventoryIds = Array.isArray(task.metadata?.inventoryAssetIds)
+    ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    : [];
+  if (task.inventorySavedAt && inventoryIds.length > 0) return inventoryIds.length;
+  const urls = task.mode === 'video' ? countVideoOutputs(task.provider ?? '', task.outputUrls ?? [], task.outputBase64 ?? [], Boolean(task.providerTaskId)) : (task.outputUrls?.filter((value) => value.trim()).length ?? 0);
+  const base64 = task.mode === 'video' ? 0 : (task.outputBase64?.filter((value) => value.trim()).length ?? 0);
   // A persisted outputCount without an actual URL/file is only legacy
   // metadata. It must not inflate the visible inventory counters.
   return urls + base64;

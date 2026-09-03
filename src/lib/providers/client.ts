@@ -1,5 +1,6 @@
 import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, type ProviderId } from './config';
+import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
 // A 4K image response can legitimately contain several megabytes of Base64
 // JSON. Keep a bounded limit, but do not reject normal 4K generations.
@@ -268,7 +269,7 @@ export function normalizeProviderResponse(_provider: ProviderId, payload: unknow
       ...collectMGRouterVideoPaths(root).map(normalizeMGRouterVideoUrl),
     ].filter(Boolean)
     : explicitOutputUrls;
-  const outputUrls = [...new Set([...normalizedExplicit, ...collectUrls(root)])]
+  const outputUrls = dedupeVideoOutputUrls(_provider, [...new Set([...normalizedExplicit, ...collectUrls(root)])])
     .filter((url) => _provider === 'quality-v4' ? /^https?:\/\//i.test(url) : /^https:\/\//i.test(url))
     .map((url) => _provider === 'quality-v4' ? normalizeQualityV4Url(url) : url)
     .filter(Boolean);

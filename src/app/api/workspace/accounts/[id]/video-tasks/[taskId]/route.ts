@@ -7,7 +7,8 @@ import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } fro
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
-import { listVideoTaskInventoryAssets, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
+import { cacheVideoTaskOutputsLocally, listVideoTaskInventoryAssets, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
+import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask } from '@/lib/providers/concurrency';
 
 const DETAIL_SYNC_THROTTLE_MS = 10_000;
@@ -45,7 +46,8 @@ function queueDetailProviderSync(taskId: string, task: NonNullable<ReturnType<ty
   const run = (async () => {
     try {
       const status = await syncProviderTask(task.provider, task.providerTaskId!);
-      updateProviderTask(taskId, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined });
+      const updated = updateProviderTask(taskId, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined });
+      if (updated?.status === 'completed') void cacheVideoTaskOutputsLocally(updated.accountId, updated).catch(() => undefined);
       pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
@@ -75,7 +77,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       try {
         const created = await saveVideoTaskOutputsToAssets(id, persisted);
         const assets = [...listVideoTaskInventoryAssets(id, persisted), ...created].filter((asset, index, all) => all.findIndex((candidate) => candidate.id === asset.id) === index);
-        if (assets.length === 0) return NextResponse.json({ success: false, error: 'video_outputs_unavailable' }, { status: 409 });
+        const expectedOutputs = countVideoOutputs(persisted.provider, persisted.outputUrls, persisted.outputBase64, Boolean(persisted.providerTaskId));
+        if (assets.length === 0 || assets.length < expectedOutputs) return NextResponse.json({ success: false, error: 'video_outputs_unavailable' }, { status: 409 });
         const updated = updateProviderTask(taskId, { status: persisted.status, progress: persisted.progress, inventorySavedAt: persisted.inventorySavedAt ?? new Date().toISOString(), metadata: { ...(persisted.metadata ?? {}), inventoryAssetIds: assets.map((asset) => asset.id) } });
         return NextResponse.json({ success: true, data: updated, assets });
       } catch (error) {

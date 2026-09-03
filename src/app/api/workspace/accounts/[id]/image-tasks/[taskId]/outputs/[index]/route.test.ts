@@ -11,7 +11,7 @@ const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, 
 vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
 vi.mock('@/lib/workspace/access', () => ({ canAccessWorkspaceAccount: mockCanAccessWorkspaceAccount }));
 vi.mock('@/lib/providers/taskStore', () => ({ getProviderTask: mockGetProviderTask }));
-vi.mock('@/lib/providers/outputStore', () => ({ readStoredOutput: mockReadStoredOutput }));
+vi.mock('@/lib/providers/outputStore', () => ({ readStoredOutput: mockReadStoredOutput, storeImageOutput: vi.fn() }));
 
 import { GET } from './route';
 

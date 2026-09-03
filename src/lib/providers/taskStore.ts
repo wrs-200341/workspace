@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getWorkspacePath } from '../storagePaths';
 import { getProviderCatalog, type ProviderId } from './config';
+import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
 export type ProviderTaskMode = 'image' | 'video' | 'prompt';
 export type ProviderTaskStatus = 'draft' | 'queued' | 'prompting' | 'submitting' | 'submitted' | 'processing' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
@@ -167,7 +168,7 @@ function normalizeStoredTask(value: unknown): ProviderTask {
     status: validateStatus(value.status),
     progress: normalizeProgress(value.progress),
     ...(text(value.providerTaskId) ? { providerTaskId: text(value.providerTaskId) } : {}),
-    outputUrls: normalizeStringArray(value.outputUrls),
+    outputUrls: validateMode(value.mode) === 'video' ? dedupeVideoOutputUrls(String(value.provider), normalizeStringArray(value.outputUrls)) : normalizeStringArray(value.outputUrls),
     outputBase64: normalizeStringArray(value.outputBase64),
     ...(text(value.error) ? { error: text(value.error) } : {}),
     ...(record(value.providerResponse) ? { providerResponse: clone(value.providerResponse) } : {}),
@@ -194,7 +195,7 @@ export function createProviderTask(input: CreateProviderTaskInput): ProviderTask
     status: input.status === undefined ? 'queued' : validateStatus(input.status),
     progress: normalizeProgress(input.progress),
     ...(text(input.providerTaskId) ? { providerTaskId: text(input.providerTaskId) } : {}),
-    outputUrls: normalizeStringArray(input.outputUrls),
+    outputUrls: input.mode === 'video' || input.mode === undefined ? dedupeVideoOutputUrls(String(input.provider), normalizeStringArray(input.outputUrls)) : normalizeStringArray(input.outputUrls),
     outputBase64: normalizeStringArray(input.outputBase64),
     ...(text(input.error) ? { error: text(input.error) } : {}),
     ...(record(input.providerResponse) ? { providerResponse: clone(input.providerResponse) } : {}),
@@ -255,8 +256,9 @@ export function updateProviderTask(id: string, patch: ProviderTaskPatch): Provid
     createdAt: current.createdAt,
     updatedAt: new Date().toISOString(),
   };
-  writeTasks(tasks.map((task, taskIndex) => taskIndex === index ? next : task));
-  return clone(next);
+  const normalizedNext = next.mode === 'video' ? { ...next, outputUrls: dedupeVideoOutputUrls(next.provider, next.outputUrls) } : next;
+  writeTasks(tasks.map((task, taskIndex) => taskIndex === index ? normalizedNext : task));
+  return clone(normalizedNext);
 }
 
 export function deleteProviderTask(id: string): boolean {

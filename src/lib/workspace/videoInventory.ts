@@ -2,6 +2,8 @@ import dns from 'node:dns/promises';
 import { createUploadedAsset, getAsset, listAssets, readAssetFile, type WorkspaceAsset } from './assetStore';
 import { listProviderTasks, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
 import { downloadProviderVideoContent } from '@/lib/providers/client';
+import { readStoredVideoOutput, storeVideoOutput } from '@/lib/providers/outputStore';
+import { dedupeVideoOutputUrls } from '@/lib/providers/videoOutputUrls';
 import { assertPublicTarget, type LookupAddress } from './externalImageImport';
 import { inventoryFileName, taskNameForInventory } from './inventoryNaming';
 
@@ -9,11 +11,15 @@ const MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
 const MAX_OUTPUTS_PER_TASK = 4;
 const MAX_TOTAL_OUTPUT_BYTES = 400 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
+const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['media.manjuai.top', 'gogrok.iconmoi.com', 'snumom.com', 'video2.crack.cc.cd']);
 
 export type VideoInventoryDependencies = {
   fetcher?: typeof fetch;
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
+  excludeAssetIds?: ReadonlySet<string>;
 };
+
+const outputCacheInFlight = new Map<string, Promise<number>>();
 
 function decodeBase64(value: string): { bytes: Buffer; mimeType: string } | null {
   const match = value.match(/^data:([^;\s,]+);base64,([A-Za-z0-9+/=\r\n\t ]+)$/i);
@@ -28,20 +34,32 @@ function decodeBase64(value: string): { bytes: Buffer; mimeType: string } | null
 async function readUrl(value: string, dependencies: VideoInventoryDependencies): Promise<{ bytes: Buffer; mimeType: string } | null> {
   if (!/^https:\/\//i.test(value)) return null;
   const lookup = dependencies.lookup ?? ((hostname: string) => dns.lookup(hostname, { all: true, verbatim: true }));
-  const target = await assertPublicTarget(value, lookup);
+  const parsed = new URL(value);
+  if (parsed.username || parsed.password || parsed.hash || (parsed.port && parsed.port !== '443')) return null;
+  const addresses = await lookup(parsed.hostname);
+  const benchmarkMapping = addresses.length > 0 && addresses.every((item) => /^198\.(?:18|19)\./.test(item.address));
+  // Provider media origins are an explicit egress allowlist. The LAN's DNS
+  // proxy may resolve these exact hosts to the 198.18/19 benchmark range; that
+  // mapping is accepted only for the allowlisted origins. Public resolutions
+  // and every non-provider host still pass the standard SSRF validator.
+  const target = TRUSTED_PROVIDER_OUTPUT_HOSTS.has(parsed.hostname.toLowerCase()) && benchmarkMapping
+    ? parsed
+    : await assertPublicTarget(value, async () => addresses);
   const response = await (dependencies.fetcher ?? fetch)(target.toString(), { redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
   if (!response.ok) return null;
   const declaredType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
   const extensionHint = /\.(?:mp4|webm|mov|m4v|mkv)(?:[?#]|$)/i.test(value);
   if (!declaredType && !extensionHint) return null;
-  if (declaredType && !declaredType.startsWith('video/')) return null;
+  const binaryHint = declaredType === 'application/octet-stream' || declaredType === 'binary/octet-stream';
+  if (declaredType && !declaredType.startsWith('video/') && !binaryHint) return null;
   const declared = Number(response.headers.get('content-length') || 0);
   if (declared > MAX_OUTPUT_BYTES) return null;
   if (!response.body) {
     const bytes = Buffer.from(await response.arrayBuffer());
     if (!bytes.length || bytes.length > MAX_OUTPUT_BYTES) return null;
-    if (!hasVideoSignature(bytes, declaredType || 'video/mp4')) return null;
-    return { bytes, mimeType: declaredType || 'video/mp4' };
+    const mimeType = declaredType.startsWith('video/') ? declaredType : 'video/mp4';
+    if (!hasVideoSignature(bytes, mimeType)) return null;
+    return { bytes, mimeType };
   }
   const reader = response.body.getReader();
   const chunks: Buffer[] = [];
@@ -60,8 +78,89 @@ async function readUrl(value: string, dependencies: VideoInventoryDependencies):
   }
   const bytes = Buffer.concat(chunks, total);
   if (!bytes.length) return null;
-  if (!hasVideoSignature(bytes, declaredType || 'video/mp4')) return null;
-  return { bytes, mimeType: declaredType || 'video/mp4' };
+  const mimeType = declaredType.startsWith('video/') ? declaredType : 'video/mp4';
+  if (!hasVideoSignature(bytes, mimeType)) return null;
+  return { bytes, mimeType };
+}
+
+/** Cache completed outputs locally so review never depends on a browser fetch
+ * to a supplier CDN. The cache is task-scoped and safe to rebuild. */
+export async function cacheVideoTaskOutputsLocally(accountId: string, task: ProviderTask, dependencies: VideoInventoryDependencies = {}): Promise<number> {
+  if (task.mode !== 'video' || task.accountId !== accountId || task.status !== 'completed') return 0;
+  let cached = 0;
+  const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
+
+  // Authenticated content endpoints are more reliable than a public URL and
+  // are the only output source for some Grok-compatible providers.
+  const contentProvider = !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task.provider);
+  if (contentProvider && urls.length === 0) {
+    if (!readStoredVideoOutput(accountId, task.id, 0)) {
+      try {
+        const downloaded = await downloadProviderVideoContent(task.provider, task.providerTaskId!);
+        if (storeVideoOutput(accountId, task.id, 0, Buffer.from(downloaded.bytes), downloaded.mimeType)) cached += 1;
+      } catch { /* fall through to persisted output URLs */ }
+    } else cached += 1;
+  }
+
+  for (let index = 0; index < urls.length && cached < MAX_OUTPUTS_PER_TASK; index += 1) {
+    const targetIndex = index;
+    if (readStoredVideoOutput(accountId, task.id, targetIndex)) { cached += 1; continue; }
+    const output = await readUrl(urls[index], dependencies).catch(() => null);
+    if (output && storeVideoOutput(accountId, task.id, targetIndex, output.bytes, output.mimeType)) cached += 1;
+  }
+
+  // If a content endpoint is available but the persisted URL was unusable,
+  // use it as a last-resort cache for the first logical output.
+  if (contentProvider && urls.length > 0 && !readStoredVideoOutput(accountId, task.id, 0)) {
+    try {
+      const downloaded = await downloadProviderVideoContent(task.provider, task.providerTaskId!);
+      if (storeVideoOutput(accountId, task.id, 0, Buffer.from(downloaded.bytes), downloaded.mimeType)) cached += 1;
+    } catch { /* keep the failed output unavailable */ }
+  }
+
+  const baseOffset = urls.length;
+  for (let index = 0; index < task.outputBase64.length && cached < MAX_OUTPUTS_PER_TASK; index += 1) {
+    if (readStoredVideoOutput(accountId, task.id, baseOffset + index)) { cached += 1; continue; }
+    const decoded = decodeBase64(task.outputBase64[index]);
+    if (decoded && storeVideoOutput(accountId, task.id, baseOffset + index, decoded.bytes, decoded.mimeType)) cached += 1;
+  }
+  return cached;
+}
+
+/** Cache only one logical output for the review proxy. Concurrent requests for
+ * the same task/index share one provider download. */
+export function cacheVideoTaskOutputLocally(accountId: string, task: ProviderTask, index: number, dependencies: VideoInventoryDependencies = {}): Promise<number> {
+  if (task.mode !== 'video' || task.accountId !== accountId || task.status !== 'completed' || !Number.isInteger(index) || index < 0 || index > 63) return Promise.resolve(0);
+  const key = `${accountId}:${task.id}:${index}`;
+  const existing = outputCacheInFlight.get(key);
+  if (existing) return existing;
+  const run = (async () => {
+    if (readStoredVideoOutput(accountId, task.id, index)) return 1;
+    const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
+    const contentProvider = !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task.provider);
+    if (contentProvider && urls.length === 0 && index === 0) {
+      try {
+        const downloaded = await downloadProviderVideoContent(task.provider, task.providerTaskId!);
+        return storeVideoOutput(accountId, task.id, 0, Buffer.from(downloaded.bytes), downloaded.mimeType) ? 1 : 0;
+      } catch { return 0; }
+    }
+    if (index < urls.length) {
+      const output = await readUrl(urls[index], dependencies).catch(() => null);
+      if (output && storeVideoOutput(accountId, task.id, index, output.bytes, output.mimeType)) return 1;
+      if (contentProvider && index === 0) {
+        try {
+          const downloaded = await downloadProviderVideoContent(task.provider, task.providerTaskId!);
+          return storeVideoOutput(accountId, task.id, 0, Buffer.from(downloaded.bytes), downloaded.mimeType) ? 1 : 0;
+        } catch { return 0; }
+      }
+      return 0;
+    }
+    const base64Index = index - urls.length;
+    const decoded = task.outputBase64[base64Index] ? decodeBase64(task.outputBase64[base64Index]) : null;
+    return decoded && storeVideoOutput(accountId, task.id, index, decoded.bytes, decoded.mimeType) ? 1 : 0;
+  })().finally(() => { outputCacheInFlight.delete(key); });
+  outputCacheInFlight.set(key, run);
+  return run;
 }
 
 function declaredInventoryAssetIds(task: ProviderTask): string[] {
@@ -99,14 +198,9 @@ function validInventoryAssets(accountId: string, task: ProviderTask): WorkspaceA
 /** Return only persisted, readable inventory assets belonging to this task. */
 export function listVideoTaskInventoryAssets(accountId: string, task: ProviderTask): WorkspaceAsset[] {
   if (task.accountId !== accountId || task.mode !== 'video') return [];
-  const byId = validInventoryAssets(accountId, task);
-  if (byId.length > 0 || !task.inventorySavedAt) return byId;
-  const base = taskNameForInventory(task).toLowerCase();
-  return listAssets(accountId, 'inventory-video').filter((asset) => {
-    const stem = asset.name.replace(/\.[^.]+$/, '').toLowerCase();
-    if (stem !== base && !stem.startsWith(`${base}_`)) return false;
-    try { return Boolean(readAssetFile(accountId, asset.id)); } catch { return false; }
-  });
+  // Only declared task-owned IDs are trusted. Filename matching can attach a
+  // manually uploaded same-name video to the wrong production task.
+  return validInventoryAssets(accountId, task);
 }
 
 /** Persist completed video outputs as account-scoped inventory-video assets. */
@@ -114,38 +208,40 @@ export async function saveVideoTaskOutputsToAssets(accountId: string, task: Prov
   if (task.mode !== 'video' || task.status !== 'completed' || task.accountId !== accountId) return [];
   const existing = validInventoryAssets(accountId, task);
   const declaredIds = declaredInventoryAssetIds(task);
-  if (declaredIds.length > 0 && existing.length === declaredIds.length) return [];
+  const hasExcludedDeclaredId = declaredIds.some((assetId) => dependencies.excludeAssetIds?.has(assetId));
+  if (!hasExcludedDeclaredId && declaredIds.length > 0 && existing.length === declaredIds.length) return [];
 
+  await cacheVideoTaskOutputsLocally(accountId, task, dependencies);
   const outputs: Array<{ bytes: Buffer; mimeType: string; index: number }> = [];
+  const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
+  const contentProvider = !task.outputBase64.length && urls.length === 0 && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task.provider);
+  const contentCached = contentProvider && Boolean(readStoredVideoOutput(accountId, task.id, 0));
+  if (contentCached) {
+    const local = readStoredVideoOutput(accountId, task.id, 0);
+    if (local) outputs.push({ bytes: local.bytes, mimeType: local.mimeType, index: 0 });
+  }
+  for (let index = 0; index < urls.length && outputs.length < MAX_OUTPUTS_PER_TASK; index += 1) {
+    const local = readStoredVideoOutput(accountId, task.id, index);
+    if (local) outputs.push({ bytes: local.bytes, mimeType: local.mimeType, index: outputs.length });
+  }
+  const baseOffset = urls.length;
   for (let index = 0; index < task.outputBase64.length && outputs.length < MAX_OUTPUTS_PER_TASK; index += 1) {
+    const local = readStoredVideoOutput(accountId, task.id, baseOffset + index);
+    if (local) {
+      outputs.push({ bytes: local.bytes, mimeType: local.mimeType, index: outputs.length });
+      continue;
+    }
+    // Keep the historical tolerant behaviour for provider fixtures or legacy
+    // records whose Base64 payload lacks a recognizable container signature.
+    // Valid real videos are cached above and take the local-file path.
     const decoded = decodeBase64(task.outputBase64[index]);
-    if (decoded) outputs.push({ ...decoded, index });
-  }
-
-  // Provider content endpoints require server-side credentials. Prefer this
-  // path for suppliers that expose /videos/{id}/content, then fall back to
-  // persisted/public output URLs for other providers.
-  let contentFetched = false;
-  if (outputs.length === 0 && task.providerTaskId && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task.provider)) {
-    try {
-      const downloaded = await downloadProviderVideoContent(task.provider, task.providerTaskId);
-      outputs.push({ bytes: Buffer.from(downloaded.bytes), mimeType: downloaded.mimeType.startsWith('video/') ? downloaded.mimeType : 'video/mp4', index: 0 });
-      contentFetched = true;
-    } catch { /* try persisted URLs below */ }
-  }
-
-  const seenUrls = new Set<string>();
-  for (let index = 0; !contentFetched && index < task.outputUrls.length && outputs.length < MAX_OUTPUTS_PER_TASK; index += 1) {
-    const url = task.outputUrls[index].trim();
-    if (!url || seenUrls.has(url)) continue;
-    seenUrls.add(url);
-    const output = await readUrl(url, dependencies).catch(() => null);
-    if (output) outputs.push({ ...output, index: outputs.length });
+    if (decoded) outputs.push({ bytes: decoded.bytes, mimeType: decoded.mimeType, index: outputs.length });
   }
 
   const existingByName = new Map(
     listAssets(accountId, 'inventory-video')
       .filter((asset) => {
+        if (dependencies.excludeAssetIds?.has(asset.id)) return false;
         try { return Boolean(readAssetFile(accountId, asset.id)); } catch { return false; }
       })
       .map((asset) => [asset.name, asset] as const),
@@ -177,17 +273,27 @@ let repairInFlight: Promise<number> | null = null;
 
 /** Repair completed video tasks that were marked as saved before their assets were persisted. */
 export function repairSavedVideoTaskInventory(accountIds?: readonly string[], dependencies: VideoInventoryDependencies = {}): Promise<number> {
-  if (repairInFlight) return repairInFlight.then(() => repairSavedVideoTaskInventory(accountIds, dependencies));
+  // Multiple account pages can mount together (for example through browser
+  // prefetch). Join the active pass instead of recursively scheduling another
+  // full-store repair when it completes.
+  if (repairInFlight) return repairInFlight;
   repairInFlight = (async () => {
     let repaired = 0;
+    const assignedAssetIds = new Map<string, string>();
     const scope = accountIds ? new Set(accountIds) : null;
     for (const task of listProviderTasks({ mode: 'video' })) {
       if (scope && !scope.has(task.accountId)) continue;
       if (task.status !== 'completed' || !task.inventorySavedAt) continue;
-      const current = listVideoTaskInventoryAssets(task.accountId, task);
       const declaredIds = declaredInventoryAssetIds(task);
-      if (declaredIds.length > 0 && current.length === declaredIds.length) continue;
-      const created = await saveVideoTaskOutputsToAssets(task.accountId, task, dependencies);
+      const hasCrossTaskReuse = declaredIds.some((assetId) => assignedAssetIds.has(assetId));
+      const current = hasCrossTaskReuse ? [] : listVideoTaskInventoryAssets(task.accountId, task);
+      if (!hasCrossTaskReuse && declaredIds.length > 0 && current.length === declaredIds.length) {
+        declaredIds.forEach((assetId) => assignedAssetIds.set(assetId, task.id));
+        continue;
+      }
+      const created = await saveVideoTaskOutputsToAssets(task.accountId, hasCrossTaskReuse
+        ? { ...task, metadata: { ...(task.metadata ?? {}), inventoryAssetIds: [] } }
+        : task, { ...dependencies, excludeAssetIds: new Set(assignedAssetIds.keys()) });
       const allAssets = [...current, ...created];
       const ids = Array.from(new Set(allAssets.map((asset) => asset.id)));
       if (ids.length > 0) {
@@ -195,12 +301,13 @@ export function repairSavedVideoTaskInventory(accountIds?: readonly string[], de
           inventorySavedAt: task.inventorySavedAt,
           metadata: { ...(task.metadata ?? {}), inventoryAssetIds: ids },
         });
+        ids.forEach((assetId) => assignedAssetIds.set(assetId, task.id));
         repaired += 1;
         continue;
       }
-      // A stale saved marker must not hide an unavailable output forever.
-      const { inventoryAssetIds: _ignored, ...metadata } = task.metadata ?? {};
-      updateProviderTask(task.id, { inventorySavedAt: undefined, metadata });
+      // Keep the saved marker when an upstream download is temporarily
+      // unavailable. Clearing it makes the queue disagree with the user's
+      // action and prevents a later repair pass from retrying the task.
     }
     return repaired;
   })().finally(() => { repairInFlight = null; });

@@ -4,7 +4,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getProviderTask } from '@/lib/providers/taskStore';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { requireApiRole } from '@/lib/auth/server';
-import { readStoredOutput } from '@/lib/providers/outputStore';
+import { readStoredOutput, storeImageOutput } from '@/lib/providers/outputStore';
 
 const MAX_IMAGE_OUTPUT_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 25_000;
@@ -136,6 +136,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (typeof remoteUrl !== 'string' || !remoteUrl.trim()) return NextResponse.json({ success: false, error: 'output_not_found' }, { status: 404 });
   try {
     const remote = await readRemoteImage(remoteUrl);
+    // Keep the response path usable with older deployments that do not yet
+    // expose the optional local image cache helper.
+    storeImageOutput?.(id, taskId, index, Buffer.from(remote.bytes), remote.mimeType);
     const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(taskId) ? taskId : 'task';
     return new NextResponse(Buffer.from(remote.bytes), {
       status: 200,

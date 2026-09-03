@@ -12,6 +12,7 @@ import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { pumpProviderTasks } from '@/lib/providers/concurrency';
+import { cacheVideoTaskOutputsLocally } from '@/lib/workspace/videoInventory';
 
 const SYNC_THROTTLE_MS = 10_000;
 const liveSyncInFlight = new Map<string, Promise<void>>();
@@ -65,7 +66,8 @@ async function runLiveVideoTasks(tasks: ReturnType<typeof getServerWorkspaceTask
     const run = (async () => {
       try {
         const status = await syncProviderTask(task.provider as ProviderId, task.providerTaskId!);
-        updateProviderTask(task.id, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined });
+        const updated = updateProviderTask(task.id, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined });
+        if (updated?.status === 'completed') void cacheVideoTaskOutputsLocally(updated.accountId, updated).catch(() => undefined);
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
       } catch (error) {
         const providerResponse = providerResponseSnapshot(error);

@@ -3,6 +3,7 @@ import { listStoredAccounts } from './accountStore';
 import { withLiveAccountStatsList } from './accountStats';
 import { getServerWorkspaceTasks } from './serverTasks';
 import { businessDate, type WorkspaceTask } from './tasks';
+import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 
 /**
  * Downstream performance is intentionally kept separate from production
@@ -82,7 +83,11 @@ const EMPTY_TOTALS: DownstreamTotals = {
 };
 
 function outputCount(task: WorkspaceTask): number {
-  return (task.outputUrls?.filter(Boolean).length ?? 0) + (task.outputBase64?.filter(Boolean).length ?? 0);
+  const inventoryIds = Array.isArray(task.metadata?.inventoryAssetIds)
+    ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    : [];
+  if (task.inventorySavedAt && inventoryIds.length > 0) return inventoryIds.length;
+  return task.mode === 'video' ? countVideoOutputs(task.provider ?? '', task.outputUrls ?? [], task.outputBase64 ?? [], Boolean(task.providerTaskId)) : (task.outputUrls?.filter(Boolean).length ?? 0) + (task.outputBase64?.filter(Boolean).length ?? 0);
 }
 
 function isRunning(status: WorkspaceTask['status']): boolean {

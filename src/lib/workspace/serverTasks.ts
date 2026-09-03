@@ -4,12 +4,13 @@ import type { WorkspaceAccount } from './data';
 import { listStoredAccounts } from './accountStore';
 import { getWorkspaceTasks, type WorkspaceTask } from './tasks';
 import { taskNameForInventory, taskNameSequenceMap } from './inventoryNaming';
+import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 
 export function providerTaskToWorkspaceTask(task: ProviderTask, accountIndex?: ReadonlyMap<string, WorkspaceAccount>, nameOccurrences?: ReadonlyMap<string, number>): WorkspaceTask {
   const account = accountIndex?.get(task.accountId) ?? getWorkspaceAccountById(task.accountId) ?? listStoredAccounts().find((candidate) => candidate.id === task.accountId);
   const metadata = task.metadata ?? {};
   const owner = typeof metadata.ownerId === 'string' ? metadata.ownerId : account?.ownerId ?? 'operator-unassigned';
-  const outputCount = task.outputUrls.length + task.outputBase64.length;
+  const outputCount = task.mode === 'video' ? countVideoOutputs(task.provider, task.outputUrls, task.outputBase64, Boolean(task.providerTaskId)) : task.outputUrls.length + task.outputBase64.length;
   const title = taskNameForInventory(task, nameOccurrences?.get(task.id));
   return {
     id: task.id,

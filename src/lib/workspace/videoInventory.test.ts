@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { listAssets } from './assetStore';
-import { createProviderTask, getProviderTask } from '@/lib/providers/taskStore';
+import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { repairSavedVideoTaskInventory, saveVideoTaskOutputsToAssets } from './videoInventory';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
@@ -72,5 +72,21 @@ describe('video task inventory persistence', () => {
     const assets = await saveVideoTaskOutputsToAssets('other-account', task());
     expect(assets).toEqual([]);
     expect(listAssets('other-account', 'inventory-video')).toHaveLength(0);
+  });
+
+  it('repairs inventory ids that were accidentally shared by multiple tasks', async () => {
+    const firstTask = createProviderTask(task({ id: undefined, outputBase64: ['data:video/mp4;base64,AAAA'], inventorySavedAt: '2026-09-03T01:00:00.000Z' }));
+    const firstAsset = (await saveVideoTaskOutputsToAssets('video-account', firstTask))[0];
+    updateProviderTask(firstTask.id, { metadata: { inventoryAssetIds: [firstAsset.id] } });
+    const secondTask = createProviderTask(task({ id: undefined, outputBase64: ['data:video/mp4;base64,AAAA'], inventorySavedAt: '2026-09-03T01:00:00.000Z' }));
+    updateProviderTask(secondTask.id, { metadata: { inventoryAssetIds: [firstAsset.id] } });
+
+    await repairSavedVideoTaskInventory(undefined);
+    const repaired = getProviderTask(secondTask.id);
+    const ids = repaired?.metadata?.inventoryAssetIds;
+    expect(Array.isArray(ids)).toBe(true);
+    expect(ids).toHaveLength(1);
+    expect(Array.isArray(ids) ? ids[0] : undefined).not.toBe(firstAsset.id);
+    expect(listAssets('video-account', 'inventory-video')).toHaveLength(2);
   });
 });

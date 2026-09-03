@@ -1,6 +1,7 @@
 import { listAssets, type AssetKind } from './assetStore';
 import { listProviderTasks, type ProviderTask } from '@/lib/providers/taskStore';
 import type { WorkspaceAccount } from './data';
+import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 
 /**
  * Counters derived from the current workspace stores.
@@ -27,11 +28,13 @@ const EMPTY_ASSET_COUNTS: Record<AssetKind, number> = {
 };
 
 function outputCount(task: ProviderTask): number {
+  const inventoryIds = Array.isArray(task.metadata?.inventoryAssetIds)
+    ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    : [];
+  if (task.inventorySavedAt && inventoryIds.length > 0) return inventoryIds.length;
   // Provider task storage already normalizes these arrays, but counting only
   // non-empty strings keeps the statistic correct for legacy records.
-  const urls = task.outputUrls.filter((value) => value.trim()).length;
-  const base64 = task.outputBase64.filter((value) => value.trim()).length;
-  return urls + base64;
+  return countVideoOutputs(task.provider, task.outputUrls, task.outputBase64, Boolean(task.providerTaskId));
 }
 
 /** Compute counters from live asset and provider-task data for one account. */
