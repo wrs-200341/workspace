@@ -86,7 +86,7 @@ h1 { font-size:30px; line-height:1.15; margin:7px 0 0; letter-spacing:-.03em; }
 .asset-picker-option input { grid-row:2; align-self:start; margin-top:2px; cursor:pointer; }
 .asset-picker-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .asset-picker-image-preview { grid-column:1 / -1; width:136px; height:88px; max-width:100%; overflow:hidden; display:grid; place-items:center; background:#f4f1e9; border:1px solid #e3ded4; color:#9a9488; justify-self:start; }
-.asset-picker-image-preview img { width:100%; height:100%; object-fit:cover; display:block; }
+.asset-picker-image-preview img { width:100%; height:100%; object-fit:contain; display:block; background:#f4f1e9; }
 .asset-picker-image-placeholder { gap:4px; font-size:10px; }
 .asset-picker-media-placeholder { grid-column:1 / -1; aspect-ratio:1.25; display:grid; place-items:center; background:#f4f1e9; color:#8f9ab0; border:1px solid #e3ded4; }
 .prompt-template-toolbar { display:grid; grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) auto; align-items:end; gap:10px; padding:10px 12px; border:1px solid #dfe5f0; background:#f8faff; }
@@ -229,7 +229,7 @@ h1 { font-size:30px; line-height:1.15; margin:7px 0 0; letter-spacing:-.03em; }
 .task-reference-thumbnail { flex:none; width:72px; height:72px; padding:2px; border:1px solid #dbe2ec; background:#fff; cursor:pointer; transition:border-color .2s, box-shadow .2s; }
 .task-reference-thumbnail:hover { border-color:#8da7df; }
 .task-reference-thumbnail.active { border-color:var(--blue); box-shadow:0 0 0 2px rgba(30,64,175,.16); }
-.task-reference-thumbnail img { display:block; width:100%; height:100%; object-fit:cover; }
+.task-reference-thumbnail img { display:block; width:100%; height:100%; object-fit:contain; background:#f4f1e9; }
 .task-media-zoom { position:relative; min-height:0; display:grid; place-items:center; overflow:hidden; overscroll-behavior:contain; touch-action:none; background:#eef2f7; border:1px solid #e1e6ef; }
 .task-output-list .task-media-zoom { width:min(100%, 680px); aspect-ratio:1; min-height:0; }
 .task-reference-list .task-media-zoom { aspect-ratio:1; min-height:130px; }
@@ -436,7 +436,7 @@ td strong { color:var(--ink); font-weight:600; }
 .asset-card { min-width:0; display:grid; grid-template-rows:auto 1fr auto; border:1px solid #e3ded4; background:#fff; overflow:hidden; transition:border-color .2s,box-shadow .2s,transform .2s; }
 .asset-card:hover { border-color:#aacdc3; box-shadow:0 8px 24px rgba(39,75,63,.08); transform:translateY(-1px); }
 .asset-image-preview { aspect-ratio:1.2; display:grid; place-items:center; overflow:hidden; background:#f4f1e9; color:#9a9488; }
-.asset-image-preview img { width:100%; height:100%; object-fit:cover; }
+.asset-image-preview img { width:100%; height:100%; object-fit:contain; background:#f4f1e9; }
 .asset-media-preview { display:grid; place-items:center; gap:10px; min-height:150px; padding:14px; background:#f4f1e9; color:#2e7a6c; }
 .asset-media-preview video { width:100%; max-height:210px; background:#161a1d; }
 .asset-media-preview.audio { grid-template-columns:auto 1fr; min-height:100px; }
@@ -493,7 +493,7 @@ td strong { color:var(--ink); font-weight:600; }
 .product-gallery-card.imported { opacity:.7; }
 .product-gallery-card label { display:flex; align-items:center; gap:7px; color:#282822; font-size:12px; }
 .product-gallery-card label small { margin-left:auto; color:#2e7a6c; font:10px 'Fira Code',monospace; }
-.product-gallery-card img,.product-cover-placeholder { width:100%; aspect-ratio:1.2; object-fit:cover; background:#f4f1e9; }
+.product-gallery-card img,.product-cover-placeholder { width:100%; aspect-ratio:1.2; object-fit:contain; background:#f4f1e9; }
 .product-cover-placeholder { display:grid; place-items:center; color:#9a9488; }
 .product-gallery-card > span { color:#4c4942; font-size:12px; }
 .product-gallery-card > small { color:#9a9488; font-size:10px; line-height:1.4; }

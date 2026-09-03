@@ -70,6 +70,17 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   async function downloadOutput(url: string, index: number) {
     if (downloadingIndex !== null) return;
     setDownloadingIndex(index);
+    if (mode === 'image' && /^\//.test(url)) {
+      const directUrl = `${url}${url.includes('?') ? '&' : '?'}download=1`;
+      const directAnchor = document.createElement('a');
+      directAnchor.href = directUrl;
+      directAnchor.download = `workspace-${taskId}-${index + 1}.png`;
+      document.body.appendChild(directAnchor);
+      directAnchor.click();
+      directAnchor.remove();
+      setDownloadingIndex(null);
+      return;
+    }
     try {
       const response = await fetch(url, { credentials: 'same-origin' });
       if (!response.ok) throw new Error('下载失败');
@@ -83,6 +94,17 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
       anchor.remove();
       URL.revokeObjectURL(objectUrl);
     } catch (error) {
+      if (error instanceof TypeError && /^\//.test(url)) {
+        const directUrl = `${url}${url.includes('?') ? '&' : '?'}download=1`;
+        const directAnchor = document.createElement('a');
+        directAnchor.href = directUrl;
+        directAnchor.download = `workspace-${taskId}-${index + 1}.${mode === 'video' ? 'mp4' : 'png'}`;
+        document.body.appendChild(directAnchor);
+        directAnchor.click();
+        directAnchor.remove();
+        setMessage('');
+        return;
+      }
       setMessage(error instanceof Error ? error.message : '下载失败');
     } finally {
       setDownloadingIndex(null);
@@ -119,12 +141,18 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   const outputCount = (task?.outputUrls?.filter((value) => value.trim()).length ?? 0) + (task?.outputBase64?.filter((value) => value.trim()).length ?? 0);
   const outputUrls = useMemo(() => {
     const urls = task?.outputUrls ?? [];
+    if (mode === 'image') {
+      // Image providers may return cross-origin CDN URLs. Route previews and
+      // downloads through the authenticated same-origin proxy so the browser
+      // is not blocked by CORS when the operator clicks 下载.
+      return urls.map((_url, index) => `${endpoint}/outputs/${index}`);
+    }
     if (!task?.providerTaskId || !task.provider || !['grok-video', 'mgrouter-grok-video', 'oairegbox-omni'].includes(task.provider)) return urls;
     // These providers require bearer auth for /videos/{id}/content. Route
     // previews/downloads through the workspace proxy instead of exposing a
     // direct unauthenticated upstream URL that would return HTTP 401.
     return urls.map((_url, index) => `${endpoint}/outputs/${index}`);
-  }, [endpoint, task]);
+  }, [endpoint, mode, task]);
   const outputSources = useMemo(() => [
     ...outputUrls,
     ...(task?.outputBase64 ?? []).map((value) => value.startsWith('data:') ? value : `data:${mode === 'video' ? 'video/mp4' : 'image/png'};base64,${value}`),
