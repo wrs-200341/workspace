@@ -147,14 +147,14 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
         <div className="task-review-actions"><span className="task-review-count">输出 {outputCount}</span><span className="task-review-inventory">{task?.inventorySavedAt ? '已入库' : '待入库'}</span><div className="review-buttons"><Link className="ghost-button" href={restoreHref}><RotateCcw size={14} /> 恢复配置</Link><button className="ghost-button" type="button" onClick={() => void action('save-inventory')} disabled={busy || !task || task.status !== 'completed' || Boolean(task.inventorySavedAt)}><PackageCheck size={14} /> 写入库存</button>{outputSources.map((url, index) => <button className="primary-button" key={`${url}-${index}`} type="button" onClick={() => void downloadOutput(url, index)} disabled={downloadingIndex !== null}><Download size={14} /> 下载</button>)}</div></div>
       </section>
       <aside className="panel task-review-pane task-reference-pane">
-        <section className="task-prompt-pane" id="prompt">
+        {mode === 'video' && <section className="task-prompt-pane" id="prompt">
           <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">提示词</h2><div className="panel-meta">任务提交时保存的提示词配置</div></div></div>
           <div className="task-prompt-details">
             <label>原始提示词<textarea readOnly value={metadataPrompt || task?.prompt || ''} /></label>
             {metadataChildPrompt && <label>自动生成子提示词<textarea readOnly value={metadataChildPrompt} /></label>}
             {metadataFinalPrompt && metadataFinalPrompt !== metadataPrompt && <label>最终提交提示词<textarea readOnly value={metadataFinalPrompt} /></label>}
           </div>
-        </section>
+        </section>}
         <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">参考图</h2><div className="panel-meta">{referenceUrls.length} 张 · 点击缩略图预览</div></div></div>
         {referenceUrls.length > 0 ? <>
           <div className="task-reference-selected"><ZoomableMedia src={referenceUrls[selectedReferenceIndex]} alt={`参考图 ${selectedReferenceIndex + 1}`} /></div>
@@ -178,6 +178,6 @@ function ZoomableMedia({ src, alt, video = false }: { src: string; alt: string; 
   const mediaStyle = video ? undefined : { transform: `scale(${scale})` };
   return <div className={`task-media-zoom ${video ? 'task-video-media' : ''}`} onWheel={video ? undefined : onWheel}>
     {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} style={mediaStyle} /> : <img src={src} alt={alt} draggable={false} style={mediaStyle} />}
-    <div className="task-zoom-controls" aria-label="预览缩放控制"><button type="button" className="icon-button" onClick={() => changeScale(-0.2)} disabled={scale <= 1} aria-label="缩小" title="缩小"><ZoomOut size={14} /></button><span>{Math.round(scale * 100)}%</span><button type="button" className="icon-button" onClick={() => changeScale(0.2)} disabled={scale >= 4} aria-label="放大" title="放大"><ZoomIn size={14} /></button><button type="button" className="icon-button" onClick={() => setScale(1)} disabled={scale === 1} aria-label="重置缩放" title="重置缩放"><ResetZoom size={14} /></button></div>
+    <div className="task-zoom-controls" aria-label="预览缩放控制"><button type="button" className="icon-button" onClick={() => changeScale(-0.2)} disabled={scale <= 1} aria-label="缩小" title="缩小"><ZoomOut size={14} /></button><button type="button" className="icon-button" onClick={() => changeScale(0.2)} disabled={scale >= 4} aria-label="放大" title="放大"><ZoomIn size={14} /></button><button type="button" className="icon-button" onClick={() => setScale(1)} disabled={scale === 1} aria-label="重置缩放" title="重置缩放"><ResetZoom size={14} /></button></div>
   </div>;
 }
