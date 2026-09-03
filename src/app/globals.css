@@ -250,7 +250,6 @@ h1 { font-size:30px; line-height:1.15; margin:7px 0 0; letter-spacing:-.03em; }
 .video-task-review .task-review-heading h1,
 .video-task-review .task-review-eyebrow { display:none; }
 .video-task-review .task-review-heading .subtitle { display:none; }
-.video-task-review .task-prompt-pane { display:none; }
 .video-task-review .task-review-stage { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(300px,.9fr); gap:14px; }
 .video-task-review .task-output-pane { width:auto; min-width:0; }
 .video-task-review .task-reference-pane { display:flex; }
