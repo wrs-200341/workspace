@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { ArrowLeft, CircleAlert, Download, Film, LoaderCircle, PackageCheck, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 type ReviewTask = {
   id: string;
@@ -25,6 +26,7 @@ type ReviewTask = {
 };
 
 export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string; taskId: string; mode: 'video' | 'image' }) {
+  const router = useRouter();
   const [task, setTask] = useState<ReviewTask | null>(null);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -62,7 +64,15 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
       const payload = await response.json().catch(() => null) as { success?: boolean; data?: ReviewTask; error?: string } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '任务操作失败');
       if (payload.data) setTask(payload.data);
-      setMessage(actionName === 'save-inventory' ? '成品已写入库存' : '任务状态已更新');
+      if (actionName === 'save-inventory') {
+        const savedTask = payload.data ?? task;
+        const queueDate = savedTask ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(savedTask.createdAt)) : '';
+        const query = new URLSearchParams({ mode, focusTaskId: savedTask?.id ?? taskId });
+        if (queueDate) query.set('queueDate', queueDate);
+        router.push(`/workspace/accounts/${encodeURIComponent(accountId)}/production?${query.toString()}`);
+        return;
+      }
+      setMessage('任务状态已更新');
     } catch (error) { setMessage(error instanceof Error ? error.message : '任务操作失败'); }
     finally { setBusy(false); }
   }
@@ -116,12 +126,15 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
     const referenceAssetIds = stringArray(metadata.referenceAssetIds);
     const productImageAssetIds = stringArray(metadata.productImageAssetIds);
     const genericAssetIds = stringArray(metadata.assetIds);
+    const referenceAssetOrder = assetSelectionArray(metadata.referenceAssetOrder).filter((item) => item.kind === 'image' || item.kind === 'product-image');
     const referenceTokens = stringArray(metadata.referenceTokens);
-    const persistedIds = [
-      ...referenceAssetIds,
-      ...productImageAssetIds,
-      ...(referenceAssetIds.length || productImageAssetIds.length ? [] : genericAssetIds),
-    ];
+    const persistedIds = referenceAssetOrder.length
+      ? referenceAssetOrder.map((item) => item.id)
+      : [
+        ...referenceAssetIds,
+        ...productImageAssetIds,
+        ...(referenceAssetIds.length || productImageAssetIds.length ? [] : genericAssetIds),
+      ];
     // A provider task may persist an asset id that only exists in the
     // short-lived public reference bridge. Prefer that token when available;
     // otherwise fall back to the account asset endpoint for local files.
@@ -195,6 +208,10 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
 }
 
 function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
+function assetSelectionArray(value: unknown): Array<{ id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' }> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is { id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' } => Boolean(item && typeof item === 'object') && typeof (item as { id?: unknown }).id === 'string' && ['image', 'product-image', 'inventory-video', 'audio'].includes(String((item as { kind?: unknown }).kind))).map((item) => ({ id: item.id.trim(), kind: item.kind }));
+}
 function ReferenceThumbnail({ src, index, active, onSelect }: { src: string; index: number; active: boolean; onSelect: () => void }) {
   const [failed, setFailed] = useState(false);
   return <button type="button" className={`task-reference-thumbnail ${active ? 'active' : ''}`} onClick={onSelect} aria-label={`查看参考图 ${index + 1}`} aria-selected={active}>

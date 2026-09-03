@@ -54,10 +54,10 @@ describe('provider client helpers', () => {
     expect(result.mode).toBe('live');
   });
 
-  it('maps YuanAI 4K reference edits to a 4096x4096 multipart size', async () => {
+  it('maps YuanAI 4K square reference edits to a 2048x2048 multipart size', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = init?.body as FormData;
-      expect(body.get('size')).toBe('4096x4096');
+      expect(body.get('size')).toBe('2048x2048');
       expect(body.get('model')).toBe('gpt-image-2');
       expect(body.get('image')).toBeInstanceOf(File);
       return Response.json({ data: [{ b64_json: 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=' }] });
@@ -74,7 +74,7 @@ describe('provider client helpers', () => {
       expect(String(_url)).toBe('https://yuanai.uk/v1/images/generations');
       expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key', 'content-type': 'application/json' });
       expect(JSON.parse(String(init?.body))).toEqual({
-        model: 'gpt-image-2', prompt: 'draw', aspect_ratio: '1:1', resolution: '1k',
+        model: 'gpt-image-2', prompt: 'draw', aspect_ratio: '1:1', resolution: '1k', size: '1024x1024',
       });
       return Response.json({ created: 1, data: [{ b64_json: 'YWJj' }] });
     });
@@ -103,11 +103,11 @@ describe('provider client helpers', () => {
     expect(result.mode).toBe('live');
   });
 
-  it('maps YuanAI 4k reference-image edits to a 4096x4096 multipart size', async () => {
+  it('maps YuanAI 4k square reference-image edits to a 2048x2048 multipart size', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.body).toBeInstanceOf(FormData);
       const form = init?.body as FormData;
-      expect(form.get('size')).toBe('4096x4096');
+      expect(form.get('size')).toBe('2048x2048');
       expect(form.get('model')).toBe('gpt-image-2');
       expect(form.get('image')).toBeInstanceOf(File);
       return Response.json({ created: 1, data: [{ b64_json: 'YWJj' }] });
@@ -117,6 +117,18 @@ describe('provider client helpers', () => {
       referenceFiles: [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }],
     }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result.mode).toBe('live');
+  });
+
+  it('maps YuanAI portrait reference edits to a portrait multipart size', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const form = init?.body as FormData;
+      expect(form.get('size')).toBe('2160x3840');
+      return Response.json({ created: 1, data: [{ b64_json: 'YWJj' }] });
+    });
+    await expect(generateYuanAIImage({
+      model: 'gpt-image-2', prompt: 'portrait', aspectRatio: '9:16', resolution: '4k',
+      referenceFiles: [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).resolves.toMatchObject({ mode: 'live' });
   });
 
   it('submits GPT-2999 prompt requests using Responses API', async () => {

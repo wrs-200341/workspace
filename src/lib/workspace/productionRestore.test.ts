@@ -28,6 +28,7 @@ describe('production task configuration restore', () => {
       duration: 10, aspectRatio: '9:16', resolution: '720p', pid: 'PID-1',
       referenceAssetIds: ['image-1', 'image-1'], referenceVideoAssetIds: ['video-1'],
       referenceAudioAssetIds: ['audio-1'], productImageAssetIds: ['product-1'],
+      referenceAssetOrder: [{ id: 'product-1', kind: 'product-image' }, { id: 'image-1', kind: 'image' }],
       externalReferenceImages: ['https://example.com/a.jpg'], referenceTokens: ['secret-token'],
     } }));
 
@@ -36,6 +37,7 @@ describe('production task configuration restore', () => {
       promptMode: 'asset-template-child-prompt', count: 2, duration: 10,
       referenceAssetIds: ['image-1'], referenceVideoAssetIds: ['video-1'],
       referenceAudioAssetIds: ['audio-1'], productImageAssetIds: ['product-1'],
+      referenceAssetOrder: [{ id: 'product-1', kind: 'product-image' }, { id: 'image-1', kind: 'image' }],
       externalReferenceImages: ['https://example.com/a.jpg'],
     });
     expect(restored).not.toHaveProperty('referenceTokens');
@@ -50,4 +52,3 @@ describe('production task configuration restore', () => {
     expect(productionRestoreHref('account/1', task())).toBe('/workspace/accounts/account%2F1/production?mode=video&restoreTaskId=task%2F1');
   });
 });
-

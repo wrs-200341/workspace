@@ -92,6 +92,24 @@ describe('production form historical fields', () => {
     }));
   });
 
+  it('keeps the picker order for interleaved material and product images', () => {
+    const payload = buildGenerationPayload('image', {
+      prompt: 'combine image 1 and image 2',
+      provider: 'yuanai-image',
+      model: 'gpt-image-2',
+      referenceAssetOrder: [
+        { id: 'product-1', kind: 'product-image' },
+        { id: 'material-1', kind: 'image' },
+      ],
+      referenceAssetIds: ['material-1'],
+      productImageAssetIds: ['product-1'],
+    });
+    expect(payload.referenceAssetOrder).toEqual([
+      { id: 'product-1', kind: 'product-image' },
+      { id: 'material-1', kind: 'image' },
+    ]);
+  });
+
   it('validates references against the selected model capability', () => {
     const capability = getVideoCapability('wan3-video', 'wan3.0-prime-r2v');
     expect(validateProductionInput('video', {

@@ -76,6 +76,32 @@ export function buildYuanAIImageEditFormData(input: YuanAIImageEditInput): FormD
   return form;
 }
 
+/**
+ * YuanAI accepts an explicit pixel size for both normal generations and
+ * reference-image edits. Keep the ratio in the size itself because the
+ * gateway otherwise falls back to a square canvas even when aspect_ratio is
+ * present. The 1K/2K values follow the provider's portrait/landscape canvas
+ * convention; 4K uses the documented 2160x3840 / 3840x2160 canvases.
+ */
+export function yuanAIImageSize(aspectRatio: string, resolution: '1k' | '2k' | '4k'): string {
+  const normalizedRatio = aspectRatio.trim();
+  const portrait = normalizedRatio === '9:16' || normalizedRatio === '3:4';
+  const landscape = normalizedRatio === '16:9' || normalizedRatio === '4:3';
+  if (resolution === '4k') {
+    if (portrait) return '2160x3840';
+    if (landscape) return '3840x2160';
+    return '2048x2048';
+  }
+  if (resolution === '2k') {
+    if (portrait) return '2048x3072';
+    if (landscape) return '3072x2048';
+    return '2048x2048';
+  }
+  if (portrait) return '1024x1536';
+  if (landscape) return '1536x1024';
+  return '1024x1024';
+}
+
 export function buildGPTPromptPayload(model: string, messages: readonly { role: 'user' | 'assistant' | 'system'; content: string }[]): Record<string, unknown> {
   return { model, messages: messages.map((message) => ({ role: message.role, content: message.content })) };
 }
@@ -296,5 +322,14 @@ export function buildWanVideoPayload(input: WanVideoInput): Record<string, unkno
   };
 }
 
-export function buildYuanAIImagePayload(input: YuanAIImageInput): Record<string, unknown> { return { model: input.model, prompt: input.prompt, aspect_ratio: input.aspectRatio, resolution: input.resolution, ...(input.referenceImages.length ? { images: input.referenceImages } : {}) }; }
+export function buildYuanAIImagePayload(input: YuanAIImageInput): Record<string, unknown> {
+  return {
+    model: input.model,
+    prompt: input.prompt,
+    aspect_ratio: input.aspectRatio,
+    resolution: input.resolution,
+    size: yuanAIImageSize(input.aspectRatio, input.resolution),
+    ...(input.referenceImages.length ? { images: input.referenceImages } : {}),
+  };
+}
 export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'pomoai-gemini-image') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'gpt-2999-prompt') return 'prompt'; return 'video'; }

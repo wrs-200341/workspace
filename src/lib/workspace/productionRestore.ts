@@ -26,6 +26,7 @@ export type ProductionRestoreConfig = {
   referenceVideoAssetIds: string[];
   referenceAudioAssetIds: string[];
   productImageAssetIds: string[];
+  referenceAssetOrder: Array<{ id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' }>;
   externalReferenceImages: string[];
   externalReferenceVideos: string[];
   externalReferenceAudios: string[];
@@ -58,6 +59,16 @@ function unique(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
+function assetOrder(value: unknown): Array<{ id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is { id: unknown; kind: unknown } => Boolean(item && typeof item === 'object'))
+    .map((item) => ({ id: text(item.id), kind: item.kind }))
+    .filter((item): item is { id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' } => Boolean(item.id) && ['image', 'product-image', 'inventory-video', 'audio'].includes(String(item.kind)))
+    .map((item) => ({ id: item.id, kind: item.kind as 'image' | 'product-image' | 'inventory-video' | 'audio' }))
+    .slice(0, MAX_RESTORED_REFERENCES);
+}
+
 /**
  * Convert a persisted task into form state. Ephemeral reference bridge tokens
  * and provider response data are intentionally excluded from the result.
@@ -70,6 +81,7 @@ export function productionRestoreConfig(task: ProviderTask): ProductionRestoreCo
   const referenceAudioAssetIds = stringList(metadata.referenceAudioAssetIds);
   const productImageAssetIds = stringList(metadata.productImageAssetIds);
   const legacyAssetIds = stringList(metadata.assetIds);
+  const referenceAssetOrder = assetOrder(metadata.referenceAssetOrder);
 
   return {
     taskId: task.id,
@@ -98,6 +110,7 @@ export function productionRestoreConfig(task: ProviderTask): ProductionRestoreCo
     referenceVideoAssetIds: unique(referenceVideoAssetIds),
     referenceAudioAssetIds: unique(referenceAudioAssetIds),
     productImageAssetIds: unique(productImageAssetIds),
+    referenceAssetOrder,
     externalReferenceImages: unique(stringList(metadata.externalReferenceImages)),
     externalReferenceVideos: unique(stringList(metadata.externalReferenceVideos)),
     externalReferenceAudios: unique(stringList(metadata.externalReferenceAudios)),
@@ -107,4 +120,3 @@ export function productionRestoreConfig(task: ProviderTask): ProductionRestoreCo
 export function productionRestoreHref(accountId: string, task: Pick<ProviderTask, 'id' | 'mode'>): string {
   return `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(task.mode)}&restoreTaskId=${encodeURIComponent(task.id)}`;
 }
-

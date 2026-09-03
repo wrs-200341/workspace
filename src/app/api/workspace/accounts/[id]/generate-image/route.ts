@@ -21,13 +21,18 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (auth instanceof Response) return auth;
   const { id } = await params;
   if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
-  const body = await request.json().catch(() => ({})) as { prompt?: unknown; model?: unknown; provider?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; assetIds?: unknown; productImageAssetIds?: unknown; pid?: unknown; count?: unknown };
+  const body = await request.json().catch(() => ({})) as { prompt?: unknown; model?: unknown; provider?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; assetIds?: unknown; productImageAssetIds?: unknown; referenceAssetOrder?: unknown; pid?: unknown; count?: unknown };
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) return NextResponse.json({ success: false, error: 'prompt_required' }, { status: 400 });
   const provider: ProviderId = IMAGE_PROVIDERS.includes(body.provider as ProviderId) ? body.provider as ProviderId : 'mgrouter-grok-image';
   const config = getProviderConfig(provider);
   const rawImages = Array.isArray(body.referenceImages) && body.referenceImages.every((value) => typeof value === 'string') ? body.referenceImages as string[] : [];
   const assetIds = Array.isArray(body.assetIds) && body.assetIds.every((value) => typeof value === 'string') ? body.assetIds as string[] : [];
   const productImageAssetIds = Array.isArray(body.productImageAssetIds) && body.productImageAssetIds.every((value) => typeof value === 'string') ? body.productImageAssetIds as string[] : [];
+  const referenceAssetOrder = parseAssetOrder(body.referenceAssetOrder);
+  const orderedImageAssets: Array<{ id: string; kind: 'image' | 'product-image' }> = (referenceAssetOrder.length
+    ? referenceAssetOrder.filter((item) => item.kind === 'image' || item.kind === 'product-image')
+    : [...assetIds.map((id) => ({ id, kind: 'image' as const })), ...productImageAssetIds.map((id) => ({ id, kind: 'product-image' as const }))])
+    .filter((item): item is { id: string; kind: 'image' | 'product-image' } => (item.kind === 'image' || item.kind === 'product-image') && (assetIds.includes(item.id) || productImageAssetIds.includes(item.id)));
   const aspectRatio = typeof body.aspectRatio === 'string' && body.aspectRatio.trim()
     ? body.aspectRatio.trim()
     : getDefaultProductionAspectRatio(config.supports.ratios);
@@ -38,26 +43,47 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const count = typeof body.count === 'number' && Number.isFinite(body.count) ? Math.min(4, Math.max(1, Math.round(body.count))) : 1;
   try {
     const ownerId = workspaceOwnerIdForAccount(id);
-    const referenceImageName = firstReferenceImageName({ accountId: id, assetIds, productImageAssetIds, rawReferenceImages: rawImages });
+    const referenceImageName = firstReferenceImageName({ accountId: id, assetIds: orderedImageAssets.filter((item) => item.kind === 'image').map((item) => item.id), productImageAssetIds: orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id), rawReferenceImages: rawImages });
     const publishedReferences = isProviderLiveEnabled(provider) && provider !== 'yuanai-image' && provider !== 'pomoai-gemini-image'
-      ? assetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['image'] }))
+      ? orderedImageAssets.filter((item) => item.kind === 'image').map((item) => publishAssetReference({ accountId: id, assetId: item.id, allowedKinds: ['image'] }))
       : [];
     const publishedProductReferences = isProviderLiveEnabled(provider) && provider !== 'yuanai-image' && provider !== 'pomoai-gemini-image'
-      ? productImageAssetIds.map((assetId) => publishProductImageReference(assetId, id))
+      ? orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => publishProductImageReference(item.id, id))
       : [];
-    const images = [...rawImages, ...publishedReferences.map((item) => item.url), ...publishedProductReferences.map((item) => item.url)];
+    const publishedByAssetId = new Map<string, string>();
+    orderedImageAssets.filter((item) => item.kind === 'image').forEach((item, index) => {
+      const published = publishedReferences[index];
+      if (published) publishedByAssetId.set(item.id, published.url);
+    });
+    orderedImageAssets.filter((item) => item.kind === 'product-image').forEach((item, index) => {
+      const published = publishedProductReferences[index];
+      if (published) publishedByAssetId.set(item.id, published.url);
+    });
+    const publishedTokensByAssetId = new Map<string, string>();
+    orderedImageAssets.filter((item) => item.kind === 'image').forEach((item, index) => {
+      const published = publishedReferences[index];
+      if (published) publishedTokensByAssetId.set(item.id, published.token);
+    });
+    orderedImageAssets.filter((item) => item.kind === 'product-image').forEach((item, index) => {
+      const published = publishedProductReferences[index];
+      if (published) publishedTokensByAssetId.set(item.id, published.token);
+    });
+    const referenceTokens = orderedImageAssets.map((item) => publishedTokensByAssetId.get(item.id)).filter((value): value is string => Boolean(value));
+    const images = [...rawImages, ...orderedImageAssets.map((item) => publishedByAssetId.get(item.id)).filter((value): value is string => Boolean(value))];
     const normalized = validateGenerationRequest({ provider, aspectRatio, resolution, referenceImages: images, referenceAudios: [] });
-    const localImageAssets = (provider === 'yuanai-image' || provider === 'pomoai-gemini-image') && (assetIds.length > 0 || productImageAssetIds.length > 0)
-      ? [...assetIds.map((assetId) => {
-        const asset = assertAssetReference(id, assetId, ['image']);
-        if (!asset.relativePath) throw new Error('reference_asset_not_found');
-        const bytes = new Uint8Array(fs.readFileSync(getWorkspacePath(asset.relativePath)));
-        return { bytes, mimeType: asset.mimeType || 'image/png', fileName: asset.name || `${asset.id}.png` };
-      }), ...productImageAssetIds.map((assetId) => {
-        const product = listProductImageAssets().find((candidate) => candidate.id === assetId);
-        if (!product) throw new Error('reference_asset_not_found');
-        return { bytes: new Uint8Array(fs.readFileSync(getProductImageAbsolutePath(assetId))), mimeType: product.mimeType, fileName: product.name };
-      })]
+    const localImageAssets = (provider === 'yuanai-image' || provider === 'pomoai-gemini-image') && orderedImageAssets.length > 0
+      ? orderedImageAssets.map((item) => item.kind === 'image'
+        ? (() => {
+          const asset = assertAssetReference(id, item.id, ['image']);
+          if (!asset.relativePath) throw new Error('reference_asset_not_found');
+          const bytes = new Uint8Array(fs.readFileSync(getWorkspacePath(asset.relativePath)));
+          return { bytes, mimeType: asset.mimeType || 'image/png', fileName: asset.name || `${asset.id}.png` };
+        })()
+        : (() => {
+          const product = listProductImageAssets().find((candidate) => candidate.id === item.id);
+          if (!product) throw new Error('reference_asset_not_found');
+          return { bytes: new Uint8Array(fs.readFileSync(getProductImageAbsolutePath(item.id))), mimeType: product.mimeType, fileName: product.name };
+        })())
       : undefined;
     if (localImageAssets && localImageAssets.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
     if (localImageAssets && localImageAssets.some((asset) => !isImageBytes(asset.bytes))) throw new Error('reference_image_invalid');
@@ -65,10 +91,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const pomoReferences = provider === 'pomoai-gemini-image' && localImageAssets
       ? localImageAssets.map((reference) => ({ mimeType: reference.mimeType, dataBase64: Buffer.from(reference.bytes).toString('base64') }))
       : [];
-    const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceTokens: [...publishedReferences, ...publishedProductReferences].map((item) => item.token) } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
+    const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
     const promptText = body.prompt.trim();
     const tasks = Array.from({ length: count }, (_, index) => createProviderTask({ accountId: id, mode: 'image', provider, model, prompt: promptText, status: 'submitting', progress: 5, metadata: { ...baseMetadata, sequence: index + 1 } }));
-    void tasks.reduce((chain, task) => chain.then(() => submitImageTask({ accountId: id, taskId: task.id, provider, model, prompt: promptText, normalized, images, yuanReferenceFiles, pomoReferences })), Promise.resolve());
+    void tasks.reduce((chain, task) => chain.then(() => submitImageTask({ accountId: id, taskId: task.id, provider, model, prompt: promptText, normalized, images, assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, yuanReferenceFiles, pomoReferences })), Promise.resolve());
     const first = tasks[0];
     return NextResponse.json({ success: true, data: { accountId: id, taskId: first.id, taskIds: tasks.map((task) => task.id), count: tasks.length, status: first.status, provider: first.provider, execution: 'pending', model: first.model, progress: first.progress } }, { status: 202 });
   } catch (error) {
@@ -80,27 +106,122 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
 }
 
-async function submitImageTask(input: { accountId: string; taskId: string; provider: ProviderId; model: string; prompt: string; normalized: { aspectRatio?: string; resolution?: string }; images: string[]; yuanReferenceFiles?: Array<{ bytes: Uint8Array; mimeType: string; fileName: string }>; pomoReferences: Array<{ mimeType: string; dataBase64: string }> }): Promise<void> {
-  try {
-    const result = input.provider === 'yuanai-image'
-      ? await generateYuanAIImage({ model: input.model, prompt: input.prompt, aspectRatio: input.normalized.aspectRatio!, resolution: input.normalized.resolution as '1k' | '2k' | '4k', referenceImages: input.yuanReferenceFiles?.length ? [] : input.images, referenceFiles: input.yuanReferenceFiles })
-      : input.provider === 'pomoai-gemini-image'
-        ? await generatePomoAIImage({ model: input.model, prompt: input.prompt, references: input.pomoReferences })
-        : await generateMGRouterImage({ model: input.model, prompt: input.prompt, aspectRatio: input.normalized.aspectRatio!, resolution: input.normalized.resolution as '1k' | '2k', referenceImages: input.images });
-    const status = normalizeProviderResponse(input.provider, result.response);
-    const current = getProviderTask(input.taskId);
-    const task = updateProviderTask(input.taskId, { status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, metadata: { ...(current?.metadata ?? {}), execution: result.mode } });
-    if (!task) return;
-    if (result.mode === 'live' && status.outputBase64.length > 0) {
-      const stored = storeImageBase64Outputs(input.accountId, input.taskId, status.outputBase64);
-      if (stored.length > 0) updateProviderTask(input.taskId, { outputBase64: [], outputUrls: stored.map((item) => `/api/workspace/accounts/${encodeURIComponent(input.accountId)}/image-tasks/${encodeURIComponent(input.taskId)}/outputs/${item.index}`), metadata: { ...(task.metadata ?? {}), execution: result.mode, generatedOutputs: stored }, status: 'completed', progress: 100 });
-    } else if (result.mode === 'mock') {
-      void processMockProviderTask(input.taskId);
+type ImageSubmissionInput = {
+  accountId: string;
+  taskId: string;
+  provider: ProviderId;
+  model: string;
+  prompt: string;
+  normalized: { aspectRatio?: string; resolution?: string };
+  images: string[];
+  assetIds: string[];
+  productImageAssetIds: string[];
+  referenceAssetOrder: Array<{ id: string; kind: 'image' | 'product-image' }>;
+  yuanReferenceFiles?: Array<{ bytes: Uint8Array; mimeType: string; fileName: string }>;
+  pomoReferences: Array<{ mimeType: string; dataBase64: string }>;
+};
+
+async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
+  let lastError: unknown;
+  const maxYuanAttempts = input.provider === 'yuanai-image' ? 3 : 1;
+  for (let attempt = 0; attempt < maxYuanAttempts; attempt += 1) {
+    try {
+      if (attempt > 0) await delay(300 * attempt);
+      const result = await submitImageProvider(input.provider, input.model, input.prompt, input.normalized, input.images, input.yuanReferenceFiles, input.pomoReferences);
+      const providerStatus = normalizeProviderResponse(input.provider, result.response);
+      if (providerStatus.status === 'failed') throw new Error(providerStatus.error ?? 'provider_upstream_failed');
+      await completeImageTask(input, input.provider, input.model, result, { attempts: attempt + 1 });
+      return;
+    } catch (error) {
+      lastError = error;
+      const current = getProviderTask(input.taskId);
+      updateProviderTask(input.taskId, {
+        status: attempt + 1 < maxYuanAttempts ? 'submitting' : 'failed',
+        progress: attempt + 1 < maxYuanAttempts ? 8 : 100,
+        error: attempt + 1 < maxYuanAttempts ? undefined : sanitizeProviderError(error instanceof Error ? error.message : ''),
+        metadata: { ...(current?.metadata ?? {}), retryCount: attempt + 1, lastAttemptProvider: input.provider, lastAttemptError: sanitizeProviderError(error instanceof Error ? error.message : '') },
+      });
+      if (input.provider !== 'yuanai-image' || !isTransientImageError(error)) break;
     }
-  } catch (error) {
-    const current = getProviderTask(input.taskId);
-    updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), metadata: { ...(current?.metadata ?? {}), execution: 'failed' } });
   }
+
+  if (input.provider === 'yuanai-image') {
+    const fallbackProvider: ProviderId = 'mgrouter-grok-image';
+    const fallbackConfig = getProviderConfig(fallbackProvider);
+    const fallbackResolution = input.normalized.resolution === '4k' ? '2k' : input.normalized.resolution as '1k' | '2k';
+    try {
+      const fallbackReferences = [...input.images];
+      if (isProviderLiveEnabled(fallbackProvider)) {
+        for (const asset of input.referenceAssetOrder) {
+          fallbackReferences.push(asset.kind === 'image'
+            ? publishAssetReference({ accountId: input.accountId, assetId: asset.id, allowedKinds: ['image'] }).url
+            : publishProductImageReference(asset.id, input.accountId).url);
+        }
+      }
+      const uniqueReferences = [...new Set(fallbackReferences)];
+      if (uniqueReferences.length > fallbackConfig.supports.referenceImages) throw new Error('fallback_reference_limit');
+      const current = getProviderTask(input.taskId);
+      updateProviderTask(input.taskId, {
+        provider: fallbackProvider,
+        model: fallbackConfig.model,
+        status: 'submitting',
+        progress: 8,
+        error: undefined,
+        metadata: { ...(current?.metadata ?? {}), supplierId: fallbackProvider, modelId: fallbackConfig.model, resolution: fallbackResolution, fallbackFrom: 'yuanai-image', fallbackProvider, fallbackResolution, fallbackAfterRetries: maxYuanAttempts },
+      });
+      const result = await generateMGRouterImage({ model: fallbackConfig.model, prompt: input.prompt, aspectRatio: input.normalized.aspectRatio!, resolution: fallbackResolution, referenceImages: uniqueReferences });
+      const fallbackStatus = normalizeProviderResponse(fallbackProvider, result.response);
+      if (fallbackStatus.status === 'failed') throw new Error(fallbackStatus.error ?? 'provider_upstream_failed');
+      await completeImageTask({ ...input, provider: fallbackProvider, model: fallbackConfig.model }, fallbackProvider, fallbackConfig.model, result, { attempts: maxYuanAttempts + 1, fallback: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      const current = getProviderTask(input.taskId);
+      updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), metadata: { ...(current?.metadata ?? {}), execution: 'failed', fallbackError: sanitizeProviderError(error instanceof Error ? error.message : '') } });
+      return;
+    }
+  }
+
+  const current = getProviderTask(input.taskId);
+  updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(lastError instanceof Error ? lastError.message : ''), metadata: { ...(current?.metadata ?? {}), execution: 'failed' } });
+}
+
+async function submitImageProvider(provider: ProviderId, model: string, prompt: string, normalized: { aspectRatio?: string; resolution?: string }, images: string[], yuanReferenceFiles: ImageSubmissionInput['yuanReferenceFiles'], pomoReferences: ImageSubmissionInput['pomoReferences']) {
+  if (provider === 'yuanai-image') return generateYuanAIImage({ model, prompt, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution as '1k' | '2k' | '4k', referenceImages: yuanReferenceFiles?.length ? [] : images, referenceFiles: yuanReferenceFiles });
+  if (provider === 'pomoai-gemini-image') return generatePomoAIImage({ model, prompt, references: pomoReferences });
+  return generateMGRouterImage({ model, prompt, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution as '1k' | '2k', referenceImages: images });
+}
+
+async function completeImageTask(input: ImageSubmissionInput, provider: ProviderId, model: string, result: Awaited<ReturnType<typeof generateMGRouterImage>>, details: { attempts: number; fallback?: boolean }): Promise<void> {
+  const status = normalizeProviderResponse(provider, result.response);
+  const current = getProviderTask(input.taskId);
+  const task = updateProviderTask(input.taskId, { provider, model, status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, metadata: { ...(current?.metadata ?? {}), execution: result.mode, attempts: details.attempts, ...(details.fallback ? { fallback: true } : {}) } });
+  if (!task) return;
+  if (result.mode === 'live' && status.outputBase64.length > 0) {
+    const stored = storeImageBase64Outputs(input.accountId, input.taskId, status.outputBase64);
+    if (stored.length > 0) updateProviderTask(input.taskId, { outputBase64: [], outputUrls: stored.map((item) => `/api/workspace/accounts/${encodeURIComponent(input.accountId)}/image-tasks/${encodeURIComponent(input.taskId)}/outputs/${item.index}`), metadata: { ...(task.metadata ?? {}), execution: result.mode, generatedOutputs: stored }, status: 'completed', progress: 100 });
+  } else if (result.mode === 'mock') {
+    void processMockProviderTask(input.taskId);
+  }
+}
+
+function isTransientImageError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+  return /provider_(408|409|425|429|5\d\d)|provider_upstream_failed|timeout|timed?out|abort|network|fetch failed/.test(message);
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function parseAssetOrder(value: unknown): Array<{ id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is { id?: unknown; kind?: unknown } => Boolean(item && typeof item === 'object'))
+    .map((item) => ({ id: typeof item.id === 'string' ? item.id.trim() : '', kind: item.kind }))
+    .filter((item): item is { id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' } => Boolean(item.id) && ['image', 'product-image', 'inventory-video', 'audio'].includes(String(item.kind)))
+    .map((item) => ({ id: item.id, kind: item.kind as 'image' | 'product-image' | 'inventory-video' | 'audio' }))
+    .slice(0, 16);
 }
 
 function isImageBytes(bytes: Uint8Array): boolean {

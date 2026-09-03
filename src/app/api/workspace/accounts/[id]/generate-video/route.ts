@@ -28,7 +28,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!body || typeof body !== 'object' || typeof (body as { prompt?: unknown }).prompt !== 'string' || !(body as { prompt: string }).prompt.trim()) {
     return NextResponse.json({ success: false, error: 'prompt_required' }, { status: 400 });
   }
-  const input = body as { prompt: string; provider?: unknown; model?: unknown; modelId?: unknown; supplierId?: unknown; promptMode?: unknown; promptModel?: unknown; templateId?: unknown; childPrompt?: unknown; finalPrompt?: unknown; originalPrompt?: unknown; suffixEnabled?: unknown; suffix?: unknown; count?: unknown; duration?: unknown; seconds?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; referenceVideos?: unknown; referenceAudios?: unknown; assetIds?: unknown; referenceAssetIds?: unknown; referenceVideoAssetIds?: unknown; referenceAudioAssetIds?: unknown; productImageAssetIds?: unknown; pid?: unknown };
+  const input = body as { prompt: string; provider?: unknown; model?: unknown; modelId?: unknown; supplierId?: unknown; promptMode?: unknown; promptModel?: unknown; templateId?: unknown; childPrompt?: unknown; finalPrompt?: unknown; originalPrompt?: unknown; suffixEnabled?: unknown; suffix?: unknown; count?: unknown; duration?: unknown; seconds?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; referenceVideos?: unknown; referenceAudios?: unknown; assetIds?: unknown; referenceAssetIds?: unknown; referenceVideoAssetIds?: unknown; referenceAudioAssetIds?: unknown; productImageAssetIds?: unknown; referenceAssetOrder?: unknown; pid?: unknown };
   const requestedProvider: VideoProvider = VIDEO_PROVIDERS.includes(input.provider as VideoProvider) ? input.provider as VideoProvider : 'grok-video';
   const rawReferenceImages = Array.isArray(input.referenceImages) && input.referenceImages.every((value) => typeof value === 'string') ? input.referenceImages as string[] : [];
   const rawReferenceVideos = Array.isArray(input.referenceVideos) && input.referenceVideos.every((value) => typeof value === 'string') ? input.referenceVideos as string[] : [];
@@ -38,6 +38,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const referenceVideoAssetIds = Array.isArray(input.referenceVideoAssetIds) && input.referenceVideoAssetIds.every((value) => typeof value === 'string') ? input.referenceVideoAssetIds as string[] : [];
   const referenceAudioAssetIds = Array.isArray(input.referenceAudioAssetIds) && input.referenceAudioAssetIds.every((value) => typeof value === 'string') ? input.referenceAudioAssetIds as string[] : [];
   const productImageAssetIds = Array.isArray(input.productImageAssetIds) && input.productImageAssetIds.every((value) => typeof value === 'string') ? input.productImageAssetIds as string[] : [];
+  const referenceAssetOrder = parseAssetOrder(input.referenceAssetOrder);
+  const safeReferenceAssetOrder = referenceAssetOrder.filter((item) => {
+    if (item.kind === 'image') return referenceAssetIds.includes(item.id);
+    if (item.kind === 'product-image') return productImageAssetIds.includes(item.id);
+    if (item.kind === 'inventory-video') return referenceVideoAssetIds.includes(item.id);
+    return referenceAudioAssetIds.includes(item.id);
+  });
+  const orderedImageAssets = (safeReferenceAssetOrder.length
+    ? safeReferenceAssetOrder.filter((item) => item.kind === 'image' || item.kind === 'product-image')
+    : [...referenceAssetIds.map((id) => ({ id, kind: 'image' as const })), ...productImageAssetIds.map((id) => ({ id, kind: 'product-image' as const }))])
+    .filter((item) => referenceAssetIds.includes(item.id) || productImageAssetIds.includes(item.id));
+  const orderedReferenceAssetIds = orderedImageAssets.filter((item) => item.kind === 'image').map((item) => item.id);
+  const orderedProductImageAssetIds = orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id);
   const rawDuration = typeof input.duration === 'number' && Number.isFinite(input.duration)
     ? input.duration
     : typeof input.seconds === 'number' && Number.isFinite(input.seconds)
@@ -64,29 +77,39 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     const count = typeof input.count === 'number' && Number.isFinite(input.count) ? Math.min(4, Math.max(1, Math.round(input.count))) : 1;
     const ownerId = workspaceOwnerIdForAccount(id);
-    const referenceImageName = firstReferenceImageName({ accountId: id, referenceAssetIds, assetIds, productImageAssetIds, rawReferenceImages });
+    const referenceImageName = firstReferenceImageName({ accountId: id, referenceAssetIds: orderedReferenceAssetIds, assetIds, productImageAssetIds: orderedProductImageAssetIds, rawReferenceImages });
     const tasks = [];
     for (let index = 0; index < count; index += 1) {
-      const publishedImages = isProviderLiveEnabled(provider) ? referenceAssetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['image'] })) : [];
-      const publishedProductImages = isProviderLiveEnabled(provider) ? productImageAssetIds.map((assetId) => publishProductImageReference(assetId, id)) : [];
+      const publishedImages = isProviderLiveEnabled(provider) ? orderedReferenceAssetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['image'] })) : [];
+      const publishedProductImages = isProviderLiveEnabled(provider) ? orderedProductImageAssetIds.map((assetId) => publishProductImageReference(assetId, id)) : [];
       const publishedVideos = isProviderLiveEnabled(provider) ? referenceVideoAssetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['inventory-video'] })) : [];
       const publishedAudios = isProviderLiveEnabled(provider) ? referenceAudioAssetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['audio'] })) : [];
-      const referenceImages = [...rawReferenceImages, ...publishedImages.map((item) => item.url), ...publishedProductImages.map((item) => item.url)];
+      const publishedImageUrls = new Map<string, string>();
+      orderedReferenceAssetIds.forEach((assetId, assetIndex) => { const item = publishedImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
+      orderedProductImageAssetIds.forEach((assetId, assetIndex) => { const item = publishedProductImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
+      const referenceImages = [...rawReferenceImages, ...orderedImageAssets.map((item) => publishedImageUrls.get(item.id)).filter((value): value is string => Boolean(value))];
+      const referenceImageTokens = orderedImageAssets.map((item) => {
+        if (item.kind === 'image') {
+          const index = orderedReferenceAssetIds.indexOf(item.id);
+          return publishedImages[index]?.token;
+        }
+        const index = orderedProductImageAssetIds.indexOf(item.id);
+        return publishedProductImages[index]?.token;
+      }).filter((value): value is string => Boolean(value));
       const referenceVideos = [...rawReferenceVideos, ...publishedVideos.map((item) => item.url)];
       const referenceAudios = [...rawReferenceAudios, ...publishedAudios.map((item) => item.url)];
       const referenceFiles = provider === 'oairegbox-omni'
-        ? [
-          ...referenceAssetIds.map((assetId) => {
-            const record = readAssetFile(id, assetId);
+        ? orderedImageAssets.map((item) => item.kind === 'image'
+          ? (() => {
+            const record = readAssetFile(id, item.id);
             if (!record) throw new Error('reference_asset_not_found');
             return { bytes: new Uint8Array(record.bytes), mimeType: record.asset.mimeType || 'application/octet-stream', fileName: record.asset.name };
-          }),
-          ...productImageAssetIds.map((assetId) => {
-            const product = listProductImageAssets().find((item) => item.id === assetId);
+          })()
+          : (() => {
+            const product = listProductImageAssets().find((candidate) => candidate.id === item.id);
             if (!product) throw new Error('reference_asset_not_found');
-            return { bytes: new Uint8Array(fs.readFileSync(getProductImageAbsolutePath(assetId))), mimeType: product.mimeType, fileName: product.name };
-          }),
-        ]
+            return { bytes: new Uint8Array(fs.readFileSync(getProductImageAbsolutePath(item.id))), mimeType: product.mimeType, fileName: product.name };
+          })())
         : undefined;
       if (provider === 'oairegbox-omni' && rawReferenceImages.length > 0 && !referenceFiles?.length) throw new Error('reference_files_required');
       const normalized = validateGenerationRequest({ provider, model, duration, aspectRatio, resolution, referenceImages, referenceVideos, referenceAudios });
@@ -101,7 +124,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           referenceAudioCount: referenceAudios.length,
         });
       }
-      const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: input.prompt, status: 'submitting', progress: 5, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: typeof input.finalPrompt === 'string' ? input.finalPrompt : input.prompt, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceVideos, referenceTokens: [...publishedImages, ...publishedProductImages, ...publishedVideos, ...publishedAudios].map((item) => item.token), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } });
+      const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: input.prompt, status: 'submitting', progress: 5, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: typeof input.finalPrompt === 'string' ? input.finalPrompt : input.prompt, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } });
       tasks.push(task);
       submissionChain = submissionChain.then(() => submitVideoTask({ taskId: task.id, provider, model, prompt: input.prompt, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos })).catch(() => undefined);
       continue;
@@ -127,4 +150,14 @@ async function submitVideoTask(input: { taskId: string; provider: VideoProvider;
   } catch (error) {
     updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), metadata: { ...(getProviderTask(input.taskId)?.metadata ?? {}), execution: 'failed' } });
   }
+}
+
+function parseAssetOrder(value: unknown): Array<{ id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' }> {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((item): item is { id?: unknown; kind?: unknown } => Boolean(item && typeof item === 'object'))
+    .map((item) => ({ id: typeof item.id === 'string' ? item.id.trim() : '', kind: item.kind }))
+    .filter((item): item is { id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' } => Boolean(item.id) && ['image', 'product-image', 'inventory-video', 'audio'].includes(String(item.kind)))
+    .map((item) => ({ id: item.id, kind: item.kind as 'image' | 'product-image' | 'inventory-video' | 'audio' }))
+    .slice(0, 16);
 }

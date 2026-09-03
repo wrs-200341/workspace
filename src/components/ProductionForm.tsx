@@ -14,6 +14,7 @@ import {
 } from '@/lib/workspace/production/video-capabilities';
 import {
   buildGenerationPayload,
+  type ProductionAssetSelection,
   type PromptMode,
   validateProductionInput,
 } from './productionFormModel';
@@ -274,7 +275,9 @@ export function ProductionForm({ accountId, mode }: Props) {
   const availableMediaAssets = mediaAssets.filter((asset) => mode === 'image'
     ? (asset.kind === 'image' || asset.kind === 'product-image')
     : asset.kind === 'image' || asset.kind === 'product-image' ? maxImages > 0 : asset.kind === 'inventory-video' ? maxVideos > 0 : maxAudios > 0);
-  const selectedMediaForDisplay = mediaAssets.filter((asset) => selectedAssetIds.includes(asset.id));
+  const selectedMediaForDisplay = selectedAssetIds
+    .map((id) => mediaAssets.find((asset) => asset.id === id))
+    .filter((asset): asset is MediaAsset => Boolean(asset));
   const selectedImageCountForDisplay = selectedMediaForDisplay.filter((asset) => asset.kind === 'image' || asset.kind === 'product-image').length;
   const selectedVideoCountForDisplay = selectedMediaForDisplay.filter((asset) => asset.kind === 'inventory-video').length;
   const selectedAudioCountForDisplay = selectedMediaForDisplay.filter((asset) => asset.kind === 'audio').length;
@@ -338,12 +341,14 @@ export function ProductionForm({ accountId, mode }: Props) {
           if (config.aspectRatio) setAspectRatio(config.aspectRatio);
           if (config.resolution) setResolution(config.resolution);
         }
-        const ids = [
-          ...config.referenceAssetIds,
-          ...config.referenceVideoAssetIds,
-          ...config.referenceAudioAssetIds,
-          ...config.productImageAssetIds,
-        ];
+        const ids = config.referenceAssetOrder?.length
+          ? config.referenceAssetOrder.map((item) => item.id)
+          : [
+            ...config.referenceAssetIds,
+            ...config.referenceVideoAssetIds,
+            ...config.referenceAudioAssetIds,
+            ...config.productImageAssetIds,
+          ];
         setSelectedAssetIds([...new Set(ids)]);
         restoredTaskRef.current = restoreTaskId;
         // A restored queue item becomes a new draft; remove the original task
@@ -492,6 +497,7 @@ export function ProductionForm({ accountId, mode }: Props) {
       let uploadedReferenceAssetIds: string[] = [];
       let uploadedReferenceVideoAssetIds: string[] = [];
       let uploadedReferenceAudioAssetIds: string[] = [];
+      const uploadedSelections: ProductionAssetSelection[] = [];
       for (const file of droppedFiles) {
         const form = new FormData();
         form.set('file', file);
@@ -502,10 +508,12 @@ export function ProductionForm({ accountId, mode }: Props) {
         const payload = await uploaded.json().catch(() => null) as { success?: boolean; data?: { id?: string }; error?: string } | null;
         if (!uploaded.ok || !payload?.success || !payload.data?.id) throw new Error(payload?.error || '本地素材上传失败');
         assetIds = [...assetIds, payload.data.id];
+        uploadedSelections.push({ id: payload.data.id, kind });
         if (kind === 'image') uploadedReferenceAssetIds = [...uploadedReferenceAssetIds, payload.data.id];
         if (kind === 'inventory-video') uploadedReferenceVideoAssetIds = [...uploadedReferenceVideoAssetIds, payload.data.id];
         if (kind === 'audio') uploadedReferenceAudioAssetIds = [...uploadedReferenceAudioAssetIds, payload.data.id];
       }
+      const referenceAssetOrder: ProductionAssetSelection[] = [...selectedMedia, ...uploadedSelections];
       const body = buildGenerationPayload(mode, {
         prompt,
         originalPrompt: originalPrompt || prompt,
@@ -532,6 +540,7 @@ export function ProductionForm({ accountId, mode }: Props) {
         productImageAssetIds: selectedMedia.filter((asset) => asset.kind === 'product-image').map((asset) => asset.id),
         referenceVideoAssetIds: [...selectedMedia.filter((asset) => asset.kind === 'inventory-video').map((asset) => asset.id), ...uploadedReferenceVideoAssetIds],
         referenceAudioAssetIds: [...selectedMedia.filter((asset) => asset.kind === 'audio').map((asset) => asset.id), ...uploadedReferenceAudioAssetIds],
+        referenceAssetOrder,
       });
       const endpoint = mode === 'prompt' ? `/api/workspace/accounts/${accountId}/generate-prompt` : mode === 'image' ? `/api/workspace/accounts/${accountId}/generate-image` : `/api/workspace/accounts/${accountId}/generate-video`;
       const response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });

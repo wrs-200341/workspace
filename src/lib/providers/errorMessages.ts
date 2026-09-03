@@ -24,6 +24,7 @@ const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   provider_request_failed: '供应商请求失败，未能获取明确错误原因；请检查供应商状态、模型和参数后重试。',
   'provider request failed': '供应商请求失败，未能获取明确错误原因；请检查供应商状态、模型和参数后重试。',
   image_provider_failed: '图片供应商请求失败，请检查供应商状态、模型和密钥配置后重试。',
+  fallback_reference_limit: '切换备用供应商失败：备用供应商最多支持 3 张参考图。',
   image_outputs_unavailable: '图片任务没有可保存的输出结果，请等待任务完成或重新生成。',
   video_outputs_unavailable: '视频任务没有可保存的输出结果，请等待任务完成或重新生成。',
 };

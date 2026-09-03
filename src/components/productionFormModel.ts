@@ -4,6 +4,7 @@ import type { VideoCapability } from '@/lib/workspace/production/video-capabilit
 import { validateVideoCapability } from '@/lib/workspace/production/video-capabilities';
 
 export type PromptMode = 'manual' | 'asset-template-child-prompt';
+export type ProductionAssetSelection = { id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' };
 
 export type ProductionFormValues = {
   prompt: string;
@@ -31,6 +32,8 @@ export type ProductionFormValues = {
   referenceVideoAssetIds?: readonly string[];
   referenceAudioAssetIds?: readonly string[];
   productImageAssetIds?: readonly string[];
+  /** The exact order in which reference assets were selected in the picker. */
+  referenceAssetOrder?: readonly ProductionAssetSelection[];
   referenceImageCount?: number;
   referenceVideoCount?: number;
   referenceAudioCount?: number;
@@ -115,6 +118,7 @@ export function buildGenerationPayload(mode: 'image' | 'prompt' | 'video', value
     referenceVideoAssetIds: [...(values.referenceVideoAssetIds ?? [])],
     referenceAudioAssetIds: [...(values.referenceAudioAssetIds ?? [])],
     productImageAssetIds: [...(values.productImageAssetIds ?? [])],
+    referenceAssetOrder: (values.referenceAssetOrder ?? []).map((item) => ({ id: item.id, kind: item.kind })),
     ...(values.pid?.trim() ? { pid: values.pid.trim() } : {}),
   };
 }

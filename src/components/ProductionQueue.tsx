@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { CalendarDays, CheckCircle2, CircleAlert, Film, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { CalendarDays, CheckCircle2, CircleAlert, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatProviderError } from '@/lib/providers/errorMessages';
 
 type QueueTask = {
@@ -21,7 +21,7 @@ type QueueTask = {
   providerTaskId?: string;
 };
 
-type Props = { accountId: string; mode: 'video' | 'image' | 'prompt' };
+type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string };
 type QueueTab = 'all' | 'active' | 'completed' | 'failed';
 
 const labels: Record<string, string> = {
@@ -54,14 +54,17 @@ export function promptReviewHref(accountId: string, mode: Props['mode'], taskId:
   return mode === 'prompt' ? restoreHref(accountId, mode, taskId) : `${reviewHref(accountId, mode, taskId)}#prompt`;
 }
 
-export function ProductionQueue({ accountId, mode }: Props) {
+export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate }: Props) {
+  const focusTaskId = requestedFocusTaskId;
+  const requestedDate = requestedQueueDate;
   const [tasks, setTasks] = useState<QueueTask[]>([]);
-  const [queueDate, setQueueDate] = useState(today());
+  const [queueDate, setQueueDate] = useState(() => requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : today());
   const [queueTab, setQueueTab] = useState<QueueTab>('all');
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [loadError, setLoadError] = useState('');
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
+  const focusAppliedRef = useRef<string | null>(null);
 
   async function load(options: { silent?: boolean } = {}) {
     const silent = options.silent === true;
@@ -91,6 +94,17 @@ export function ProductionQueue({ accountId, mode }: Props) {
     const timer = window.setInterval(() => void load({ silent: true }), 2000);
     return () => window.clearInterval(timer);
   }, [accountId, mode, queueDate]);
+
+  useEffect(() => {
+    if (!focusTaskId || loading || focusAppliedRef.current === focusTaskId) return;
+    const target = tasks.find((task) => task.id === focusTaskId);
+    if (!target) return;
+    focusAppliedRef.current = focusTaskId;
+    setQueueTab('all');
+    setFocusedTaskId(target.id);
+    const timer = window.setTimeout(() => document.getElementById(`queue-task-${target.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+    return () => window.clearTimeout(timer);
+  }, [focusTaskId, loading, tasks]);
 
   const dated = useMemo(
     () => tasks.filter((task) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(task.createdAt)) === queueDate),
@@ -125,7 +139,7 @@ export function ProductionQueue({ accountId, mode }: Props) {
         : await fetch(`/api/workspace/accounts/${encodeURIComponent(task.accountId)}/${endpoint}/${encodeURIComponent(task.id)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: actionName }) });
       const payload = await response.json().catch(() => null) as { success?: boolean; error?: string } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '队列操作失败');
-      setMessage(actionName === 'retry' ? '任务已重新进入队列' : actionName === 'save-inventory' ? '成品已存入素材资产' : actionName === 'delete' ? '任务已从生产队列删除' : '队列状态已更新');
+      setMessage(actionName === 'retry' ? '任务已重新进入队列' : actionName === 'delete' ? '任务已从生产队列删除' : '队列状态已更新');
       await load();
     } catch (error) {
       setMessage(formatProviderError(error instanceof Error ? error.message : '队列操作失败'));
@@ -154,7 +168,7 @@ export function ProductionQueue({ accountId, mode }: Props) {
           <div className="production-queue-actions">
              <Link href={reviewHref(task.accountId, mode, task.id)} className="queue-link">{mode === 'prompt' ? '恢复配置' : '审核'}</Link>
              {mode !== 'prompt' && <Link href={promptReviewHref(task.accountId, mode, task.id)} className="queue-link">提示词</Link>}
-            {mode !== 'prompt' && <>{['queued', 'prompting', 'submitting', 'submitted', 'running', 'processing'].includes(task.status) && <button type="button" onClick={() => void action(task, 'pause')}><Pause size={13} /> 暂停</button>}{task.status === 'paused' && <button type="button" onClick={() => void action(task, 'resume')}><Play size={13} /> 继续</button>}{task.status === 'completed' && !task.inventorySavedAt && <button type="button" onClick={() => void action(task, 'save-inventory')}><Film size={13} /> 存库</button>}</>}
+            {mode !== 'prompt' && <>{['queued', 'prompting', 'submitting', 'submitted', 'running', 'processing'].includes(task.status) && <button type="button" onClick={() => void action(task, 'pause')}><Pause size={13} /> 暂停</button>}{task.status === 'paused' && <button type="button" onClick={() => void action(task, 'resume')}><Play size={13} /> 继续</button>}</>}
              {mode !== 'prompt' && (task.status === 'failed' || task.status === 'cancelled') && <Link href={restoreHref(task.accountId, mode, task.id)} className="queue-link"><RotateCcw size={13} /> 恢复配置</Link>}
              {mode !== 'prompt' && <button type="button" onClick={() => void action(task, 'delete')} disabled={!['completed', 'failed', 'cancelled'].includes(task.status)} title={!['completed', 'failed', 'cancelled'].includes(task.status) ? '任务完成或失败后可删除' : '删除任务'}><Trash2 size={13} /> 删除</button>}
             {ACTIONABLE_ACTIVE_STATUSES.includes(task.status as (typeof ACTIONABLE_ACTIVE_STATUSES)[number]) && <button type="button" onClick={() => void action(task, 'cancel')}><Trash2 size={13} /> 取消</button>}

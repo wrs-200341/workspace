@@ -84,6 +84,7 @@ h1 { font-size:30px; line-height:1.15; margin:7px 0 0; letter-spacing:-.03em; }
 .asset-picker-option:hover { border-color:#b8c8ec; background:#f8faff; }
 .asset-picker-option.is-selected { border-color:#2e7a6c; box-shadow:0 0 0 2px rgba(46,122,108,.14); background:#f5fbf8; }
 .asset-picker-option input { grid-row:2; align-self:start; margin-top:2px; cursor:pointer; }
+.asset-picker-order { position:absolute; top:8px; left:8px; z-index:1; display:inline-flex; align-items:center; justify-content:center; min-width:24px; height:22px; padding:0 5px; border-radius:999px; background:#1e40af; color:#fff !important; font-size:11px !important; font-weight:700; line-height:1; box-shadow:0 1px 3px rgba(15,23,42,.2); }
 .asset-picker-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .asset-picker-image-preview { grid-column:1 / -1; width:136px; height:88px; max-width:100%; overflow:hidden; display:grid; place-items:center; background:#f4f1e9; border:1px solid #e3ded4; color:#9a9488; justify-self:start; }
 .asset-picker-image-preview img { width:100%; height:100%; object-fit:contain; display:block; background:#f4f1e9; }

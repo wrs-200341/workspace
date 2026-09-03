@@ -1,4 +1,4 @@
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, type ProviderId } from './config';
 
 // A 4K image response can legitimately contain several megabytes of Base64
@@ -605,7 +605,7 @@ export async function generateYuanAIImage(input: { model: string; prompt: string
     ? buildYuanAIImageEditFormData({
       model: input.model,
       prompt: input.prompt,
-      size: input.resolution === '4k' ? '4096x4096' : input.resolution === '2k' ? '2048x2048' : '1024x1024',
+      size: yuanAIImageSize(input.aspectRatio, input.resolution),
       references: fileReferences,
     })
     : buildYuanAIImagePayload({ ...input, referenceImages: references });

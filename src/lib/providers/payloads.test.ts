@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData } from './payloads';
 
 describe('provider payload contracts', () => {
   it('builds native Grok payloads with the historical reference image split', () => {
@@ -88,7 +88,15 @@ describe('provider payload contracts', () => {
       prompt: 'ultra detailed product hero',
       aspect_ratio: '1:1',
       resolution: '4k',
+      size: '2048x2048',
     });
+  });
+
+  it('maps YuanAI image ratios to non-square canvases', () => {
+    expect(yuanAIImageSize('9:16', '1k')).toBe('1024x1536');
+    expect(yuanAIImageSize('16:9', '2k')).toBe('3072x2048');
+    expect(yuanAIImageSize('9:16', '4k')).toBe('2160x3840');
+    expect(buildYuanAIImagePayload({ model: 'gpt-image-2', prompt: 'portrait', aspectRatio: '9:16', resolution: '4k', referenceImages: [] })).toEqual(expect.objectContaining({ aspect_ratio: '9:16', resolution: '4k', size: '2160x3840' }));
   });
 
   it('builds GPT-2999 chat-completions payloads', () => {
