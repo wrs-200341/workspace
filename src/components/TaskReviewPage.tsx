@@ -124,11 +124,13 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
       // kind-specific ids, so never render their video/audio ids as images.
       ...(referenceAssetIds.length || productImageAssetIds.length ? [] : genericAssetIds),
       ...stringArray(metadata.externalReferenceImages),
+      ...stringArray(metadata.referenceTokens).map((token) => `reference-token:${token}`),
     ];
     return [...new Set(values)];
   }, [metadata]);
   const referenceUrls = useMemo(() => references.map((reference) => {
     if (/^https?:\/\//i.test(reference)) return reference;
+    if (reference.startsWith('reference-token:')) return `/api/workspace/references/${encodeURIComponent(reference.slice('reference-token:'.length))}`;
     if (reference.startsWith('product-image:')) return `/api/workspace/product-images/preview?assetId=${encodeURIComponent(reference)}`;
     return `/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(reference)}`;
   }), [accountId, references]);
@@ -189,6 +191,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
 function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
 function ZoomableMedia({ src, alt, video = false }: { src: string; alt: string; video?: boolean }) {
   const [scale, setScale] = useState(1);
+  const [imageFailed, setImageFailed] = useState(false);
   const changeScale = useCallback((delta: number) => setScale((current) => Math.min(4, Math.max(1, Number((current + delta).toFixed(2))))), []);
   function onWheel(event: WheelEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -196,7 +199,7 @@ function ZoomableMedia({ src, alt, video = false }: { src: string; alt: string; 
   }
   const mediaStyle = video ? undefined : { transform: `scale(${scale})` };
   return <div className={`task-media-zoom ${video ? 'task-video-media' : ''}`} onWheel={video ? undefined : onWheel}>
-    {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} style={mediaStyle} /> : <img src={src} alt={alt} draggable={false} style={mediaStyle} />}
+    {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} style={mediaStyle} /> : imageFailed ? <div className="task-media-fallback" role="img" aria-label={`${alt}不可用`}>图片不可用</div> : <img src={src} alt={alt} draggable={false} style={mediaStyle} onError={() => setImageFailed(true)} />}
     <div className="task-zoom-controls" aria-label="预览缩放控制"><button type="button" className="icon-button" onClick={() => changeScale(-0.2)} disabled={scale <= 1} aria-label="缩小" title="缩小"><ZoomOut size={14} /></button><button type="button" className="icon-button" onClick={() => changeScale(0.2)} disabled={scale >= 4} aria-label="放大" title="放大"><ZoomIn size={14} /></button><button type="button" className="icon-button" onClick={() => setScale(1)} disabled={scale === 1} aria-label="重置缩放" title="重置缩放"><ResetZoom size={14} /></button></div>
   </div>;
 }
