@@ -3,28 +3,33 @@ import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { deleteProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { isProviderLiveEnabled } from '@/lib/providers/config';
-import { syncProviderTask } from '@/lib/providers/client';
+import { sanitizeProviderError, syncProviderTask } from '@/lib/providers/client';
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
-import { saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
+import { repairSavedVideoTaskInventory, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string; taskId: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id, taskId } = await params;
   if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  await repairSavedVideoTaskInventory([id]);
   const persisted = getProviderTask(taskId);
   if (persisted && persisted.accountId === id && persisted.mode === 'video') {
     let current = persisted;
-    if (persisted.providerTaskId && isProviderLiveEnabled(persisted.provider)) {
+    const legacyGenericError = persisted.error === 'provider request failed' || persisted.error === 'provider_request_failed';
+    if (persisted.providerTaskId && isProviderLiveEnabled(persisted.provider) && (
+      ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(persisted.status) ||
+      (persisted.status === 'failed' && legacyGenericError)
+    )) {
       try {
         const status = await syncProviderTask(persisted.provider, persisted.providerTaskId);
         current = updateProviderTask(taskId, { status: status.status === 'unknown' ? persisted.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? persisted.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error }) ?? persisted;
       } catch (error) {
         const message = error instanceof Error ? error.message : '';
         if (message.startsWith('provider_')) {
-          current = updateProviderTask(taskId, { status: 'failed', progress: 100, error: message }) ?? persisted;
+          current = updateProviderTask(taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(message) }) ?? persisted;
         }
       }
     }
@@ -40,6 +45,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (auth instanceof Response) return auth;
   const { id, taskId } = await params;
   if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  await repairSavedVideoTaskInventory([id]);
   const body = await request.json().catch(() => ({}));
   const action = body?.action as TaskAction;
   if (!['retry', 'cancel', 'save-inventory', 'pause', 'resume'].includes(action)) return NextResponse.json({ success: false, error: 'invalid_task_action' }, { status: 400 });

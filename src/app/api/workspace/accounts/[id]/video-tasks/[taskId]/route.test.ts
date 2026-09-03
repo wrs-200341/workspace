@@ -19,6 +19,7 @@ vi.mock('@/lib/providers/config', () => ({ isProviderLiveEnabled: () => false })
 vi.mock('@/lib/providers/client', () => ({ syncProviderTask: vi.fn() }));
 vi.mock('@/lib/workspace/serverTasks', () => ({ getServerWorkspaceTasks: vi.fn(() => []) }));
 vi.mock('@/lib/workspace/taskActions', () => ({ applyTaskAction: vi.fn(), }));
+vi.mock('@/lib/workspace/videoInventory', () => ({ repairSavedVideoTaskInventory: vi.fn().mockResolvedValue(0), saveVideoTaskOutputsToAssets: vi.fn() }));
 
 import { DELETE } from './route';
 

@@ -3,10 +3,12 @@
 import Link from 'next/link';
 import { CalendarDays, CheckCircle2, CircleAlert, Film, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { formatProviderError } from '@/lib/providers/errorMessages';
 
 type QueueTask = {
   id: string;
   accountId: string;
+  accountName?: string;
   mode: 'video' | 'image' | 'prompt';
   title: string;
   model: string;
@@ -126,7 +128,7 @@ export function ProductionQueue({ accountId, mode }: Props) {
       setMessage(actionName === 'retry' ? '任务已重新进入队列' : actionName === 'save-inventory' ? '成品已存入素材资产' : actionName === 'delete' ? '任务已从生产队列删除' : '队列状态已更新');
       await load();
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : '队列操作失败');
+      setMessage(formatProviderError(error instanceof Error ? error.message : '队列操作失败'));
     }
   }
 
@@ -146,9 +148,9 @@ export function ProductionQueue({ accountId, mode }: Props) {
         {loading && <div className="asset-empty">正在加载队列…</div>}
         {!loading && !loadError && !visible.length && <div className="asset-empty">{queueTab === 'all' ? '当天暂无生产任务' : queueTab === 'active' ? '暂无进行中的任务' : queueTab === 'completed' ? '暂无已完成任务' : '暂无失败任务'}</div>}
         {visible.map((task) => <article className={`production-queue-item ${focusedTaskId === task.id ? 'queue-item-focused' : ''}`} id={`queue-task-${task.id}`} key={task.id}>
-          <div className="production-queue-item-top"><div><strong>{task.title}</strong><span>{task.provider || task.model} · {new Date(task.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></div><span className={`status ${task.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{labels[task.status] || task.status}</span></div>
+          <div className="production-queue-item-top"><div><strong>{task.title}</strong>{task.accountName && <small className="queue-account-name">{task.accountName}</small>}<span>{task.provider || task.model} · {new Date(task.createdAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></div><span className={`status ${task.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{labels[task.status] || task.status}</span></div>
           <div className="production-queue-progress"><div className="progress-track"><span style={{ width: `${task.progress}%` }} /></div><span>{['processing', 'running', 'prompting', 'submitting', 'submitted'].includes(task.status) ? `生成中 · ${task.progress}%` : `${task.progress}%`}</span>{task.inventorySavedAt && <span className="queue-inventory"><CheckCircle2 size={13} /> 已入库</span>}{task.status === 'completed' && !task.inventorySavedAt && <span className="queue-unsaved">未入库</span>}</div>
-          {task.error && <div className="queue-error"><CircleAlert size={13} />{task.error}</div>}
+          {task.error && <div className="queue-error"><CircleAlert size={13} />{formatProviderError(task.error)}</div>}
           <div className="production-queue-actions">
              <Link href={reviewHref(task.accountId, mode, task.id)} className="queue-link">{mode === 'prompt' ? '恢复配置' : '审核'}</Link>
              {mode !== 'prompt' && <Link href={promptReviewHref(task.accountId, mode, task.id)} className="queue-link">提示词</Link>}

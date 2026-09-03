@@ -13,6 +13,7 @@ export function providerTaskToWorkspaceTask(task: ProviderTask): WorkspaceTask {
   return {
     id: task.id,
     accountId: task.accountId,
+    ...(account?.name ? { accountName: account.name } : {}),
     pid: typeof metadata.pid === 'string' ? metadata.pid : 'pending',
     title,
     owner,

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { normalizeProviderResponse, submitVideo } from '@/lib/providers/client';
+import { normalizeProviderResponse, sanitizeProviderError, submitVideo } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
@@ -44,13 +44,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       ? input.seconds
       : undefined;
   const requestedModel = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : undefined;
-  // sd-mini was the historical label for Quality V4. Keep old clients
-  // compatible while routing all new work to the dedicated supplier.
-  const provider: VideoProvider = requestedProvider === 'grok-video' && requestedModel?.toLowerCase() === 'sd-mini' ? 'quality-v4' : requestedProvider;
+  // sd-mini is a native snumom (grok-video) model. Do not route it through
+  // Quality V4: that supplier does not expose the sd-mini model.
+  const provider: VideoProvider = requestedProvider;
   const config = getProviderConfig(provider);
   // `grok` is a historical UI/provider alias, not a model id accepted by
   // snumom. Resolve it to the configured model before submitting upstream.
-  const model = provider === 'quality-v4' && requestedModel?.toLowerCase() === 'sd-mini' ? config.model : provider === 'grok-video' && requestedModel === 'grok' ? config.model : requestedModel ?? config.model;
+  const model = provider === 'grok-video' && requestedModel === 'grok' ? config.model : requestedModel ?? config.model;
   const isSdMini = provider === 'grok-video' && model.toLowerCase() === 'sd-mini';
   // sd-mini requires seconds explicitly; unlike legacy providers, do not
   // silently inject the provider's first duration when the field is omitted.
@@ -125,6 +125,6 @@ async function submitVideoTask(input: { taskId: string; provider: VideoProvider;
     const updated = updateProviderTask(input.taskId, { status: status.status === 'unknown' ? 'queued' : status.status, progress: status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, metadata: { ...(current?.metadata ?? {}), execution: submitted.mode } });
     if (updated && submitted.mode === 'mock') void processMockProviderTask(input.taskId);
   } catch (error) {
-    updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: error instanceof Error ? error.message : 'provider_request_failed', metadata: { ...(getProviderTask(input.taskId)?.metadata ?? {}), execution: 'failed' } });
+    updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), metadata: { ...(getProviderTask(input.taskId)?.metadata ?? {}), execution: 'failed' } });
   }
 }

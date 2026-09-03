@@ -11,6 +11,8 @@ import { publishAssetReference } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
+import { repairSavedVideoTaskInventory } from '@/lib/workspace/videoInventory';
+import { listStoredAccounts } from '@/lib/workspace/accountStore';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -23,12 +25,23 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
   const tasks = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'video' } : { accountId: id, mode: 'video' }).filter((task) => !date || businessDate(task.createdAt) === date);
   await syncLiveVideoTasks(tasks);
+  const repairScope = auth.role === 'admin'
+    ? undefined
+    : ownerScope && ownerId
+      ? listStoredAccounts({ ownerId }).map((account) => account.id)
+      : [id];
+  await repairSavedVideoTaskInventory(repairScope);
   const refreshed = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'video' } : { accountId: id, mode: 'video' }).filter((task) => !date || businessDate(task.createdAt) === date);
   return NextResponse.json({ success: true, data: refreshed, tasks: refreshed });
 }
 
 async function syncLiveVideoTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
-  const active = tasks.filter((task) => task.provider && task.providerTaskId && ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(task.status) && isProviderLiveEnabled(task.provider as ProviderId));
+  const active = tasks.filter((task) => {
+    if (!task.provider || !task.providerTaskId || !isProviderLiveEnabled(task.provider as ProviderId)) return false;
+    const processing = ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(task.status);
+    const legacyGenericError = task.error === 'provider request failed' || task.error === 'provider_request_failed';
+    return processing || (task.status === 'failed' && legacyGenericError);
+  });
   await Promise.all(active.map(async (task) => {
     try {
       const status = await syncProviderTask(task.provider as ProviderId, task.providerTaskId!);
@@ -56,9 +69,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       ? body.seconds
       : undefined;
   const requestedModel = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined;
-  const provider: ProviderId = requestedProvider === 'grok-video' && requestedModel?.toLowerCase() === 'sd-mini' ? 'quality-v4' : requestedProvider;
+  // sd-mini is handled by snumom's grok-video endpoint, not Quality V4.
+  const provider: ProviderId = requestedProvider;
   const config = getProviderConfig(provider);
-  const model = provider === 'quality-v4' && requestedModel?.toLowerCase() === 'sd-mini' ? config.model : provider === 'grok-video' && requestedModel === 'grok' ? config.model : requestedModel ?? config.model;
+  const model = provider === 'grok-video' && requestedModel === 'grok' ? config.model : requestedModel ?? config.model;
   const isSdMini = provider === 'grok-video' && model.toLowerCase() === 'sd-mini';
   const duration = rawDuration !== undefined ? Math.round(rawDuration) : (isSdMini ? undefined : config.supports.durations?.[0] ?? 10);
   const aspectRatio = typeof body.aspectRatio === 'string' && body.aspectRatio.trim()
@@ -83,6 +97,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_asset_path_invalid', 'reference_asset_file_invalid', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];
-    return NextResponse.json({ success: false, error: known.includes(message) ? message : 'provider_request_failed' }, { status: 400 });
+    const responseError = known.includes(message) || message.startsWith('provider_') ? message : 'provider_request_failed';
+    const status = responseError.startsWith('provider_') ? 502 : 400;
+    return NextResponse.json({ success: false, error: responseError }, { status });
   }
 }

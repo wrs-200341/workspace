@@ -12,7 +12,7 @@ const MAX_REDIRECTS = 3;
 const MAX_IMAGE_BYTES = 100 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
 
-type LookupAddress = { address: string; family: number };
+export type LookupAddress = { address: string; family: number };
 type ImportDependencies = {
   fetcher?: typeof fetch;
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
@@ -62,7 +62,7 @@ function isPrivateAddress(address: string): boolean {
   return true;
 }
 
-async function assertPublicTarget(url: string, lookup: (hostname: string) => Promise<LookupAddress[]>): Promise<URL> {
+export async function assertPublicTarget(url: string, lookup: (hostname: string) => Promise<LookupAddress[]>): Promise<URL> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash || (parsed.port && parsed.port !== '443')) throw new Error('image_url_invalid');
   const hostname = parsed.hostname.toLowerCase();

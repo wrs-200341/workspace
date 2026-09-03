@@ -3,6 +3,7 @@ import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { assertAssetAccountId, createPromptAsset, createUploadedAsset, listAssets, type AssetKind } from '@/lib/workspace/assetStore';
 import { importExternalImageAsset } from '@/lib/workspace/externalImageImport';
+import { repairSavedVideoTaskInventory } from '@/lib/workspace/videoInventory';
 
 const kinds: AssetKind[] = ['prompt', 'image', 'inventory-video', 'audio'];
 
@@ -18,6 +19,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (kind && !kinds.includes(kind)) return NextResponse.json({ success: false, error: 'invalid_asset_kind' }, { status: 400 });
   if (category && category !== 'image' && category !== 'video') return NextResponse.json({ success: false, error: 'prompt_category_invalid' }, { status: 400 });
   try {
+    if (kind === 'inventory-video') await repairSavedVideoTaskInventory(auth.role === 'admin' ? undefined : [accountId]);
     const assets = listAssets(accountId, kind ?? undefined).filter((asset) => !category || (asset.category ?? 'video') === category);
     return NextResponse.json({ success: true, data: { accountId, assets } });
   } catch (error) {

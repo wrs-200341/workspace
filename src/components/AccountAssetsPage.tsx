@@ -5,6 +5,7 @@ import { listStoredAccounts } from '@/lib/workspace/accountStore';
 import { listAssets, type AssetKind } from '@/lib/workspace/assetStore';
 import { ProductImageAssets } from './ProductImageAssets';
 import { AccountAssetLibrary } from './AccountAssetLibrary';
+import { repairSavedVideoTaskInventory } from '@/lib/workspace/videoInventory';
 
 export type ImageAssetTab = 'materials' | 'products';
 export type PromptAssetTab = 'image' | 'video';
@@ -38,7 +39,8 @@ function sectionDescription(section: AssetKind): string {
   return '口播、环境声和配乐素材。';
 }
 
-export function AccountAssetsPage({ accountId, section = 'prompt', imageTab = 'materials', promptTab = 'video' }: Props) {
+export async function AccountAssetsPage({ accountId, section = 'prompt', imageTab = 'materials', promptTab = 'video' }: Props) {
+  if (section === 'inventory-video') await repairSavedVideoTaskInventory([accountId]);
   const workspaceAccount = listStoredAccounts().find((item) => item.id === accountId) ?? getWorkspaceAccountById(accountId);
   // Account assets belong to the workspace account store.  Do not fall back
   // to the legacy mock account catalogue: those records contain presentation

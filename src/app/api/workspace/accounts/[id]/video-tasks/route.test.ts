@@ -23,6 +23,7 @@ vi.mock('@/lib/providers/taskStore', () => ({ createProviderTask: vi.fn() }));
 vi.mock('@/lib/providers/config', () => ({ getProviderConfig: vi.fn(), }));
 vi.mock('@/lib/providers/client', () => ({ normalizeProviderResponse: vi.fn(), submitVideo: vi.fn() }));
 vi.mock('@/lib/providers/validation', () => ({ validateGenerationRequest: vi.fn() }));
+vi.mock('@/lib/workspace/videoInventory', () => ({ repairSavedVideoTaskInventory: vi.fn().mockResolvedValue(0) }));
 
 import { GET } from './route';
 

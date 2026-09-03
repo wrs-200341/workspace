@@ -19,6 +19,7 @@ import {
 } from './productionFormModel';
 import type { ProductionRestoreConfig } from '@/lib/workspace/productionRestore';
 import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
+import { formatProviderError } from '@/lib/providers/errorMessages';
 
 type Props = { accountId: string; mode: 'image' | 'prompt' | 'video' };
 type PromptAsset = { id: string; name: string; content: string; category?: 'image' | 'video'; accountName?: string };
@@ -52,6 +53,7 @@ export function modelIdForVideoProvider(provider: ProviderId, currentModelId?: s
   }
   if (provider === 'mgrouter-grok-video') return currentModelId === 'grok-imagine-video-1.5-preview' ? currentModelId : 'grok-imagine-video-1.5';
   if (provider === 'grok-video') {
+    if (currentModelId === 'sd-mini') return currentModelId;
     return currentModelId === 'grok-video-1.5（按秒）' || currentModelId === 'grok-video-1.5'
       ? 'grok-video-1.5（按秒）'
       : 'grok-imagine-video-1.5（按次）';
@@ -382,7 +384,7 @@ export function ProductionForm({ accountId, mode }: Props) {
         : nextModelId === 'quality-v4'
           ? 'quality-v4'
         : nextModelId === 'sd-mini'
-          ? 'quality-v4'
+          ? 'grok-video'
         : nextModelId === 'grok-video' || nextModelId === 'grok-imagine-video-1.5' || nextModelId === 'grok-imagine-video-1.5-preview'
           ? 'mgrouter-grok-video'
         : 'grok-video';
@@ -609,12 +611,10 @@ function providerModelId(provider: ProviderId): string | undefined {
 
 export function providersForVideoModel(providers: ReadonlyArray<ProviderCatalogEntry>, modelId: string) {
   if (modelId.startsWith('wan3.0-prime-')) return providers.filter((item) => item.id === 'wan3-video');
-  if (modelId === 'quality-v4' || modelId === 'sd-mini') {
-    // Quality V4 is an independent supplier.  Never silently fall back to
-    // snumom for the historical sd-mini alias: doing so submits an invalid
-    // model to Grok and makes the UI appear connected when it is not.
+  if (modelId === 'quality-v4') {
     return providers.filter((item) => item.id === 'quality-v4');
   }
+  if (modelId === 'sd-mini') return providers.filter((item) => item.id === 'grok-video');
   if (modelId === 'omni-fast-no-water') return providers.filter((item) => item.id === 'oairegbox-omni');
   if (modelId.startsWith('minimax-h3-')) return providers.filter((item) => item.id === 'minimax-h3');
   if (modelId === 'grok-video' || modelId === 'grok-imagine-video-1.5' || modelId === 'grok-imagine-video-1.5-preview') {
@@ -667,9 +667,12 @@ function formatProductionError(code: string): string {
     provider_model_unavailable: '供应商当前没有可用的模型通道，请稍后重试或联系供应商',
     provider_upstream_failed: '供应商上游生成失败，任务未产出内容（如已预扣费请以供应商账单为准）',
     provider_invalid_request: '供应商拒绝了请求参数，请检查模型能力对应的时长、比例和分辨率',
+    provider_content_policy: '供应商内容审核拒绝了本次请求，请修改提示词后重试',
+    provider_reference_rejected: '供应商内容审核拒绝了参考图，请更换参考图后重试',
+    provider_response_too_large: '供应商返回内容过大，常见于 4K 图片结果；请重试或暂时选择较低分辨率',
     mgrouter_reference_audio_unsupported: 'MGRouter 当前仅支持内置 voice_id，不支持上传音频文件；请移除音频参考后重试',
     image_provider_failed: '图片供应商请求失败，请查看供应商状态或密钥配置',
     provider_request_failed: '供应商请求失败，请稍后重试',
   };
-  return messages[code] ?? code;
+  return messages[code] || formatProviderError(code) || code;
 }

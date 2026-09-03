@@ -3,6 +3,7 @@ export type WorkspaceTaskStatus = 'draft' | 'queued' | 'prompting' | 'submitting
 export type WorkspaceTask = {
   id: string;
   accountId: string;
+  accountName?: string;
   pid: string;
   title: string;
   owner: string;

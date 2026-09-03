@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft, CircleAlert, Download, Film, LoaderCircle, PackageCheck, RotateCcw, ZoomIn, ZoomOut, RotateCcw as ResetZoom } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState, type WheelEvent } from 'react';
+import { ArrowLeft, CircleAlert, Download, Film, LoaderCircle, PackageCheck, RotateCcw } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 type ReviewTask = {
   id: string;
@@ -202,16 +202,8 @@ function ReferenceThumbnail({ src, index, active, onSelect }: { src: string; ind
   </button>;
 }
 function ZoomableMedia({ src, alt, video = false }: { src: string; alt: string; video?: boolean }) {
-  const [scale, setScale] = useState(1);
   const [imageFailed, setImageFailed] = useState(false);
-  const changeScale = useCallback((delta: number) => setScale((current) => Math.min(4, Math.max(1, Number((current + delta).toFixed(2))))), []);
-  function onWheel(event: WheelEvent<HTMLDivElement>) {
-    event.preventDefault();
-    changeScale(event.deltaY < 0 ? 0.2 : -0.2);
-  }
-  const mediaStyle = video ? undefined : { transform: `scale(${scale})` };
-  return <div className={`task-media-zoom ${video ? 'task-video-media' : ''}`} onWheel={video ? undefined : onWheel}>
-    {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} style={mediaStyle} /> : imageFailed ? <div className="task-media-fallback" role="img" aria-label={`${alt}不可用`}>图片不可用</div> : <img src={src} alt={alt} draggable={false} style={mediaStyle} onError={() => setImageFailed(true)} />}
-    <div className="task-zoom-controls" aria-label="预览缩放控制"><button type="button" className="icon-button" onClick={() => changeScale(-0.2)} disabled={scale <= 1} aria-label="缩小" title="缩小"><ZoomOut size={14} /></button><button type="button" className="icon-button" onClick={() => changeScale(0.2)} disabled={scale >= 4} aria-label="放大" title="放大"><ZoomIn size={14} /></button><button type="button" className="icon-button" onClick={() => setScale(1)} disabled={scale === 1} aria-label="重置缩放" title="重置缩放"><ResetZoom size={14} /></button></div>
+  return <div className={`task-media-zoom ${video ? 'task-video-media' : ''}`}>
+    {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} /> : imageFailed ? <div className="task-media-fallback" role="img" aria-label={`${alt}不可用`}>图片不可用</div> : <img src={src} alt={alt} draggable={false} onError={() => setImageFailed(true)} />}
   </div>;
 }

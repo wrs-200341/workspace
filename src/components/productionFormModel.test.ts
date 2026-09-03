@@ -4,7 +4,7 @@ import { buildGenerationPayload, normalizeReferenceList, validateProductionInput
 import { modelIdForVideoProvider, providerOptionsForVideoModel, providersForVideoModel, VIDEO_MODELS, videoModelsForProvider } from './ProductionForm';
 
 describe('production form historical fields', () => {
-  it('lists Quality V4 as an independent model and routes the legacy sd-mini alias to it', () => {
+  it('lists Quality V4 independently and routes sd-mini through snumom Grok', () => {
     expect(VIDEO_MODELS).toEqual(expect.arrayContaining([{ id: 'quality-v4', label: 'Quality V4' }]));
     const providers = providersForVideoModel([
       { id: 'grok-video', name: 'Grok / snumom', kind: 'video', model: 'grok', baseUrl: 'https://snumom.com/v1', liveEnv: 'GROK_VIDEO_API_KEY', supports: { referenceImages: 7, referenceAudios: 0, ratios: [], resolutions: [] } },
@@ -13,7 +13,10 @@ describe('production form historical fields', () => {
     ], 'quality-v4');
     expect(providers.map((item) => item.id)).toEqual(['quality-v4']);
     expect(videoModelsForProvider('quality-v4').map((item) => item.id)).toEqual(['quality-v4']);
-    expect(modelIdForVideoProvider('quality-v4', 'sd-mini')).toBe('quality-v4');
+    expect(providersForVideoModel([
+      { id: 'grok-video', name: 'Grok / snumom', kind: 'video', model: 'grok', baseUrl: 'https://snumom.com/v1', liveEnv: 'GROK_VIDEO_API_KEY', supports: { referenceImages: 7, referenceAudios: 0, ratios: [], resolutions: [] } },
+    ], 'sd-mini').map((item) => item.id)).toEqual(['grok-video']);
+    expect(modelIdForVideoProvider('grok-video', 'sd-mini')).toBe('sd-mini');
   });
 
   it('keeps supplier-specific Grok model ids isolated', () => {

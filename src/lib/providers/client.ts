@@ -1,7 +1,9 @@
 import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, type ProviderId } from './config';
 
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+// A 4K image response can legitimately contain several megabytes of Base64
+// JSON. Keep a bounded limit, but do not reject normal 4K generations.
+const MAX_RESPONSE_BYTES = 80 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 25_000;
 // Image generation endpoints may spend several minutes rendering an image.
 // Keep the short timeout for task submission/status calls, but allow image
@@ -11,6 +13,7 @@ const IMAGE_GENERATION_TIMEOUT_MS = 15 * 60 * 1000;
 // especially when the gateway performs reasoning before returning text.
 const PROMPT_GENERATION_TIMEOUT_MS = 90 * 1000;
 const MAX_VIDEO_CONTENT_BYTES = 200 * 1024 * 1024;
+const MAX_ERROR_RESPONSE_BYTES = 1 * 1024 * 1024;
 
 export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' | 'content', env: Readonly<Record<string, string | undefined>> = process.env): string {
   const base = getProviderConfig(id, env).baseUrl.replace(/\/$/, '');
@@ -191,8 +194,8 @@ export function normalizeProviderResponse(_provider: ProviderId, payload: unknow
     : normalizedStatus;
   const progress = status === 'completed' ? 100 : clampProgress(rawProgress ?? (status === 'running' ? 1 : 0));
   const hasError = status === 'failed' || Boolean(data?.error || root?.error);
-  const errorCode = firstString(data, ['error_code', 'errorCode', 'code']) ?? firstString(root, ['error_code', 'errorCode', 'code']);
-  const normalizedError = normalizeProviderErrorCode(errorCode);
+  const errorDetails = extractProviderErrorDetails(data, root);
+  const normalizedError = normalizeProviderErrorCode(errorDetails.code, errorDetails.message);
   return {
     ...(providerTaskId ? { providerTaskId } : {}),
     status,
@@ -228,13 +231,35 @@ function collectMGRouterVideoPaths(value: unknown, output: string[] = []): strin
   return output;
 }
 
-function normalizeProviderErrorCode(code: string | undefined): string {
-  const normalized = code?.toLowerCase() ?? '';
-  if (normalized.includes('invalid_token') || normalized.includes('unauthorized')) return 'provider_unauthorized';
-  if (normalized.includes('model_not_found')) return 'provider_model_unavailable';
-  if (normalized.includes('task_failed') || normalized.includes('upstream')) return 'provider_upstream_failed';
+function normalizeProviderErrorCode(code: string | undefined, message?: string): string {
+  const normalized = `${code ?? ''} ${message ?? ''}`.toLowerCase();
+  if (normalized.includes('image_rejected') || normalized.includes('reference_rejected')) return 'provider_reference_rejected';
+  if (normalized.includes('content_policy') || normalized.includes('content review') || normalized.includes('content_review')) return 'provider_content_policy';
+  if (normalized.includes('invalid_token') || normalized.includes('invalid_api_key') || normalized.includes('unauthorized')) return 'provider_unauthorized';
+  if (normalized.includes('model_not_found') || normalized.includes('no available channel')) return 'provider_model_unavailable';
+  if (normalized.includes('task_failed') || normalized.includes('upstream') || normalized.includes('fail_to_fetch_task')) return 'provider_upstream_failed';
   if (normalized.includes('invalid_request') || normalized.includes('invalid_json')) return 'provider_invalid_request';
+  if (normalized.includes('failed') || normalized.includes('failure') || normalized.includes('失败') || normalized.includes('退还')) return 'provider_upstream_failed';
   return sanitizeProviderError('provider response error');
+}
+
+function extractProviderErrorDetails(
+  data: Record<string, unknown> | undefined,
+  root: Record<string, unknown> | undefined,
+): { code?: string; message?: string } {
+  const candidates: unknown[] = [data?.error, root?.error, data, root];
+  let code: string | undefined;
+  let message: string | undefined;
+  for (const candidate of candidates) {
+    const record = asRecord(candidate);
+    if (record) {
+      code ??= firstString(record, ['error_code', 'errorCode', 'code', 'type']);
+      message ??= firstString(record, ['message', 'detail', 'error_message', 'errorMessage']);
+    } else if (typeof candidate === 'string' && !message) {
+      message = candidate;
+    }
+  }
+  return { code, message };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -300,7 +325,12 @@ function collectBase64(value: unknown, output: string[] = []): string[] {
   return output;
 }
 
-export function sanitizeProviderError(_message: string): string { return 'provider request failed'; }
+export function sanitizeProviderError(message: string): string {
+  const normalized = message.trim();
+  // Preserve stable machine-readable codes for UI translation, but never
+  // persist arbitrary upstream text that may contain URLs or credentials.
+  return /^[a-z][a-z0-9_]{2,64}$/.test(normalized) ? normalized : 'provider request failed';
+}
 
 /**
  * Convert a supplier HTTP error envelope into a stable, non-sensitive code.
@@ -312,15 +342,17 @@ export function sanitizeProviderError(_message: string): string { return 'provid
 async function providerHttpError(response: Response): Promise<Error> {
   let code = `provider_${response.status}`;
   try {
-    const text = await response.text();
+    const text = await readTextLimited(response, MAX_ERROR_RESPONSE_BYTES);
     const payload = JSON.parse(text) as Record<string, unknown>;
     const nested = payload.error && typeof payload.error === 'object' ? payload.error as Record<string, unknown> : undefined;
     const upstreamCode = String(nested?.code ?? payload.code ?? '').toLowerCase();
     const upstreamMessage = String(nested?.message ?? payload.message ?? '').toLowerCase();
-    if (response.status === 401 || upstreamCode.includes('invalid_token') || upstreamMessage.includes('invalid token')) code = 'provider_unauthorized';
+    if (response.status === 401 || upstreamCode.includes('invalid_token') || upstreamCode.includes('invalid_api_key') || upstreamMessage.includes('invalid token')) code = 'provider_unauthorized';
+    else if (upstreamCode.includes('image_rejected') || upstreamCode.includes('reference_rejected')) code = 'provider_reference_rejected';
+    else if (upstreamCode.includes('content_policy') || upstreamCode.includes('content_review') || upstreamMessage.includes('content review')) code = 'provider_content_policy';
     else if (upstreamCode.includes('model_not_found') || upstreamMessage.includes('no available channel')) code = 'provider_model_unavailable';
-    else if (upstreamCode.includes('fail_to_fetch_task') || upstreamCode.includes('upstream_task_failed')) code = 'provider_upstream_failed';
-    else if (upstreamCode.includes('invalid_request') || upstreamCode.includes('invalid_json')) code = 'provider_invalid_request';
+    else if (upstreamCode.includes('fail_to_fetch_task') || upstreamCode.includes('upstream_task_failed') || upstreamMessage.includes('fail to fetch task')) code = 'provider_upstream_failed';
+    else if (upstreamCode.includes('invalid_request') || upstreamCode.includes('invalid_json') || upstreamMessage.includes('invalid request') || upstreamMessage.includes('invalid json')) code = 'provider_invalid_request';
   } catch { /* keep the HTTP status code */ }
   return new Error(code);
 }
@@ -328,9 +360,37 @@ async function providerHttpError(response: Response): Promise<Error> {
 async function readJsonLimited(response: Response): Promise<unknown> {
   const contentLength = Number(response.headers.get('content-length') || 0);
   if (contentLength > MAX_RESPONSE_BYTES) throw new Error('provider_response_too_large');
-  const text = await response.text();
-  if (text.length > MAX_RESPONSE_BYTES) throw new Error('provider_response_too_large');
+  const text = await readTextLimited(response, MAX_RESPONSE_BYTES);
   try { return JSON.parse(text); } catch { throw new Error('provider_invalid_json'); }
+}
+
+async function readTextLimited(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error('provider_response_too_large');
+    return text;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const chunks: string[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (!next.value?.byteLength) continue;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('provider_response_too_large');
+      }
+      chunks.push(decoder.decode(next.value, { stream: true }));
+    }
+    chunks.push(decoder.decode());
+  } finally {
+    reader.releaseLock();
+  }
+  return chunks.join('');
 }
 
 async function requestProvider(url: string, apiKey: string, body: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {

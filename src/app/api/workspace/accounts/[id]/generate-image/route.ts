@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { generateMGRouterImage, generateYuanAIImage, generatePomoAIImage, normalizeProviderResponse } from '@/lib/providers/client';
+import { generateMGRouterImage, generateYuanAIImage, generatePomoAIImage, normalizeProviderResponse, sanitizeProviderError } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
@@ -99,7 +99,7 @@ async function submitImageTask(input: { accountId: string; taskId: string; provi
     }
   } catch (error) {
     const current = getProviderTask(input.taskId);
-    updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: error instanceof Error ? error.message : 'image_provider_failed', metadata: { ...(current?.metadata ?? {}), execution: 'failed' } });
+    updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), metadata: { ...(current?.metadata ?? {}), execution: 'failed' } });
   }
 }
 
