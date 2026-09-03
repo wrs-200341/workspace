@@ -60,6 +60,27 @@ Invoke-RestMethod http://127.0.0.1:3000/api/health
 - npm 缓存：`D:\all_projects\.npm-cache`
 - SQLite（预留）：`D:\all_projects\workspace\data\workspace.db`
 
+## GitHub 版本管理
+
+此项目已绑定 GitHub 私有仓库：
+
+```text
+https://github.com/wrs-200341/workspace.git
+```
+
+约定每次代码或文档变更完成后，按以下顺序执行：
+
+```powershell
+npm run typecheck
+npm test -- --run
+npm run build
+git add <changed-files>
+git commit -m "<conventional commit message>"
+git push origin main
+```
+
+`.env.local`、`data/`、`logs/`、构建缓存和历史对话原文均已加入 `.gitignore`，只保留在本机 D 盘，不上传到 GitHub。
+
 `src/lib/storagePaths.ts` 会拒绝 C 盘和目录穿越路径；未来新增持久化代码必须通过该模块生成路径。
 
 ## 账号控制
