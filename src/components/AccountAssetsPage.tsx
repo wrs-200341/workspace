@@ -40,7 +40,10 @@ function sectionDescription(section: AssetKind): string {
 }
 
 export async function AccountAssetsPage({ accountId, section = 'prompt', imageTab = 'materials', promptTab = 'video' }: Props) {
-  if (section === 'inventory-video') await repairSavedVideoTaskInventory([accountId]);
+  // Inventory repair may need to download a provider result. Do not block
+  // route rendering on that remote work; the library's client refresh will
+  // pick up repaired assets once the background pass completes.
+  if (section === 'inventory-video') void repairSavedVideoTaskInventory([accountId]);
   const workspaceAccount = listStoredAccounts().find((item) => item.id === accountId) ?? getWorkspaceAccountById(accountId);
   // Account assets belong to the workspace account store.  Do not fall back
   // to the legacy mock account catalogue: those records contain presentation

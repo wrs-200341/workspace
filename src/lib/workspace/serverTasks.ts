@@ -1,11 +1,12 @@
 import { listProviderTasks, type ProviderTask } from '@/lib/providers/taskStore';
 import { getWorkspaceAccountById } from './data';
+import type { WorkspaceAccount } from './data';
 import { listStoredAccounts } from './accountStore';
 import { getWorkspaceTasks, type WorkspaceTask } from './tasks';
 import { taskNameForInventory } from './inventoryNaming';
 
-export function providerTaskToWorkspaceTask(task: ProviderTask): WorkspaceTask {
-  const account = getWorkspaceAccountById(task.accountId) ?? listStoredAccounts().find((candidate) => candidate.id === task.accountId);
+export function providerTaskToWorkspaceTask(task: ProviderTask, accountIndex?: ReadonlyMap<string, WorkspaceAccount>): WorkspaceTask {
+  const account = accountIndex?.get(task.accountId) ?? getWorkspaceAccountById(task.accountId) ?? listStoredAccounts().find((candidate) => candidate.id === task.accountId);
   const metadata = task.metadata ?? {};
   const owner = typeof metadata.ownerId === 'string' ? metadata.ownerId : account?.ownerId ?? 'operator-unassigned';
   const outputCount = task.outputUrls.length + task.outputBase64.length;
@@ -35,9 +36,12 @@ export function providerTaskToWorkspaceTask(task: ProviderTask): WorkspaceTask {
 }
 
 export function getServerWorkspaceTasks(filters: { ownerId?: string; accountId?: string; mode?: WorkspaceTask['mode'] } = {}): WorkspaceTask[] {
-  const persisted = listProviderTasks({ accountId: filters.accountId, mode: filters.mode }).map(providerTaskToWorkspaceTask);
+  // Build the account lookup once per request. The previous per-task fallback
+  // re-read accounts.json for every persisted task in an owner queue.
+  const accountIndex = new Map(listStoredAccounts().map((account) => [account.id, account]));
+  const persisted = listProviderTasks({ accountId: filters.accountId, mode: filters.mode }).map((task) => providerTaskToWorkspaceTask(task, accountIndex));
   const accountOwners = filters.ownerId
-    ? new Map(listStoredAccounts().map((account) => [account.id, account.ownerId]))
+    ? new Map([...accountIndex.values()].map((account) => [account.id, account.ownerId]))
     : undefined;
   if (accountOwners) {
     for (const task of persisted) {

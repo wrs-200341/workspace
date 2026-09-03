@@ -11,8 +11,11 @@ import { publishAssetReference } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
-import { repairSavedVideoTaskInventory } from '@/lib/workspace/videoInventory';
-import { listStoredAccounts } from '@/lib/workspace/accountStore';
+
+const SYNC_THROTTLE_MS = 10_000;
+const liveSyncInFlight = new Map<string, Promise<void>>();
+const liveSyncLastStartedAt = new Map<string, number>();
+let liveSyncQueue: Promise<void> = Promise.resolve();
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -24,32 +27,50 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const ownerId = ownerScope ? workspaceOwnerIdForUser(auth) ?? workspaceOwnerIdForAccount(id) : undefined;
   if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
   const tasks = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'video' } : { accountId: id, mode: 'video' }).filter((task) => !date || businessDate(task.createdAt) === date);
-  await syncLiveVideoTasks(tasks);
-  const repairScope = auth.role === 'admin'
-    ? undefined
-    : ownerScope && ownerId
-      ? listStoredAccounts({ ownerId }).map((account) => account.id)
-      : [id];
-  await repairSavedVideoTaskInventory(repairScope);
-  const refreshed = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'video' } : { accountId: id, mode: 'video' }).filter((task) => !date || businessDate(task.createdAt) === date);
-  return NextResponse.json({ success: true, data: refreshed, tasks: refreshed });
+  // Queue reads must stay fast. Provider synchronization is explicitly
+  // opt-in and runs in the background so an upstream provider cannot block
+  // the local queue response.
+  if (request.nextUrl.searchParams.get('sync') === '1') void syncLiveVideoTasks(tasks);
+  const queueTasks = tasks.map(toQueueTask);
+  return NextResponse.json({ success: true, data: queueTasks, tasks: queueTasks });
 }
 
-async function syncLiveVideoTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
+function toQueueTask<T extends Record<string, unknown>>(task: T) {
+  const { outputUrls: _outputUrls, outputBase64: _outputBase64, metadata: _metadata, providerResponse: _providerResponse, ...summary } = task;
+  return summary;
+}
+
+function syncLiveVideoTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
+  const run = liveSyncQueue.then(() => runLiveVideoTasks(tasks));
+  liveSyncQueue = run.catch(() => undefined);
+  return run;
+}
+
+async function runLiveVideoTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
   const active = tasks.filter((task) => {
     if (!task.provider || !task.providerTaskId || !isProviderLiveEnabled(task.provider as ProviderId)) return false;
     const processing = ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(task.status);
     const legacyGenericError = task.error === 'provider request failed' || task.error === 'provider_request_failed';
     return processing || (task.status === 'failed' && legacyGenericError);
   });
-  await Promise.all(active.map(async (task) => {
-    try {
-      const status = await syncProviderTask(task.provider as ProviderId, task.providerTaskId!);
-      updateProviderTask(task.id, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error });
-    } catch {
-      // Keep the last known local state on transient status failures.
-    }
-  }));
+  // A manual refresh should make progress on the visible queue without
+  // opening an upstream request for every historical task at once.
+  for (const task of active.slice(0, 4)) {
+    const key = `${task.provider}:${task.providerTaskId}`;
+    const now = Date.now();
+    if (liveSyncInFlight.has(key) || now - (liveSyncLastStartedAt.get(key) ?? 0) < SYNC_THROTTLE_MS) continue;
+    liveSyncLastStartedAt.set(key, now);
+    const run = (async () => {
+      try {
+        const status = await syncProviderTask(task.provider as ProviderId, task.providerTaskId!);
+        updateProviderTask(task.id, { status: status.status === 'unknown' ? task.status : status.status, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error });
+      } catch {
+        // Keep the last known local state on transient status failures.
+      }
+    })();
+    liveSyncInFlight.set(key, run);
+    try { await run; } finally { liveSyncInFlight.delete(key); }
+  }
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

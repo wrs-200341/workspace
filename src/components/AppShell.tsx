@@ -3,6 +3,7 @@
 import { BarChart3, Clapperboard, LayoutDashboard, LogOut, Menu, Settings2, Users, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { hasPermission, type AuthUser } from '@/lib/auth/policy';
 
 const nav = [
@@ -28,9 +29,9 @@ export function AppShell({ children, user }: { children: React.ReactNode; user?:
     <div className="layout">
       <aside className={`sidebar ${open ? 'open' : ''}`}>
         <div className="nav-label">Workspace</div>
-        <nav aria-label="主导航">{user && nav.filter(item => hasPermission(user.role, item.href === '/' ? 'dashboard' : item.href === '/workspace' ? 'workspace' : item.href === '/downstream' ? 'downstream' : 'assets')).map(({ label, href, icon: Icon }) => <a key={href} href={href} className={`nav-item ${pathname === href || (href !== '/' && pathname.startsWith(href)) ? 'active' : ''}`} onClick={() => setOpen(false)}><Icon size={17} strokeWidth={1.8} /><span>{label}</span></a>)}</nav>
+        <nav aria-label="主导航">{user && nav.filter(item => hasPermission(user.role, item.href === '/' ? 'dashboard' : item.href === '/workspace' ? 'workspace' : item.href === '/downstream' ? 'downstream' : 'assets')).map(({ label, href, icon: Icon }) => <Link key={href} href={href} className={`nav-item ${pathname === href || (href !== '/' && pathname.startsWith(href)) ? 'active' : ''}`} onClick={() => setOpen(false)}><Icon size={17} strokeWidth={1.8} /><span>{label}</span></Link>)}</nav>
         <div className="nav-label" style={{ marginTop:28 }}>System</div>
-        {user?.role === 'admin' && <a className="nav-item" href="/admin/accounts"><Settings2 size={17} strokeWidth={1.8} /><span>账号控制</span></a>}
+        {user?.role === 'admin' && <Link className="nav-item" href="/admin/accounts"><Settings2 size={17} strokeWidth={1.8} /><span>账号控制</span></Link>}
         <button className="nav-item"><Settings2 size={17} strokeWidth={1.8} /><span>同步与设置</span></button>
         <div className="nav-label" style={{ marginTop:28 }}>Today</div>
         <div style={{ margin:'12px', padding:'12px', background:'#f7f9fc', border:'1px solid #edf0f4', fontSize:12, color:'#6d778b', lineHeight:1.6 }}>数据按北京时间聚合<br /><strong style={{ color:'#172033' }}>{todayLabel || '—'}</strong></div>

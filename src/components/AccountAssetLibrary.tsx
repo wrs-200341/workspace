@@ -112,6 +112,27 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     setAssets(initialAssets);
   }, [initialAssets]);
 
+  useEffect(() => {
+    if (section !== 'inventory-video') return;
+    let cancelled = false;
+    let attempts = 0;
+
+    // Inventory repair runs in the background on the server. Refresh a few
+    // times after mount so repaired videos appear without a manual reload,
+    // while keeping the initial route response non-blocking.
+    const poll = async () => {
+      if (cancelled) return;
+      await refresh().catch(() => undefined);
+      attempts += 1;
+      if (!cancelled && attempts < 4) window.setTimeout(poll, 1500);
+    };
+    const timer = window.setTimeout(poll, 500);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [refresh, section]);
+
   const handleFiles = useCallback(async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
     if (!files.length || uploading) return;

@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { CalendarDays, CheckCircle2, CircleAlert, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
+import { CalendarDays, CheckCircle2, CircleAlert, Pause, Play, RefreshCw, RotateCcw, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatProviderError } from '@/lib/providers/errorMessages';
 
@@ -65,34 +65,45 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   const [loadError, setLoadError] = useState('');
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
   const focusAppliedRef = useRef<string | null>(null);
+  const requestRef = useRef<AbortController | null>(null);
+  const loadingRef = useRef(false);
 
-  async function load(options: { silent?: boolean } = {}) {
+  async function load(options: { silent?: boolean; sync?: boolean } = {}) {
     const silent = options.silent === true;
+    if (silent && loadingRef.current) return;
+    requestRef.current?.abort();
+    const controller = new AbortController();
+    requestRef.current = controller;
+    loadingRef.current = true;
     if (!silent) setLoading(true);
     setLoadError('');
     try {
-      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${taskEndpoint(mode)}?scope=owner&date=${encodeURIComponent(queueDate)}`, { cache: 'no-store' });
+      const sync = options.sync === true ? '&sync=1' : '';
+      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${taskEndpoint(mode)}?scope=owner&date=${encodeURIComponent(queueDate)}${sync}`, { cache: 'no-store', signal: controller.signal });
       const payload = await response.json().catch(() => null) as { success?: boolean; error?: string; data?: { tasks?: QueueTask[] } | QueueTask[]; tasks?: QueueTask[] } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '队列加载失败');
       const raw = Array.isArray(payload.data) ? payload.data : payload.data?.tasks ?? payload.tasks ?? [];
       const deduped = Array.from(new Map(raw.map((task) => [task.id, task])).values());
       setTasks(deduped.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)));
     } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       setLoadError(error instanceof Error ? error.message : '队列加载失败');
     } finally {
-      if (!silent) setLoading(false);
+      if (requestRef.current === controller) {
+        requestRef.current = null;
+        loadingRef.current = false;
+        if (!silent) setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
     void load();
-    // Poll frequently while a task is being submitted/processed so progress
-    // appears in the queue without waiting for a long spinner cycle. The
-    // endpoint remains lightweight (read-only, no provider call for mock
-    // tasks); a short interval also keeps live-provider status changes visible
-    // shortly after the provider updates them.
-    const timer = window.setInterval(() => void load({ silent: true }), 2000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => void load({ silent: true }), 8000);
+    return () => {
+      window.clearInterval(timer);
+      requestRef.current?.abort();
+    };
   }, [accountId, mode, queueDate]);
 
   useEffect(() => {
@@ -150,7 +161,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
     <section className="panel production-queue-panel">
       <header className="production-queue-header">
         <div><span className="eyebrow">PRODUCTION QUEUE</span><h2>生产队列</h2><p>按上海时间汇总当前运营账号下全部工作区的任务。</p></div>
-        <div className="production-queue-tools"><label><CalendarDays size={14} /><span className="sr-only">按日期筛选生产任务</span><input type="date" value={queueDate} onChange={(event) => setQueueDate(event.target.value)} /></label><strong>{visible.length}</strong></div>
+        <div className="production-queue-tools"><label><CalendarDays size={14} /><span className="sr-only">按日期筛选生产任务</span><input type="date" value={queueDate} onChange={(event) => setQueueDate(event.target.value)} /></label><button type="button" className="icon-button" onClick={() => void load({ sync: true })} aria-label="刷新生产队列" title="刷新生产队列"><RefreshCw size={14} /></button><strong>{visible.length}</strong></div>
       </header>
       <div className="production-queue-tabs" role="tablist">
         {(['all', 'active', 'completed', 'failed'] as const).map((tab) => <button key={tab} type="button" role="tab" aria-selected={queueTab === tab} className={queueTab === tab ? 'active' : ''} onClick={() => setQueueTab(tab)}>{tab === 'all' ? '全部' : tab === 'active' ? '进行中' : tab === 'completed' ? '完成' : '失败'}<span>{counts[tab]}</span></button>)}
