@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { getWorkspacePath } from '@/lib/storagePaths';
 import { storeImageBase64Outputs, readStoredOutput, readStoredVideoOutput, storeVideoOutput } from './outputStore';
@@ -15,6 +16,10 @@ describe('provider output store', () => {
     // generated image under data/generated before each case.
     process.env.WORKSPACE_DATA_ROOT = testRoot;
     fs.rmSync(getWorkspacePath('generated'), { recursive: true, force: true });
+  });
+
+  it('keeps test cleanup inside the process-specific test root', () => {
+    expect(path.resolve(getWorkspacePath('generated'))).toBe(path.resolve(testRoot, 'generated'));
   });
 
   afterAll(() => {

@@ -77,6 +77,14 @@ describe('image output proxy API', () => {
     expect(await response.json()).toEqual({ success: false, error: 'image_output_invalid' });
   });
 
+  it('reports a missing local proxy file without treating it as a remote URL error', async () => {
+    mockGetProviderTask.mockReturnValue({ ...task, outputUrls: ['/api/workspace/accounts/account-1/image-tasks/image-task-1/outputs/0'] });
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/image-tasks/image-task-1/outputs/0'), params);
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ success: false, error: 'output_unavailable' });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('blocks private and loopback image targets before fetching', async () => {
     mockGetProviderTask.mockReturnValue({ ...task, outputUrls: ['https://127.0.0.1/private.png'] });
     const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/image-tasks/image-task-1/outputs/0'), params);
