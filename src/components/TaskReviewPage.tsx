@@ -161,7 +161,10 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
     ? `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}&restoreTaskId=${encodeURIComponent(task.id)}`
     : `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}`;
   return <div className={`task-review-page ${mode === 'video' ? 'video-task-review' : ''}`}>
-    <div className="page-heading task-review-heading"><div><Link href={`/workspace/accounts/${accountId}/production?mode=${mode}`} className="panel-meta task-review-back"><ArrowLeft size={13} /> 返回生产工作区</Link><div className="eyebrow task-review-eyebrow">Production / task review</div><h1>{task?.prompt?.slice(0, 80) || '任务详情'}</h1><p className="subtitle">{task ? `${task.model ?? task.provider ?? 'provider'} · ${task.providerTaskId ?? task.id}` : `任务 ${taskId} 不在当前队列中`}</p></div><div className="toolbar"><span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status ?? 'unknown'}</span></div></div>
+    <div className="task-review-topbar">
+      <Link href={`/workspace/accounts/${accountId}/production?mode=${mode}`} className="panel-meta task-review-back"><ArrowLeft size={13} /> 返回生产工作区</Link>
+      <span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status ?? 'unknown'}</span>
+    </div>
     {message && <div className="workspace-alert task-review-alert" role="status"><CircleAlert size={16} /><div><strong>{message}</strong></div></div>}
     {task?.error && <div className="workspace-alert task-review-alert" role="alert"><CircleAlert size={16} /><div><strong>供应商返回错误</strong><span>{task.error}</span></div></div>}
     <div className="task-review-stage">
