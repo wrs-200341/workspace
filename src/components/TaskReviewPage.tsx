@@ -160,10 +160,6 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   const restoreHref = task
     ? `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}&restoreTaskId=${encodeURIComponent(task.id)}`
     : `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}`;
-  const metadataPrompt = typeof metadata.originalPrompt === 'string' ? metadata.originalPrompt : '';
-  const metadataChildPrompt = typeof metadata.childPrompt === 'string' ? metadata.childPrompt : '';
-  const metadataFinalPrompt = typeof metadata.finalPrompt === 'string' ? metadata.finalPrompt : '';
-
   return <div className={`task-review-page ${mode === 'video' ? 'video-task-review' : ''}`}>
     <div className="page-heading task-review-heading"><div><Link href={`/workspace/accounts/${accountId}/production?mode=${mode}`} className="panel-meta task-review-back"><ArrowLeft size={13} /> 返回生产工作区</Link><div className="eyebrow task-review-eyebrow">Production / task review</div><h1>{task?.prompt?.slice(0, 80) || '任务详情'}</h1><p className="subtitle">{task ? `${task.model ?? task.provider ?? 'provider'} · ${task.providerTaskId ?? task.id}` : `任务 ${taskId} 不在当前队列中`}</p></div><div className="toolbar"><span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status ?? 'unknown'}</span></div></div>
     {message && <div className="workspace-alert task-review-alert" role="status"><CircleAlert size={16} /><div><strong>{message}</strong></div></div>}
@@ -175,14 +171,6 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
         <div className="task-review-actions"><span className="task-review-count">输出 {outputCount}</span><span className="task-review-inventory">{task?.inventorySavedAt ? '已入库' : '待入库'}</span><div className="review-buttons"><Link className="ghost-button" href={restoreHref}><RotateCcw size={14} /> 恢复配置</Link><button className="ghost-button" type="button" onClick={() => void action('save-inventory')} disabled={busy || !task || task.status !== 'completed' || Boolean(task.inventorySavedAt)}><PackageCheck size={14} /> 写入库存</button>{outputSources.map((url, index) => <button className="primary-button" key={`${url}-${index}`} type="button" onClick={() => void downloadOutput(url, index)} disabled={downloadingIndex !== null}><Download size={14} /> 下载</button>)}</div></div>
       </section>
       <aside className="panel task-review-pane task-reference-pane">
-        {mode === 'video' && <section className="task-prompt-pane" id="prompt">
-          <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">提示词</h2><div className="panel-meta">任务提交时保存的提示词配置</div></div></div>
-          <div className="task-prompt-details">
-            <label>原始提示词<textarea readOnly value={metadataPrompt || task?.prompt || ''} /></label>
-            {metadataChildPrompt && <label>自动生成子提示词<textarea readOnly value={metadataChildPrompt} /></label>}
-            {metadataFinalPrompt && metadataFinalPrompt !== metadataPrompt && <label>最终提交提示词<textarea readOnly value={metadataFinalPrompt} /></label>}
-          </div>
-        </section>}
         <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">参考图</h2><div className="panel-meta">{referenceUrls.length} 张 · 点击缩略图预览</div></div></div>
         {referenceUrls.length > 0 ? <>
           <div className="task-reference-selected"><ZoomableMedia src={referenceUrls[selectedReferenceIndex]} alt={`参考图 ${selectedReferenceIndex + 1}`} /></div>
