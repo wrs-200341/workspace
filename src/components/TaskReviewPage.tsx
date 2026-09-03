@@ -116,19 +116,27 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
     const referenceAssetIds = stringArray(metadata.referenceAssetIds);
     const productImageAssetIds = stringArray(metadata.productImageAssetIds);
     const genericAssetIds = stringArray(metadata.assetIds);
-    const values = [
-      ...stringArray(metadata.referenceImages),
+    const referenceTokens = stringArray(metadata.referenceTokens);
+    const persistedIds = [
       ...referenceAssetIds,
       ...productImageAssetIds,
-      // Older image tasks only persisted assetIds. Video tasks now persist
-      // kind-specific ids, so never render their video/audio ids as images.
       ...(referenceAssetIds.length || productImageAssetIds.length ? [] : genericAssetIds),
+    ];
+    // A provider task may persist an asset id that only exists in the
+    // short-lived public reference bridge. Prefer that token when available;
+    // otherwise fall back to the account asset endpoint for local files.
+    const bridgedIds = persistedIds.map((assetId, index) => referenceTokens[index] ? `reference-token:${referenceTokens[index]}` : assetId);
+    const values = [
+      ...stringArray(metadata.referenceImages),
+      ...bridgedIds,
       ...stringArray(metadata.externalReferenceImages),
+      ...(persistedIds.length ? [] : referenceTokens.map((token) => `reference-token:${token}`)),
     ];
     return [...new Set(values)];
   }, [metadata]);
   const referenceUrls = useMemo(() => references.map((reference) => {
     if (/^https?:\/\//i.test(reference)) return reference;
+    if (reference.startsWith('reference-token:')) return `/api/workspace/references/${encodeURIComponent(reference.slice('reference-token:'.length))}`;
     if (reference.startsWith('product-image:')) return `/api/workspace/product-images/preview?assetId=${encodeURIComponent(reference)}`;
     return `/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(reference)}`;
   }), [accountId, references]);
