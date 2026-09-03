@@ -1,0 +1,1032 @@
+    if (validIds.length !== selectedAudioAssetIds.length || validIds.some((id, index) => id !== selectedAudioAssetIds[index])) {
+      setSelectedAudioAssetIds(validIds);
+    }
+  }, [audioAssets, referenceAudioMax, selectedAudioAssetIds, selectedAudioMimeTypes, supportsReferenceAudio]);
+
+  useEffect(() => {
+    if (!promptModels.some((model) => model.id === promptModel)) setPromptModel(promptModels[0]?.id ?? "gpt-2999");
+  }, [promptModel, promptModels]);
+
+  const loadTasks = useCallback(async (date = queueDate) => {
+    const sequence = ++taskLoadSequence.current;
+    try {
+      const response = await fetch(`/api/workspace/accounts/${accountId}/video-tasks?date=${encodeURIComponent(date)}`, { cache: "no-store" });
+      const payload = await response.json() as { success?: boolean; data?: { tasks?: VideoTask[] } };
+      if (response.ok && payload.success && sequence === taskLoadSequence.current) setTasks(payload.data?.tasks ?? []);
+    } catch {
+      // Polling retries on the next interval.
+    }
+  }, [accountId, queueDate]);
+
+  useEffect(() => {
+    void loadTasks();
+    const timer = window.setInterval(() => void loadTasks(), 8_000);
+    return () => window.clearInterval(timer);
+  }, [loadTasks]);
+
+  useEffect(() => {
+    const taskId = initialFocusTaskId?.trim() ?? "";
+    const anchorKey = `${queueDate}:${taskId}`;
+    if (!taskId || queueAnchorApplied.current === anchorKey) return;
+
+    let cancelled = false;
+    let frameId: number | null = null;
+    let highlightTimer: number | null = null;
+    queueAnchorAttempts.current = 0;
+
+    function locateQueueTask() {
+      if (cancelled) return;
+      const target = document.getElementById(`video-task-${taskId}`);
+      const taskList = taskListRef.current;
+      if (target && taskList) {
+        queueAnchorApplied.current = anchorKey;
+        const targetRect = target.getBoundingClientRect();
+        const listRect = taskList.getBoundingClientRect();
+        const targetTop = taskList.scrollTop + targetRect.top - listRect.top;
+        const centeredTop = targetTop - Math.max(0, (taskList.clientHeight - targetRect.height) / 2);
+        taskList.scrollTo({ top: Math.max(0, centeredTop), behavior: "smooth" });
+        target.classList.add(styles.taskItemFocused);
+        highlightTimer = window.setTimeout(() => target.classList.remove(styles.taskItemFocused), 2400);
+        return;
+      }
+      queueAnchorAttempts.current += 1;
+      if (queueAnchorAttempts.current >= 30) return;
+      frameId = window.requestAnimationFrame(locateQueueTask);
+    }
+
+    frameId = window.requestAnimationFrame(locateQueueTask);
+    return () => {
+      cancelled = true;
+      if (frameId !== null) window.cancelAnimationFrame(frameId);
+      if (highlightTimer !== null) window.clearTimeout(highlightTimer);
+    };
+  }, [initialFocusTaskId, queueDate, tasks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSuffix() {
+      try {
+        const response = await fetch("/api/workspace/video-settings", { cache: "no-store" });
+        const payload = await response.json() as { success?: boolean; data?: VideoSuffixResponse; error?: string };
+        if (!response.ok || !payload.success || !payload.data || cancelled) {
+          if (!cancelled) setMessage(payload.error ?? "瑙嗛鍚庣紑璇诲彇澶辫触");
+          return;
+        }
+        const nextSuffix = payload.data.suffix ?? "";
+        if (!restoreApplied.current) {
+          setSavedSuffix(nextSuffix);
+          setSuffixDraft(nextSuffix);
+          setSuffixSource(payload.data.source ?? "10000");
+          setSuffixUpdatedAt(payload.data.updatedAt ?? null);
+        }
+      } catch {
+        if (!cancelled) setMessage("瑙嗛鍚庣紑璇诲彇澶辫触锛岃绋嶅悗閲嶈瘯");
+      } finally {
+        if (!cancelled) setSuffixLoading(false);
+      }
+    }
+    void loadSuffix();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!restoreTaskId) return;
+    const taskId: string = restoreTaskId;
+    let cancelled = false;
+
+    async function restoreTask() {
+      setMessage("姝ｅ湪璇诲彇澶辫触浠诲姟閰嶇疆...");
+      try {
+        const response = await fetch(productionTaskApiHref(accountId, "video-tasks", taskId), { cache: "no-store" });
+        const data = await responseData<{ task: VideoTask }>(response);
+        if (cancelled) return;
+        const restored = restoreVideoTaskState(data.task);
+        restoreApplied.current = true;
+        previousCapabilityKey.current = `${restored.supplierId}:${restored.modelId}`;
+        setModelId(restored.modelId as VideoModelId);
+        setSupplierId(restored.supplierId);
+        setPromptMode(restored.promptMode);
+        setTemplateId(restored.templateId);
+        setManualTemplateId(restored.manualTemplateId);
+        setPromptModel(restored.promptModel);
+        setPrompt(restored.prompt);
+        setRestoredChildPromptReady(restored.promptMode === "asset-template-child-prompt" && Boolean(restored.prompt.trim()));
+        setSavedPrompt(restored.prompt);
+        setPromptUpdatedAt(null);
+        setSaveAsTemplate(false);
+        setTemplateName("");
+      setAssetImageIds(restored.referenceAssetIds);
+         setReferenceVideoAssetId(restored.referenceVideoAssetId);
+         setSelectedAudioAssetIds(restored.audioAssetIds);
+        setReferenceWorkbookId(restored.referenceWorkbookId);
+        setReferenceRows(restored.referenceRow ? [restored.referenceRow] : []);
+        setReferenceExcelName(restored.referenceWorkbookId ? "姝ｅ湪鎭㈠浠诲姟鍙傝€?Excel..." : restored.referenceRow ? "浠诲姟涓繚瀛樼殑鍖归厤璁板綍" : "");
+        setSuffixEnabled(restored.suffixEnabled);
+        setSavedSuffix(restored.suffix);
+        setSuffixDraft(restored.suffix);
+        setSuffixSource("saved");
+        setSuffixUpdatedAt(null);
+      setDuration(restored.duration);
+        setAspectRatio(restored.aspectRatio);
+        setResolution(restored.resolution);
+        setCount(restored.count);
+        if (restored.referenceWorkbookId) await restoreReferenceWorkbook(restored.referenceWorkbookId);
+        await responseData<{ deleted: string }>(await fetch(
+          productionTaskApiHref(accountId, "video-tasks", taskId),
+          {
+            method: "DELETE",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "restore" }),
+          },
+        ));
+        if (!cancelled) setMessage(`宸叉仮澶嶄换鍔♀€?{data.task.name}鈥濈殑鎻愪氦鍓嶉厤缃紝鍘熶换鍔″拰鐢熸垚瑙嗛宸茬Щ闄わ紝璇风‘璁ゅ悗鍐嶆鍔犲叆鐢熶骇闃熷垪`);
+      } catch (restoreFailure) {
+        if (!cancelled) setMessage(restoreFailure instanceof Error ? restoreFailure.message : "浠诲姟閰嶇疆鎭㈠澶辫触");
+      }
+    }
+
+    void restoreTask();
+    return () => { cancelled = true; };
+  }, [accountId, restoreTaskId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSavedReferenceWorkbooks() {
+      try {
+        const response = await fetch(`/api/workspace/accounts/${accountId}/video-reference`, { cache: "no-store" });
+        const data = await responseData<{ workbooks: ReferenceWorkbookSummary[] }>(response);
+        if (!cancelled) setSavedReferenceWorkbooks(data.workbooks);
+      } catch (requestError) {
+        if (!cancelled) setReferenceExcelError(requestError instanceof Error ? requestError.message : "鍙傝€?Excel 鍒楄〃璇诲彇澶辫触");
+      }
+    }
+    void loadSavedReferenceWorkbooks();
+    return () => { cancelled = true; };
+  }, [accountId]);
+
+  function changeModel(nextModelId: VideoModelId) {
+    const nextSuppliers = filterVideoSuppliersByModel(suppliers, nextModelId);
+    setModelId(nextModelId);
+    setSupplierId(nextSuppliers[0]?.id ?? "");
+    if (nextModelId !== "wan2.2-animate-move") setReferenceVideoAssetId("");
+    const capability = nextSuppliers[0]?.capabilities?.[nextModelId];
+    if (capability) {
+      setAspectRatio(getDefaultVideoAspectRatio(capability.aspectRatios, capability.defaultAspectRatio));
+      setResolution(getDefaultVideoResolution(capability));
+      setDuration(String(getDefaultVideoDuration(capability)));
+    }
+  }
+
+  function changeSupplier(nextSupplierId: string) {
+    setSupplierId(nextSupplierId);
+    const capability = availableSuppliers.find((supplier) => supplier.id === nextSupplierId)?.capabilities?.[modelId];
+    if (!capability) return;
+    setAspectRatio(getDefaultVideoAspectRatio(capability.aspectRatios, capability.defaultAspectRatio));
+    setResolution(getDefaultVideoResolution(capability));
+    setDuration(String(getDefaultVideoDuration(capability)));
+  }
+
+  function selectReferenceVideo(assetId: string) {
+    if (!canEdit || busy) return;
+    setReferenceVideoAssetId(assetId);
+    setMessage("");
+  }
+
+  function selectTemplate(id: string) {
+    setTemplateId(id);
+    setRestoredChildPromptReady(false);
+    setMessage(id ? "宸查€夋嫨妯℃澘锛屾彁浜ゆ椂浼氳嚜鍔ㄧ敓鎴愬苟淇濆瓨瀛愭彁绀鸿瘝" : "");
+  }
+
+  function selectManualTemplate(id: string) {
+    setManualTemplateId(id);
+    const selectedTemplate = promptTemplates.find((item) => item.id === id);
+    if (!selectedTemplate) {
+      setMessage("");
+      return;
+    }
+    setPrompt(selectedTemplate.content);
+    setMessage(`宸茶浇鍏ユā鏉库€?{selectedTemplate.name}鈥濓紝鍙户缁紪杈戞垨鐩存帴鐢熶骇`);
+  }
+
+  function toggleAssetImage(id: string) {
+    setAssetImageIds((current) => {
+      if (current.includes(id)) return current.filter((imageId) => imageId !== id);
+      const maximum = referenceFileLimits?.images.max ?? 0;
+      if (maximum === 0) return current;
+      if (current.length >= maximum) {
+        setMessage(`褰撳墠妯″瀷鏈€澶氭敮鎸?${maximum} 寮犲弬鑰冨浘`);
+        return current;
+      }
+      setMessage("");
+      return [...current, id];
+    });
+  }
+
+  function handleImagesUploaded(uploaded: ProductionImageAsset[]) {
+    setAssetImages((current) => {
+      const byId = new Map(current.map((image) => [image.id, image]));
+      uploaded.forEach((image) => byId.set(image.id, image));
+      return [...byId.values()];
+    });
+  }
+
+  async function saveSuffix() {
+    if (!canEdit || suffixSaving) return;
+    if (!suffixDirty) {
+      setMessage("褰撳墠鍚庣紑娌℃湁鏂扮殑淇敼");
+      return;
+    }
+    setSuffixSaving(true);
+    setMessage("姝ｅ湪淇濆瓨缁熶竴鍚庣紑...");
+    try {
+      const response = await fetch("/api/workspace/video-settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ suffix: suffixDraft }),
+      });
+      const payload = await response.json() as { success?: boolean; data?: VideoSuffixResponse; error?: string };
+      if (!response.ok || !payload.success || !payload.data) {
+        setMessage(payload.error ?? "瑙嗛鍚庣紑淇濆瓨澶辫触");
+        return;
+      }
+      const nextSuffix = payload.data.suffix ?? "";
+      setSavedSuffix(nextSuffix);
+      setSuffixDraft(nextSuffix);
+      setSuffixSource(payload.data.source ?? "saved");
+      setSuffixUpdatedAt(payload.data.updatedAt ?? null);
+      setMessage("缁熶竴鍚庣紑宸蹭繚瀛橈紝鍚庣画瑙嗛浠诲姟浼氫娇鐢ㄦ柊鐗堟湰");
+    } catch {
+      setMessage("瑙嗛鍚庣紑淇濆瓨澶辫触锛岃绋嶅悗閲嶈瘯");
+    } finally {
+      setSuffixSaving(false);
+    }
+  }
+
+  async function saveManualPromptDraft() {
+    if (!canEdit || promptSaving) return;
+    const submittedPrompt = prompt;
+    const submittedTemplateName = templateName.trim();
+    if (saveAsTemplate && !submittedPrompt.trim()) {
+      setMessage("璇疯緭鍏ヨ棰戞彁绀鸿瘝鍚庡啀淇濆瓨涓烘ā鏉?);
+      return;
+    }
+    if (saveAsTemplate && !submittedTemplateName) {
+      setMessage("璇疯緭鍏ユā鏉垮悕绉?);
+      return;
+    }
+    setPromptSaving(true);
+    setMessage("");
+    try {
+      const result = await saveManualVideoPrompt({
+        accountId,
+        prompt: submittedPrompt,
+        saveAsTemplate,
+        templateName: submittedTemplateName,
+      });
+      setSavedPrompt(result.draft.prompt);
+      setPrompt((current) => reconcileSavedPrompt(current, submittedPrompt, result.draft.prompt).prompt);
+      setPromptUpdatedAt(result.draft.updatedAt);
+
+      if (result.template) {
+        const createdTemplate = result.template;
+        setPromptTemplates((current) => mergeCreatedPromptTemplate(current, createdTemplate));
+        setManualTemplateId(createdTemplate.id);
+        setTemplateName("");
+        setSaveAsTemplate(false);
+        setMessage(`鎵嬪啓鎻愮ず璇嶅凡淇濆瓨锛屽苟娣诲姞妯℃澘鈥?{createdTemplate.name}鈥漙);
+      } else if (result.templateError) {
+        setMessage(`鎵嬪啓鎻愮ず璇嶅凡淇濆瓨锛屼絾妯℃澘淇濆瓨澶辫触锛?{result.templateError}`);
+      } else {
+        setMessage("鎵嬪啓鎻愮ず璇嶅凡淇濆瓨");
+      }
+    } catch (requestError) {
+      setMessage(requestError instanceof Error ? requestError.message : "鎵嬪啓瑙嗛鎻愮ず璇嶄繚瀛樺け璐?);
+    } finally {
+      setPromptSaving(false);
+    }
+  }
+
+  async function uploadReferenceExcel(file: File | null) {
+    if (!file || !canEdit) return;
+    setBusy(true);
+    setReferenceExcelError("");
+    setMessage("姝ｅ湪瑙ｆ瀽鍙傝€?Excel...");
+    try {
+      const form = new FormData();
+      form.set("file", file, file.name);
+      const response = await fetch(`/api/workspace/accounts/${accountId}/video-reference`, {
+        method: "POST",
+        body: form,
+      });
+      const payload = await response.json() as {
+        success?: boolean;
+        data?: {
+          fileName?: string;
+          workbookId?: string;
+          workbook?: ReferenceWorkbookSummary;
+          rows?: VideoReferenceRow[];
+          rowCount?: number;
+        };
+        error?: string;
+      };
+      if (!response.ok || !payload.success || !payload.data?.rows) {
+        const errorMessage = payload.error ?? "鍙傝€?Excel 瑙ｆ瀽澶辫触";
+        setReferenceExcelError(errorMessage);
+        setMessage(errorMessage);
+        return;
+      }
+      setReferenceRows(payload.data.rows);
+      setReferenceExcelName(payload.data.fileName ?? file.name);
+      if (payload.data.workbook) {
+        setSavedReferenceWorkbooks((current) => [
+          payload.data!.workbook!,
+          ...current.filter((workbook) => workbook.id !== payload.data!.workbook!.id),
+        ]);
+      }
+      setReferenceWorkbookId(payload.data.workbookId ?? payload.data.workbook?.id ?? "");
+      setReferenceExcelError("");
+      setMessage(`鍙傝€?Excel 宸茶浇鍏?${payload.data.rowCount ?? payload.data.rows.length} 鏉″晢鍝佽祫鏂檂);
+    } catch {
+      const errorMessage = "鍙傝€?Excel 璇锋眰澶辫触锛岃绋嶅悗閲嶈瘯";
+      setReferenceExcelError(errorMessage);
+      setMessage(errorMessage);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function restoreReferenceWorkbook(workbookId: string) {
+    const sequence = ++referenceWorkbookLoadSequence.current;
+    setReferenceWorkbookId(workbookId);
+    setReferenceExcelError("");
+    if (!workbookId) {
+      setReferenceRows([]);
+      setReferenceExcelName("");
+      setMessage("宸叉竻闄ゅ綋鍓嶅弬鑰?Excel");
+      return;
+    }
+    setReferenceWorkbookLoading(true);
+    setMessage("姝ｅ湪鎭㈠鍙傝€?Excel...");
+    try {
+      const response = await fetch(`/api/workspace/accounts/${accountId}/video-reference?workbookId=${encodeURIComponent(workbookId)}`, { cache: "no-store" });
+      const data = await responseData<{ workbook: ReferenceWorkbookSummary & { rows: VideoReferenceRow[] } }>(response);
+      if (sequence !== referenceWorkbookLoadSequence.current) return;
+      setReferenceRows(data.workbook.rows);
+      setReferenceExcelName(data.workbook.originalName);
+      setMessage(`宸叉仮澶嶅弬鑰?Excel锛?{data.workbook.rowCount} 鏉″晢鍝佽祫鏂欏彲鐢ㄤ簬鍖归厤`);
+    } catch (requestError) {
+      if (sequence !== referenceWorkbookLoadSequence.current) return;
+      setReferenceExcelError(requestError instanceof Error ? requestError.message : "鍙傝€?Excel 鎭㈠澶辫触");
+      setMessage(requestError instanceof Error ? requestError.message : "鍙傝€?Excel 鎭㈠澶辫触");
+    } finally {
+      if (sequence === referenceWorkbookLoadSequence.current) setReferenceWorkbookLoading(false);
+    }
+  }
+
+  function selectReferenceExcel(files: FileList | File[]) {
+    const supported = filterFilesByExtensions(Array.from(files), ["xlsx"]);
+    if (supported.length === 0) {
+      setReferenceExcelError("璇烽€夋嫨 .xlsx 鏍煎紡鐨勫弬鑰?Excel");
+      setMessage("鍙傝€?Excel 鏍煎紡涓嶆敮鎸?);
+      return;
+    }
+    void uploadReferenceExcel(supported[0]);
+  }
+
+  async function handleReferenceExcelDrop(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setReferenceExcelDragActive(false);
+    if (!canEdit || busy) return;
+    try {
+      selectReferenceExcel(await filesFromDataTransfer(event.dataTransfer));
+    } catch (dropError) {
+      const message = dropError instanceof Error ? dropError.message : "鍙傝€?Excel 璇诲彇澶辫触";
+      setReferenceExcelError(message);
+      setMessage(message);
+    }
+  }
+
+  async function persistReferenceAudio(file: File): Promise<ProductionAudioAsset> {
+    const validFile = validateReferenceAudioFileSelection([file], selectedAudioMimeTypes);
+    const mimeType = referenceAudioMimeTypeForFile(validFile, selectedAudioMimeTypes);
+    const assetName = Array.from(validFile.name.replace(/\.(mp3|m4a|wav)$/i, "").trim() || "鍙傝€冮煶棰?).slice(0, 80).join("");
+    const data = await responseData<{ file: ProductionAudioAsset }>(
+      await fetch(`/api/workspace/accounts/${accountId}/files`, {
+        method: "POST",
+        headers: {
+          "Content-Type": mimeType,
+          "X-Workspace-File-Kind": "audio",
+          "X-Workspace-Asset-Name": encodeURIComponent(assetName),
+          "X-Workspace-Original-Name": encodeURIComponent(validFile.name),
+        },
+        body: validFile,
+      }),
+    );
+    return data.file;
+  }
+
+  function addUploadedAudioAsset(file: ProductionAudioAsset) {
+    setAudioAssets((current) => [file, ...current.filter((asset) => asset.id !== file.id)]);
+    setSelectedAudioAssetIds((current) => [...current, file.id].slice(-Math.max(1, referenceAudioMax)));
+    setAudioSearch("");
+  }
+
+  async function uploadReferenceAudio(file: File) {
+    if (!canEdit || audioUploading || busy) return;
+    setAudioUploading(true);
+    setAudioError("");
+    try {
+      const saved = await persistReferenceAudio(file);
+      addUploadedAudioAsset(saved);
+      setMessage(`鍙傝€冮煶棰戔€?{saved.name}鈥濆凡淇濆瓨鍒拌处鍙疯祫浜);
+    } catch (uploadError) {
+      const errorMessage = uploadError instanceof Error ? uploadError.message : "鍙傝€冮煶棰戜笂浼犲け璐?;
+      setAudioError(errorMessage);
+      setMessage(errorMessage);
+    } finally {
+      setAudioUploading(false);
+    }
+  }
+
+  async function uploadReferenceAudioFiles(files: readonly File[]) {
+    if (!canEdit || audioUploading || busy) return;
+    setAudioUploading(true);
+    setAudioError("");
+    try {
+      for (const file of files) {
+        const saved = await persistReferenceAudio(file);
+        addUploadedAudioAsset(saved);
+      }
+      setMessage(`宸蹭繚瀛?${files.length} 涓弬鑰冮煶棰戝埌璐﹀彿璧勪骇`);
+    } catch (uploadError) {
+      const errorMessage = uploadError instanceof Error ? uploadError.message : "鍙傝€冮煶棰戜笂浼犲け璐?;
+      setAudioError(errorMessage);
+      setMessage(errorMessage);
+    } finally {
+      setAudioUploading(false);
+    }
+  }
+
+  function selectReferenceAudioFiles(files: FileList | File[]) {
+    if (!canEdit || audioUploading || busy) return;
+    try {
+      const incoming = Array.from(files);
+      if (incoming.length === 0) throw new Error(`璇烽€夋嫨涓€涓?${referenceAudioFormatLabel} 鏂囦欢`);
+      if (incoming.length > referenceAudioMax) throw new Error(`褰撳墠杈撳嚭缁勫悎鏈€澶氭敮鎸?${referenceAudioMax} 涓弬鑰冮煶棰慲);
+      const availableSlots = Math.max(0, referenceAudioMax - selectedAudioAssetIds.length);
+      if (incoming.length > availableSlots) throw new Error(`杩樺彲浠ユ坊鍔?${availableSlots} 涓弬鑰冮煶棰慲);
+      incoming.forEach((file) => validateReferenceAudioFileSelection([file], selectedAudioMimeTypes));
+      void uploadReferenceAudioFiles(incoming);
+    } catch (selectionError) {
+      const errorMessage = selectionError instanceof Error ? selectionError.message : "鍙傝€冮煶棰戦€夋嫨澶辫触";
+      setAudioError(errorMessage);
+      setMessage(errorMessage);
+    }
+  }
+
+  async function handleReferenceAudioDrop(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    setAudioDragActive(false);
+    if (!canEdit || audioUploading || busy) return;
+    try {
+      selectReferenceAudioFiles(await filesFromDataTransfer(event.dataTransfer));
+    } catch (dropError) {
+      const errorMessage = dropError instanceof Error ? dropError.message : "鍙傝€冮煶棰戣鍙栧け璐?;
+      setAudioError(errorMessage);
+      setMessage(errorMessage);
+    }
+  }
+
+  async function submitVideo(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!canEdit || busy || audioUploading || submissionLock.current) return;
+    if (!selectedSupplier?.configured) {
+      setMessage("褰撳墠渚涘簲鍟嗘湭閰嶇疆 API Key");
+      return;
+    }
+    if (!selectedCapability) {
+      setMessage("褰撳墠渚涘簲鍟嗗皻鏈厤缃彲鐢ㄧ殑瑙嗛鍙傛暟");
+      return;
+    }
+    if (selectedCapability.referenceImages.required && selectedImages.length === 0) {
+      setMessage("褰撳墠妯″瀷蹇呴』鎻愪緵涓€寮犲弬鑰冨浘");
+      return;
+    }
+    const referenceVideoLimits = getVideoReferenceLimits(selectedCapability, resolution, Number(duration)).videos;
+    if (referenceVideoLimits.required && !referenceVideoAssetId) {
+      setMessage("褰撳墠妯″瀷蹇呴』鎻愪緵涓€娈靛弬鑰冭棰?);
+      return;
+    }
+    if (promptMode === "asset-template-child-prompt" && !selectedTemplate) {
+      setMessage("璇峰厛閫夋嫨璐﹀彿璧勪骇鎻愮ず璇嶆ā鏉?);
+      return;
+    }
+    if (templateReferenceIssue) {
+      setMessage(templateReferenceIssue);
+      return;
+    }
+    if (promptMode === "asset-template-child-prompt" && !selectedPromptModel?.configured) {
+      setMessage("褰撳墠瀛愭彁绀鸿瘝妯″瀷灏氭湭閰嶇疆");
+      return;
+    }
+    const promptForSubmission = promptForVideoSubmission(promptMode, prompt, { childPromptReady: restoredChildPromptReady });
+    if (promptMode === "manual" && !promptForSubmission) {
+      setMessage("璇疯緭鍏ヨ棰戞彁绀鸿瘝");
+      return;
+    }
+    if (!confirmUnmatchedVideoReference({
+      promptMode,
+      referenceRow: selectedReferenceRow,
+      pid: selectedImagePid,
+      confirm: (confirmationMessage) => window.confirm(confirmationMessage),
+    })) {
+      setMessage("宸插彇娑堢敓鎴?);
+      return;
+    }
+    submissionLock.current = true;
+    const submissionPayload = JSON.stringify({
+      supplierId,
+      modelId,
+      promptMode,
+      templateId: promptMode === "asset-template-child-prompt" ? templateId || undefined : undefined,
+      prompt: promptForSubmission,
+      promptModel,
+      suffixEnabled,
+      duration,
+      aspectRatio,
+      resolution,
+      count,
+      referenceAssetId: assetImageIds[0] || undefined,
+       referenceAssetIds: assetImageIds.length > 0 ? assetImageIds : undefined,
+       referenceVideoAssetId: referenceVideoAssetId || undefined,
+       referenceWorkbookId: referenceWorkbookId || undefined,
+      audioAssetIds: supportsReferenceAudio ? selectedAudioAssetIds : undefined,
+      referenceRow: selectedReferenceRow ?? undefined,
+      unmatchedReferenceConfirmed: promptMode === "asset-template-child-prompt" && !selectedReferenceRow ? true : undefined,
+    });
+    const submissionRequestId = pendingSubmission.current?.payload === submissionPayload
+      ? pendingSubmission.current.id
+      : (
+      typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `request_${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`
+      );
+    pendingSubmission.current = { id: submissionRequestId, payload: submissionPayload };
+    setBusy(true);
+    setMessage("姝ｅ湪鍔犲叆鐢熶骇闃熷垪...");
+    try {
+      const response = await fetch(`/api/workspace/accounts/${accountId}/generate-video`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Idempotency-Key": submissionRequestId,
+        },
+        body: submissionPayload,
+      });
+      const payload = await response.json() as { success?: boolean; data?: { tasks?: VideoTask[]; queued?: number; submitted?: number; failed?: number }; error?: string };
+      if (!response.ok || !payload.success) {
+        setMessage(payload.error ?? "瑙嗛浠诲姟鎻愪氦澶辫触");
+        return;
+      }
+      pendingSubmission.current = null;
+      const suffixNotice = suffixEnabled && suffixDirty ? "锛涙湰娆′娇鐢ㄥ凡淇濆瓨鍚庣紑" : "";
+      const queued = payload.data?.queued ?? payload.data?.tasks?.length ?? payload.data?.submitted ?? 0;
+      const currentQueueDate = shanghaiDate();
+      setMessage(`宸插姞鍏ラ槦鍒?${queued} 鏉★紝鍙户缁€夋嫨涓嬩竴涓晢鍝?{suffixNotice}`);
+      setQueueTab("all");
+      setQueueDate(currentQueueDate);
+      if (payload.data?.tasks?.length) {
+        setTasks((current) => {
+          const incomingIds = new Set(payload.data!.tasks!.map((task) => task.id));
+          const incoming = payload.data!.tasks!.map((task) => preserveTaskAccountName(task, accountName));
+          return [...incoming, ...current.filter((task) => !incomingIds.has(task.id))];
+        });
+      }
+      setBusy(false);
+      void loadTasks(currentQueueDate);
+    } catch {
+      setMessage("瑙嗛浠诲姟璇锋眰澶辫触锛岃绋嶅悗閲嶈瘯");
+    } finally {
+      submissionLock.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function openTaskPrompt(task: VideoTask) {
+    setDialogTask(task);
+    setDialogPrompt("");
+    setDialogLoading(true);
+    try {
+      const response = await fetch(productionTaskApiHref(task.accountId, "video-tasks", task.id), { cache: "no-store" });
+      const payload = await response.json() as { success?: boolean; data?: { task?: VideoTask }; error?: string };
+      if (!response.ok || !payload.success || !payload.data?.task) {
+        setDialogPrompt(payload.error ?? "鎻愮ず璇嶈鍙栧け璐?);
+        return;
+      }
+      setDialogTask(preserveTaskAccountName(payload.data.task, task.accountName));
+      setDialogPrompt(displayVideoTaskPrompt(payload.data.task));
+    } catch {
+      setDialogPrompt("鎻愮ず璇嶈鍙栧け璐ワ紝璇风◢鍚庨噸璇?);
+    } finally {
+      setDialogLoading(false);
+    }
+  }
+
+  function closeTaskDialog() {
+    setDialogTask(null);
+    setDialogPrompt("");
+    setDialogLoading(false);
+  }
+
+  async function runTaskAction(task: VideoTask, action: "delete") {
+    if (!canEdit || taskActionBusy) return;
+    if (!window.confirm(task.status === "completed"
+      ? `浠庣敓浜ч槦鍒楀垹闄も€?{task.name}鈥濓紵宸蹭繚瀛樺埌搴撳瓨鐨勮棰戜笉浼氬彈褰卞搷銆俙
+      : `鍒犻櫎澶辫触浠诲姟鈥?{task.name}鈥濓紵`)) return;
+    setTaskActionBusy(`${task.id}:${action}`);
+    setMessage("姝ｅ湪鍒犻櫎浠诲姟...");
+    try {
+      const response = await fetch(productionTaskApiHref(task.accountId, "video-tasks", task.id), {
+        method: "DELETE",
+      });
+      const payload = await response.json() as { success?: boolean; error?: string };
+      if (!response.ok || !payload.success) {
+        setMessage(payload.error ?? "浠诲姟鎿嶄綔澶辫触");
+        return;
+      }
+      setMessage("浠诲姟宸蹭粠鐢熶骇闃熷垪鍒犻櫎");
+      await loadTasks();
+    } catch {
+      setMessage("浠诲姟鎿嶄綔澶辫触锛岃绋嶅悗閲嶈瘯");
+    } finally {
+      setTaskActionBusy("");
+    }
+  }
+
+  return (
+    <div className={styles.videoWorkspace}>
+      <form className={styles.videoForm} onSubmit={submitVideo}>
+        <section className={styles.formSection}>
+          <div className={styles.sectionTitle}><span>01</span><div><strong>妯″瀷涓庝緵搴斿晢</strong><small>ROUTING</small></div></div>
+          <fieldset className={styles.videoModels} disabled={!canEdit}>
+            <legend>瑙嗛妯″瀷</legend>
+            <div className={styles.videoModelGrid}>
+              {VIDEO_MODELS.map((model) => (
+                <button key={model.id} type="button" className={modelId === model.id ? styles.videoModelActive : styles.videoModel} onClick={() => changeModel(model.id)} aria-pressed={modelId === model.id}>
+                  <span>{model.label}</span><small>{filterVideoSuppliersByModel(suppliers, model.id).length} 涓緵搴斿晢</small>
+                </button>
+              ))}
+            </div>
+          </fieldset>
+          <label className={styles.stackField}><span>渚涘簲鍟?/span><select value={supplierId} onChange={(event) => changeSupplier(event.target.value)} disabled={!canEdit || availableSuppliers.length === 0}>
+            {availableSuppliers.length === 0 && <option value="">璇ユā鍨嬫殏鏃犱緵搴斿晢</option>}
+            {availableSuppliers.map((supplier) => <option key={supplier.id} value={supplier.id}>{supplier.label}{supplier.configured ? " 路 宸查厤缃? : " 路 寰呴厤缃?}</option>)}
+          </select></label>
+          <div className={styles.routingState}><span>褰撳墠绾胯矾</span><strong>{selectedSupplier?.label ?? "鏈厤缃?}</strong><em className={selectedSupplier?.configured && selectedCapability ? styles.routeReady : styles.routeOffline}>{selectedSupplier?.configured && selectedCapability ? "鍙敤" : selectedSupplier?.configured ? "濂戠害寰呯‘璁? : "绂荤嚎"}</em></div>
+        </section>
+
+        <section className={styles.formSection}>
+          <div className={styles.sectionTitle}><span>02</span><div><strong>鎻愮ず璇嶄笌鍙傝€?/strong><small>INPUT</small></div></div>
+          <div className={styles.promptModeBar} role="group" aria-label="鎻愮ず璇嶆ā寮?>
+            <button type="button" className={promptMode === "manual" ? styles.promptModeActive : styles.promptMode} onClick={() => { setPromptMode("manual"); setRestoredChildPromptReady(false); }} disabled={!canEdit}>鎵嬪啓瀹屾暣鎻愮ず璇?/button>
+            <button type="button" className={promptMode === "asset-template-child-prompt" ? styles.promptModeActive : styles.promptMode} onClick={() => { setPromptMode("asset-template-child-prompt"); setRestoredChildPromptReady(false); }} disabled={!canEdit}>璧勪骇妯℃澘鐢熸垚瀛愭彁绀鸿瘝</button>
+          </div>
+          <div className={styles.referenceExcelBar}>
+            <label
+              className={`${styles.referenceExcelDropZone} ${referenceExcelDragActive ? styles.referenceExcelDropZoneActive : ""}`}
+              onDragOver={(event) => { event.preventDefault(); setReferenceExcelDragActive(true); event.dataTransfer.dropEffect = "copy"; }}
+              onDragLeave={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setReferenceExcelDragActive(false);
+              }}
+              onDrop={(event) => void handleReferenceExcelDrop(event)}
+            >
+              <span className={styles.referenceExcelDropIcon} aria-hidden="true"><UploadCloud size={22} strokeWidth={1.8} /></span>
+              <strong>{referenceExcelDragActive ? "鏉惧紑鍗冲彲瑙ｆ瀽 Excel" : referenceExcelName || "鎷栧叆鎴栭€夋嫨鍙傝€?Excel"}</strong>
+              <small>{busy ? "姝ｅ湪瑙ｆ瀽鏍囬鍜屾弿杩? : "浠呮敮鎸?.xlsx 路 鐢ㄤ簬鍖归厤 PID 鐨勬爣棰樺拰鎻忚堪"}</small>
+              <input type="file" accept=".xlsx" disabled={!canEdit || busy} onChange={(event) => selectReferenceExcel(event.target.files ?? [])} />
+            </label>
+            <div className={styles.referenceExcelStatus}>
+              <span>{referenceRows.length > 0 ? `宸茶浇鍏?${referenceRows.length} 鏉 : "鏈浇鍏?}</span>
+              <small>{selectedImage
+                ? selectedReferenceRow
+                  ? selectedReferenceRow.title.trim() && selectedReferenceRow.description.trim()
+                    ? `褰撳墠 PID ${selectedImagePid} 宸插尮閰嶆爣棰樺拰鎻忚堪`
+                    : `褰撳墠 PID ${selectedImagePid} 鐨勬爣棰樻垨鎻忚堪涓虹┖`
+                  : `褰撳墠 PID ${selectedImagePid} 鏈尮閰峘
+                : "閫夋嫨鍙傝€冨浘鍚庢樉绀?PID 鍖归厤缁撴灉"}</small>
+              {referenceExcelError && <small className={styles.referenceExcelError}>{referenceExcelError}</small>}
+            </div>
+            <div className={styles.referenceExcelSaved}>
+              <label className={styles.stackField}>
+                <span>宸蹭繚瀛樼殑鍙傝€?Excel</span>
+                <select value={referenceWorkbookId} onChange={(event) => void restoreReferenceWorkbook(event.target.value)} disabled={referenceWorkbookLoading || busy}>
+                  <option value="">閫夋嫨宸蹭繚瀛樼殑鏂囦欢</option>
+                  {savedReferenceWorkbooks.map((workbook) => <option key={workbook.id} value={workbook.id}>{workbook.name} 路 {workbook.rowCount} 鏉?路 {new Date(workbook.updatedAt).toLocaleDateString("zh-CN")}</option>)}
+                </select>
+              </label>
+              <small>{savedReferenceWorkbooks.length > 0 ? `褰撳墠璐﹀彿宸蹭繚瀛?${savedReferenceWorkbooks.length} 涓弬鑰?Excel` : "涓婁紶鎴愬姛鍚庝細鑷姩淇濆瓨鍒板綋鍓嶈处鍙?}</small>
+            </div>
+          </div>
+          {promptMode === "asset-template-child-prompt" && <div className={styles.childPromptControls}>
+            <label className={styles.stackField}><span>璐﹀彿璧勪骇鎻愮ず璇嶆ā鏉?/span><select value={templateId} onChange={(event) => selectTemplate(event.target.value)} disabled={!canEdit}><option value="">璇烽€夋嫨妯℃澘</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label className={styles.stackField}><span>瀛愭彁绀鸿瘝妯″瀷</span><select value={promptModel} onChange={(event) => setPromptModel(event.target.value)} disabled={!canEdit}>{promptModels.map((model) => <option key={model.id} value={model.id}>{model.label}{model.configured ? " 路 鍙敤" : " 路 寰呴厤缃?}</option>)}</select></label>
+          </div>}
+          {promptMode === "manual" && <>
+            <label className={`${styles.stackField} ${styles.manualTemplateSelect}`}><span>閫夋嫨宸叉湁鎻愮ず璇嶆ā鏉?/span><select value={manualTemplateId} onChange={(event) => selectManualTemplate(event.target.value)} disabled={!canEdit}><option value="">涓嶄娇鐢ㄦā鏉匡紝缁х画鎵嬪啓</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
+            <label className={styles.stackField}><span>瑙嗛鎻愮ず璇?/span><textarea className={styles.videoPrompt} value={prompt} onChange={(event) => setPrompt(event.target.value)} readOnly={!canEdit} maxLength={30_000} placeholder={canEdit ? "杈撳叆瑙嗛鐢婚潰銆佸姩浣溿€侀暅澶村拰澹伴煶瑕佹眰" : "鏆傛棤瑙嗛鎻愮ず璇?} /></label>
+            <div className={styles.templateSaveSetting}>
+              <label className={styles.checkboxField}><input type="checkbox" checked={saveAsTemplate} onChange={(event) => setSaveAsTemplate(event.target.checked)} disabled={!canEdit || promptSaving} /><span>鍚屾椂淇濆瓨涓烘彁绀鸿瘝妯℃澘</span></label>
+              <label className={styles.templateNameField}><span>妯℃澘鍚嶇О</span><input value={templateName} onChange={(event) => setTemplateName(event.target.value)} disabled={!canEdit || !saveAsTemplate || promptSaving} maxLength={80} placeholder={saveAsTemplate ? "渚嬪锛氫笁鍦烘櫙鍟嗗搧灞曠ず" : "鍕鹃€夊悗濉啓"} /></label>
+            </div>
+            <div className={styles.suffixSaveBar}>
+              <div className={styles.suffixStatus}>
+                <span className={promptDirty ? styles.suffixUnsaved : styles.suffixSaved}>{promptDirty ? "鏈夋湭淇濆瓨淇敼" : `璐﹀彿鑽夌宸蹭繚瀛?{promptUpdatedAt ? ` 路 ${new Date(promptUpdatedAt).toLocaleString()}` : ""}`}</span>
+                <small>浠呬繚瀛樻墜鍐欏畬鏁存彁绀鸿瘝锛屼笉浼氳鐩栧瓙鎻愮ず璇嶄换鍔?/small>
+              </div>
+              <button type="button" className={styles.secondaryAction} onClick={() => void saveManualPromptDraft()} disabled={!canEdit || promptSaving || busy}><Save size={15} aria-hidden="true" />{promptSaving ? "淇濆瓨涓?.." : "淇濆瓨鎵嬪啓鎻愮ず璇?}</button>
+            </div>
+          </>}
+          {promptMode === "asset-template-child-prompt" && <div className={styles.promptAutomationState}><FileText size={17} aria-hidden="true" /><div><strong>{restoredChildPromptReady ? "宸叉仮澶嶅瓙鎻愮ず璇嶏紝鍙洿鎺ョ敓浜? : "瀛愭彁绀鸿瘝闅忎换鍔′繚瀛?}</strong><span>{restoredChildPromptReady ? "鏈鎭㈠宸蹭繚鐣欏師瀛愭彁绀鸿瘝锛屾彁浜ゆ椂涓嶄細閲嶅璋冪敤鎻愮ず璇嶆ā鍨嬨€? : "鎻愪氦鏃惰嚜鍔ㄧ粨鍚堟ā鏉裤€佸弬鑰冨浘鍙?Excel 鍟嗗搧璧勬枡鐢熸垚锛屽彲鍦ㄤ换鍔″崱鐗囦腑鏌ョ湅銆?}</span></div></div>}
+          <div className={styles.assetImagePicker}>
+            {referenceFileLimits && <div className={styles.referenceCapacityHint} role="note">
+              <Info size={16} aria-hidden="true" />
+              <div>
+                <strong>鍙傝€冩枃浠朵笂闄愶細{referenceFileLimits.images.max} 鍥?路 {referenceFileLimits.videos.max} 瑙嗛 路 {referenceFileLimits.audios.max} 闊抽</strong>
+                <span>{formatVideoReferenceCapacity(referenceFileLimits)}</span>
+              </div>
+            </div>}
+            <label className={styles.stackField}>
+              <span>璐﹀彿璧勪骇鍙傝€冨浘锛堝彲澶氶€夛紝鏈€澶?{referenceFileLimits?.images.max ?? 0} 寮狅級</span>
+              <div className={styles.assetPickerEntry}><input className={styles.assetSearchInput} value={assetSearch} onChange={(event) => setAssetSearch(event.target.value)} placeholder="鎸?PID 鎴栫礌鏉愬悕绛涢€? disabled={!canEdit || !selectedCapability || (referenceFileLimits?.images.max ?? 0) === 0} /><button type="button" onClick={() => setAssetPickerOpen(true)} disabled={!canEdit || busy || !selectedCapability || (referenceFileLimits?.images.max ?? 0) === 0}><Images size={16} aria-hidden="true" /><span>閫夋嫨璧勪骇鍥剧墖</span></button></div>
+            </label>
+            <div className={styles.assetPickerSummary}>
+              <span>{assetSearch.trim() ? "鎵撳紑鍚庝粎灞曠ず鎼滅储缁撴灉" : `鎵撳紑鍚庡睍绀哄叏閮?${assetImages.length} 寮犺祫浜у浘鐗嘸}</span>
+              <strong>宸查€?{selectedImages.length} 寮?/strong>
+            </div>
+            {selectedImages.length > 0 && <div className={styles.selectedReferenceList} aria-label="宸查€夎棰戝弬鑰冨浘">
+              {selectedImages.map((image) => <div className={styles.selectedReferenceItem} key={image.id}>
+                <img src={image.url} alt={image.name} />
+                <span title={image.name}>{image.name}</span>
+                <button type="button" onClick={() => toggleAssetImage(image.id)} disabled={!canEdit || busy} aria-label={`绉婚櫎 ${image.name}`} title="绉婚櫎鍙傝€冨浘"><X size={13} aria-hidden="true" /></button>
+              </div>)}
+            </div>}
+           {selectedImages.length > 1 && <div className={styles.multiReferenceHint} role="note">
+              <Info size={16} aria-hidden="true" />
+              <div><strong>澶氬浘鎻愮ず璇?/strong><span>璇锋寜閫夋嫨椤哄簭鍐欐槑鈥滃浘1銆佸浘2鈥︹€︹€濆悇鑷殑鐢ㄩ€旓紱闇€瑕佷富浣撲竴鑷存椂锛岃鏄庣‘鍝紶鍥句负鏈€楂樹紭鍏堢骇銆?/span></div>
+             </div>}
+           </div>
+           {referenceFileLimits && referenceFileLimits.videos.max > 0 && <div className={styles.referenceVideoPicker}>
+             <div className={styles.referenceVideoHeader}>
+               <div><span>鍔ㄤ綔鍙傝€冭棰?/span><small>REFERENCE VIDEO</small></div>
+               <strong>{referenceFileLimits.videos.required ? "蹇呴€?1 娈? : `鏈€澶?${referenceFileLimits.videos.max} 娈礰}</strong>
+             </div>
+             <label className={styles.stackField}>
+               <span>閫夋嫨鍔ㄤ綔婧愯棰?/span>
+               <select
+                 value={referenceVideoAssetId}
+                 onChange={(event) => selectReferenceVideo(event.target.value)}
+                 disabled={!canEdit || busy || assetVideos.length === 0}
+               >
+                 <option value="">{assetVideos.length > 0 ? "璇烽€夋嫨瑙嗛璧勪骇" : "褰撳墠璐﹀彿娌℃湁瑙嗛璧勪骇"}</option>
+                 {assetVideos.map((video) => <option key={video.id} value={video.id}>{video.name} 路 {video.originalName}</option>)}
+               </select>
+             </label>
+             {selectedReferenceVideo && <div className={styles.selectedReferenceVideo}>
+               <video src={selectedReferenceVideo.url} controls preload="metadata" playsInline />
+               <div><strong title={selectedReferenceVideo.name}>{selectedReferenceVideo.name}</strong><small title={selectedReferenceVideo.originalName}>{selectedReferenceVideo.originalName}</small></div>
+               <button type="button" onClick={() => selectReferenceVideo("")} disabled={!canEdit || busy} aria-label="绉婚櫎鍔ㄤ綔鍙傝€冭棰? title="绉婚櫎鍔ㄤ綔鍙傝€冭棰?><X size={15} aria-hidden="true" /></button>
+             </div>}
+             <small className={styles.referenceVideoHint}>鍔ㄤ綔杩佺Щ浼氬皢杩欐瑙嗛浣滀负鍔ㄤ綔婧愶紝骞朵笌涓婇潰鐨?1 寮犱汉鐗╁弬鑰冨浘涓€璧锋彁浜ゃ€?/small>
+           </div>}
+           {supportsReferenceAudio && <div className={styles.audioReference}>
+            <div className={styles.audioReferenceHeader}>
+              <div><span>鍙傝€冮煶棰?/span><small>REFERENCE AUDIO</small></div>
+              <strong>宸查€?{selectedAudioAssets.length} / {referenceAudioMax}</strong>
+            </div>
+            {selectedAudioAssets.length > 0 && <div className={styles.selectedAudioAssetList}>
+              {selectedAudioAssets.map((asset) => <div className={styles.selectedAudioAsset} key={asset.id}>
+                <span className={styles.selectedAudioIcon} aria-hidden="true"><FileAudio2 size={18} /></span>
+                <div className={styles.selectedAudioIdentity}>
+                  <strong title={asset.name}>{asset.name}</strong>
+                  <small title={asset.originalName}>{asset.originalName}</small>
+                </div>
+                <button type="button" onClick={() => { setSelectedAudioAssetIds((current) => current.filter((id) => id !== asset.id)); setAudioError(""); }} disabled={!canEdit || audioUploading || busy} aria-label={`绉婚櫎 ${asset.name}`} title="绉婚櫎鍙傝€冮煶棰?><X size={15} aria-hidden="true" /></button>
+                <audio src={asset.url} controls preload="metadata" aria-label={`${asset.name} 闊抽棰勮`} />
+              </div>)}
+            </div>}
+            <div className={styles.audioReferenceBody}>
+              <div className={styles.audioAssetBrowser}>
+                <label className={styles.audioSearch}>
+                  <Search size={15} aria-hidden="true" />
+                  <input id="workspace-video-audio-search" name="workspace-video-audio-search" type="search" value={audioSearch} onChange={(event) => setAudioSearch(event.target.value)} placeholder="鎼滅储闊抽璧勪骇" aria-label="鎼滅储璐﹀彿闊抽璧勪骇" disabled={!canEdit || audioUploading} />
+                  {audioSearch && <button type="button" onClick={() => setAudioSearch("")} aria-label="娓呴櫎闊抽鎼滅储" title="娓呴櫎鎼滅储"><X size={14} aria-hidden="true" /></button>}
+                </label>
+                <div className={styles.audioAssetList} role="listbox" aria-label="璐﹀彿闊抽璧勪骇">
+                  {filteredAudioAssets.length === 0
+                    ? <div className={styles.audioAssetEmpty}><AudioLines size={17} aria-hidden="true" /><span>{audioSearch.trim() ? "娌℃湁鍖归厤鐨勯煶棰? : "鏆傛棤璐﹀彿闊抽璧勪骇"}</span></div>
+                    : filteredAudioAssets.map((asset) => {
+                      const selected = selectedAudioAssetIds.includes(asset.id);
+                      const supported = isReferenceAudioMimeTypeSupported(asset.mimeType, selectedAudioMimeTypes);
+                      return <button
+                        key={asset.id}
+                        type="button"
+                        role="option"
+                        aria-selected={selected}
+                        className={selected ? styles.audioAssetOptionActive : styles.audioAssetOption}
+                         onClick={() => {
+                           if (!supported) return;
+                           setSelectedAudioAssetIds((current) => {
+                             if (current.includes(asset.id)) return current.filter((id) => id !== asset.id);
+                             if (current.length >= referenceAudioMax) {
+                               setAudioError(`褰撳墠杈撳嚭缁勫悎鏈€澶氭敮鎸?${referenceAudioMax} 涓弬鑰冮煶棰慲);
+                               return current;
+                             }
+                             setAudioError("");
+                             return [...current, asset.id];
+                           });
+                         }}
+                        disabled={!canEdit || audioUploading || busy || !supported}
+                        title={supported ? asset.originalName : "褰撳墠妯″瀷涓嶆敮鎸佹闊抽鏍煎紡"}
+                      >
+                        <AudioLines size={16} aria-hidden="true" />
+                        <span><strong title={asset.name}>{asset.name}</strong><small title={asset.originalName}>{asset.originalName}</small></span>
+                        {selected && <Check size={14} aria-hidden="true" />}
+                      </button>;
+                    })}
+                </div>
+              </div>
+              <label
+                className={`${styles.audioUploadDropZone} ${audioDragActive ? styles.audioUploadDropZoneActive : ""}`}
+                aria-disabled={!canEdit || audioUploading || busy}
+                onDragOver={(event) => { event.preventDefault(); if (canEdit && !audioUploading && !busy) { setAudioDragActive(true); event.dataTransfer.dropEffect = "copy"; } }}
+                onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setAudioDragActive(false); }}
+                onDrop={(event) => void handleReferenceAudioDrop(event)}
+              >
+                <UploadCloud size={22} aria-hidden="true" />
+                <strong>{audioUploading ? "姝ｅ湪淇濆瓨..." : audioDragActive ? "鏉惧紑鍗冲彲涓婁紶" : `鐐瑰嚮鎴栨嫋鍏?${referenceAudioFormatLabel}`}</strong>
+                <small>鍙竴娆￠€夋嫨 {referenceAudioMax} 涓?路 鍗曚釜鏈€澶?20MB 路 {referenceAudioFormatLabel}</small>
+                <input id="workspace-video-audio-upload" name="workspace-video-audio-upload" type="file" accept={referenceAudioAccept} multiple={referenceAudioMax > 1} disabled={!canEdit || audioUploading || busy} onChange={(event) => { selectReferenceAudioFiles(event.target.files ?? []); event.target.value = ""; }} />
+              </label>
+            </div>
+            {audioError && <p className={styles.audioReferenceError} role="alert">{audioError}</p>}
+          </div>}
+        </section>
+
+        <section className={styles.formSection}>
+          <div className={styles.sectionTitle}><span>03</span><div><strong>杈撳嚭鍙傛暟</strong><small>OUTPUT</small></div></div>
+          {(selectedSupplier?.id === "nfvid" || selectedSupplier?.id === "minimax" || selectedSupplier?.id === "grok-video" || selectedSupplier?.id === "mgrouter-grok-video" || selectedSupplier?.id === "manjuai") && selectedImages.length > 0 && <p className={styles.referenceBridgeNotice}>褰撳墠渚涘簲鍟嗚姹傚叕缃戝浘鐗囬摼鎺ワ紝鎻愪氦鏃朵細鎶婃湰鍦拌祫浜ц浆鎹㈡垚涓存椂 HTTPS 鍥剧墖閾炬帴銆?/p>}
+          <div className={styles.parameterGrid}>
+            <label><span>鏃堕暱</span><select value={duration} onChange={(event) => setDuration(event.target.value)} disabled={!canEdit || !selectedCapability}>{durationOptions.map((value) => <option key={value} value={value}>{value} 绉?/option>)}</select></label>
+            <label><span>鐢婚潰姣斾緥</span><select value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)} disabled={!canEdit || !selectedCapability}>{(selectedCapability?.aspectRatios ?? []).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>鍒嗚鲸鐜?/span><select value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={!canEdit || !selectedCapability}>{(selectedCapability?.resolutions ?? []).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>鐢熸垚鏁伴噺</span><select value={count} onChange={(event) => setCount(event.target.value)} disabled={!canEdit}>{[1, 2, 3, 4].map((value) => <option key={value} value={value}>{value} 鏉?/option>)}</select></label>
+          </div>
+          <div className={styles.suffixSetting}><label className={styles.checkboxField}><input type="checkbox" checked={suffixEnabled} onChange={(event) => setSuffixEnabled(event.target.checked)} disabled={!canEdit || suffixLoading} /><span>杩藉姞缁熶竴鍚庣紑</span></label><small>{suffixEnabled ? "浠诲姟浣跨敤鏈嶅姟绔凡淇濆瓨鐗堟湰锛涚紪杈戜絾鏈繚瀛樼殑鍐呭涓嶄細鐢熸晥" : "褰撳墠浠诲姟涓嶈拷鍔犵粺涓€鍚庣紑"}</small></div>
+          <label className={styles.stackField}><span>缁熶竴鍚庣紑鍐呭锛?0000 褰撳墠鐗堟湰锛?/span><textarea value={suffixDraft} onChange={(event) => setSuffixDraft(event.target.value)} readOnly={!canEdit || suffixLoading} maxLength={30_000} placeholder="姝ｅ湪璇诲彇 10000 鍚庣紑..." /></label>
+          <div className={styles.suffixSaveBar}><div className={styles.suffixStatus}><span className={suffixDirty ? styles.suffixUnsaved : styles.suffixSaved}>{suffixLoading ? "姝ｅ湪璇诲彇" : suffixDirty ? "鏈夋湭淇濆瓨淇敼" : suffixSource === "10000" ? "宸茶浇鍏?10000 鍚庣紑" : `宸蹭繚瀛?{suffixUpdatedAt ? ` 路 ${new Date(suffixUpdatedAt).toLocaleString()}` : ""}`}</span><small>鍚庣紑鍐呭 {Array.from(suffixDraft).length.toLocaleString()} 瀛?/small></div><button type="button" className={styles.secondaryAction} onClick={() => void saveSuffix()} disabled={!canEdit || suffixLoading || suffixSaving}>{suffixSaving ? "淇濆瓨涓?.." : "淇濆瓨鍚庣紑"}</button></div>
+          <div className={styles.videoSubmit}><div><span>{promptMode === "manual" ? `瑙嗛鎻愮ず璇?${Array.from(prompt).length.toLocaleString()} 瀛梎 : selectedImagePid ? `褰撳墠鍟嗗搧 ${selectedImagePid}` : "绛夊緟閫夋嫨鍟嗗搧鍙傝€冨浘"}</span>{message && <small role="status" aria-live="polite">{message}</small>}{promptMode === "asset-template-child-prompt" && templateReferenceIssue && <small className={styles.referenceValidation}>{templateReferenceIssue}</small>}{unmatchedTemplateReference && <small className={styles.referenceValidation}>褰撳墠 PID 鏈尮閰嶏紝鎻愪氦鏃堕渶瑕佺‘璁?/small>}</div><button type="submit" disabled={!canEdit || busy || audioUploading || !selectedSupplier?.configured || !selectedCapability || Boolean(templateReferenceIssue)}>{audioUploading ? "姝ｅ湪淇濆瓨闊抽..." : busy ? "澶勭悊涓?.." : !canEdit ? "鍙鏌ョ湅" : promptMode === "asset-template-child-prompt" ? "鐢熸垚鎻愮ず璇嶅苟鍔犲叆闃熷垪" : "鍔犲叆鐢熶骇闃熷垪"}</button></div>
+        </section>
+      </form>
+
+      <aside className={styles.queuePanel}>
+        <header><div><span>PRODUCTION QUEUE</span><h3>鐢熶骇闃熷垪</h3></div><div className={styles.queueHeaderTools}><label className={styles.queueDateFilter}><CalendarDays size={14} aria-hidden="true" /><span className={styles.visuallyHidden}>鎸夋棩鏈熺瓫閫夌敓浜т换鍔?/span><input type="date" value={queueDate} onChange={(event) => { if (event.target.value) setQueueDate(event.target.value); }} /></label></div></header>
+        <div className={styles.queueTabs} role="tablist" aria-label="浠诲姟鐘舵€?>
+          <button type="button" role="tab" aria-selected={queueTab === "all"} className={queueTab === "all" ? styles.queueTabActive : styles.queueTab} onClick={() => setQueueTab("all")}>鍏ㄩ儴锛坽visibleDateTasks.length}锛?/button>
+          <button type="button" role="tab" aria-selected={queueTab === "active"} className={queueTab === "active" ? styles.queueTabActive : styles.queueTab} onClick={() => setQueueTab("active")}>杩涜涓紙{activeTasks.length}锛?/button>
+          <button type="button" role="tab" aria-selected={queueTab === "completed"} className={queueTab === "completed" ? styles.queueTabActive : styles.queueTab} onClick={() => setQueueTab("completed")}>瀹屾垚锛坽completedTasks.length}锛?/button>
+          <button type="button" role="tab" aria-selected={queueTab === "failed"} className={queueTab === "failed" ? styles.queueTabActive : styles.queueTab} onClick={() => setQueueTab("failed")}>澶辫触锛坽failedTasks.length}锛?/button>
+        </div>
+         <div ref={taskListRef} className={styles.taskList}>{visibleTasks.length === 0
+          ? <div className={styles.emptyQueue}><span>{queueTab === "all" ? "QUEUE" : queueTab === "active" ? "00:00" : queueTab === "completed" ? "DONE" : "CLEAR"}</span><strong>{queueTab === "all" ? "褰撳ぉ鏆傛棤鐢熶骇浠诲姟" : queueTab === "active" ? "鏆傛棤杩涜涓殑浠诲姟" : queueTab === "completed" ? "鏆傛棤宸插畬鎴愪换鍔? : "鏆傛棤澶辫触浠诲姟"}</strong></div>
+          : visibleTasks.map((task) => <TaskCard
+              key={task.id}
+              task={task}
+              suppliers={suppliers}
+              canEdit={canEdit}
+              busyAction={taskActionBusy}
+              onViewPrompt={openTaskPrompt}
+              onRestore={(task) => window.location.assign(productionRestoreHref(task.accountId, task.id))}
+              onAction={runTaskAction}
+            />)}</div>
+      </aside>
+      {dialogTask && <TaskPromptDialog
+        task={dialogTask}
+        prompt={dialogPrompt}
+        loading={dialogLoading}
+        onClose={closeTaskDialog}
+      />}
+      {assetPickerOpen && selectedCapability && <AssetImagePickerDialog accountId={accountId} canEdit={canEdit} images={assetImages} selectedIds={assetImageIds} maxSelection={referenceFileLimits?.images.max ?? 0} searchValue={assetSearch} onSearchChange={setAssetSearch} onImagesUploaded={handleImagesUploaded} onImagesImported={handleImagesUploaded} onClose={() => setAssetPickerOpen(false)} onConfirm={(ids) => { setAssetImageIds(ids); setAssetPickerOpen(false); setMessage(""); }} />}
+    </div>
+  );
+}
+
+function TaskCard({
+  task,
+  suppliers,
+  canEdit,
+  busyAction,
+  onViewPrompt,
+  onRestore,
+  onAction,
+}: {
+  task: VideoTask;
+  suppliers: PublicVideoSupplier[];
+  canEdit: boolean;
+  busyAction: string;
+  onViewPrompt: (task: VideoTask) => Promise<void>;
+  onRestore: (task: VideoTask) => void;
+  onAction: (task: VideoTask, action: "delete") => Promise<void>;
+}) {
+  const [errorExpanded, setErrorExpanded] = useState(false);
+  const active = ACTIVE_STATUSES.has(task.status);
+  const actionPending = busyAction.startsWith(`${task.id}:`);
+  const statusClass = task.status === "failed"
+    ? styles.taskStatusFailed
+    : task.status === "completed"
+      ? styles.taskStatusCompleted
+      : styles.taskStatusActive;
+  const displayName = task.name || `video_${new Date(task.createdAt).toLocaleDateString("zh-CN").replaceAll("/", "")}_${task.id.slice(-4)}`;
+  const supplierLabel = suppliers.find((supplier) => supplier.id === task.supplierId)?.label ?? task.supplierId;
+  const modelLabel = VIDEO_MODELS.find((model) => model.id === task.modelId)?.label ?? task.modelId;
+  const hasErrorDetail = Boolean(
+    task.errorDetail?.code
+    || task.errorDetail?.message
+    || task.errorDetail?.status
+    || task.providerTaskId,
+  );
+  const errorDetailId = `task-error-${task.id}`;
+
+  return <article id={`video-task-${task.id}`} className={styles.taskItem}>
+      <div className={styles.taskItemHeader}>
+      <div className={styles.taskIdentity}>
+        <span>{task.accountName} 路 {supplierLabel} 路 {modelLabel}</span>
+        <strong title={displayName}>{displayName}</strong>
+      </div>
+      <span className={statusClass}>{STATUS_LABELS[task.status] ?? task.status}</span>
+    </div>
+    <div className={styles.taskMeta}>
+      <span>{task.duration} 绉?/span>
+      <span>{task.aspectRatio}</span>
+      <span>{task.resolution}</span>
+      {task.audioAttached && <span className={styles.taskAudioBadge} title="浠诲姟宸查檮甯﹀弬鑰冮煶棰?><AudioLines size={11} aria-hidden="true" />鍙傝€冮煶棰?/span>}
+      <time dateTime={task.createdAt}>{new Date(task.createdAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time>
+    </div>
+    {active && <div className={styles.taskProgress} aria-label={`浠诲姟杩涘害 ${task.progress}%`}><i style={{ width: `${Math.max(2, Math.min(100, task.progress))}%` }} /></div>}
+    <small className={styles.taskPhase}>{taskPhase(task)}</small>
+    {task.error && <div className={styles.taskError}>
+      <span>{task.error}</span>
+      {hasErrorDetail && <button
+        type="button"
+        className={styles.taskErrorToggle}
+        onClick={() => setErrorExpanded((current) => !current)}
+        aria-expanded={errorExpanded}
+        aria-controls={errorDetailId}
+        aria-label={errorExpanded ? "鏀惰捣閿欒璇︽儏" : "灞曞紑閿欒璇︽儏"}
+        title={errorExpanded ? "鏀惰捣閿欒璇︽儏" : "灞曞紑閿欒璇︽儏"}
+      >{errorExpanded ? <ChevronUp size={15} aria-hidden="true" /> : <ChevronDown size={15} aria-hidden="true" />}</button>}
+    </div>}
+    {task.error && hasErrorDetail && errorExpanded && <dl className={styles.taskErrorDetail} id={errorDetailId}>
+      {task.errorDetail?.code && <div><dt>閿欒浠ｇ爜</dt><dd>{task.errorDetail.code}</dd></div>}
+      {task.errorDetail?.status && <div><dt>渚涘簲鍟嗙姸鎬?/dt><dd>{task.errorDetail.status}</dd></div>}
+      {task.errorDetail?.message && <div className={styles.taskErrorMessage}><dt>璇︾粏淇℃伅</dt><dd>{task.errorDetail.message}</dd></div>}
+      {task.providerTaskId && <div className={styles.taskErrorMessage}><dt>渚涘簲鍟嗕换鍔?ID</dt><dd>{task.providerTaskId}</dd></div>}
+    </dl>}
+    <div className={styles.taskActions}>
+      <button type="button" onClick={() => void onViewPrompt(task)} title="鏌ョ湅鏈€缁堟彁绀鸿瘝"><FileText size={14} aria-hidden="true" /><span>鎻愮ず璇?/span></button>
+      {task.status === "completed" && <>
+        <a href={productionVideoReviewHref(task.accountId, task.id)} title="鏌ョ湅瑙嗛瀹℃牳涓庢晥鏋?><Play size={14} aria-hidden="true" /><span>瑙嗛</span></a>
+         <span className={task.inventorySaved ? styles.inventorySaved : styles.inventoryPending}>{task.inventorySaved ? "宸插瓨搴? : "鏈瓨搴?}</span>
+      </>}
+      {task.status === "failed" && canEdit && <button type="button" onClick={() => onRestore(task)} disabled={actionPending} title="鎭㈠浠诲姟閰嶇疆"><RefreshCw size={14} aria-hidden="true" /><span>鎭㈠</span></button>}
+      {(task.status === "failed" || task.status === "completed") && canEdit && <button type="button" className={styles.taskDeleteAction} onClick={() => void onAction(task, "delete")} disabled={actionPending} title={task.status === "completed" ? "浠庣敓浜ч槦鍒楀垹闄や换鍔? : "鍒犻櫎澶辫触浠诲姟"}><Trash2 size={14} aria-hidden="true" /><span>鍒犻櫎</span></button>}
+    </div>
+  </article>;
+}
+
+function TaskPromptDialog({
+  task,
+  prompt,
+  loading,
+  onClose,
+}: {
+  task: VideoTask;
+  prompt: string;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  return <div className={styles.taskDialogBackdrop} onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section className={styles.taskDialog} role="dialog" aria-modal="true" aria-labelledby="video-task-dialog-title">
+      <header>
+        <div><span>TASK PROMPT</span><h3 id="video-task-dialog-title">{task.name || task.modelId}</h3></div>
+        <button type="button" onClick={onClose} aria-label="鍏抽棴" title="鍏抽棴"><X size={18} aria-hidden="true" /></button>
+      </header>
+      <div className={styles.taskDialogBody}>
+        {loading ? <div className={styles.dialogLoading}>姝ｅ湪璇诲彇鎻愮ず璇?..</div> : <pre>{prompt}</pre>}
+      </div>
+      <footer>
+        <span>{task.modelId} 路 {task.duration} 绉?路 {task.aspectRatio} 路 {task.resolution}</span>
+      </footer>
+    </section>
+  </div>;
+}

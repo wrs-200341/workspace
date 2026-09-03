@@ -1,0 +1,120 @@
+    promptMode,
+    selectedImageCount: selectedImages.length,
+    referenceRow: selectedReferenceRow,
+  });
+  const unmatchedTemplateReference = promptMode === "asset-template-child-prompt"
+    && selectedImages.length > 0
+    && !selectedReferenceRow;
+  const selectedTemplate = promptTemplates.find((item) => item.id === templateId) ?? null;
+  const selectedPromptModel = promptModels.find((item) => item.id === promptModel) ?? null;
+  const visibleDateTasks = useMemo(() => filterRecordsByShanghaiDate(tasks, queueDate), [queueDate, tasks]);
+  const activeTasks = visibleDateTasks.filter((task) => ACTIVE_STATUSES.has(task.status));
+  const completedTasks = visibleDateTasks.filter((task) => task.status === "completed");
+  const failedTasks = visibleDateTasks.filter((task) => task.status === "failed");
+  const unstoredTasks = visibleDateTasks.filter((task) => task.status === "completed" && !task.inventorySaved);
+  const firstUnstoredTask = findFirstUnstoredVideoTask(unstoredTasks);
+  const visibleTasks = filterProductionQueue(visibleDateTasks, queueTab);
+  const suffixDirty = suffixDraft !== savedSuffix;
+  const promptDirty = prompt !== savedPrompt;
+
+  useEffect(() => {
+    if (!availableSuppliers.some((supplier) => supplier.id === supplierId)) setSupplierId(availableSuppliers[0]?.id ?? "");
+  }, [availableSuppliers, supplierId]);
+
+  useEffect(() => {
+    if (!selectedCapability) return;
+    const capabilityChanged = previousCapabilityKey.current !== capabilityKey;
+    previousCapabilityKey.current = capabilityKey;
+    if (capabilityChanged) {
+      setDuration(String(getDefaultVideoDuration(selectedCapability)));
+      setAspectRatio(getDefaultVideoAspectRatio(selectedCapability.aspectRatios, selectedCapability.defaultAspectRatio));
+          <div className={styles.sectionTitle}><span>03</span><div><strong>杈撳嚭鍙傛暟</strong><small>OUTPUT</small></div></div>
+          {(selectedSupplier?.id === "nfvid" || selectedSupplier?.id === "minimax" || selectedSupplier?.id === "grok-video" || selectedSupplier?.id === "mgrouter-grok-video" || selectedSupplier?.id === "manjuai") && selectedImages.length > 0 && <p className={styles.referenceBridgeNotice}>褰撳墠渚涘簲鍟嗚姹傚叕缃戝浘鐗囬摼鎺ワ紝鎻愪氦鏃朵細鎶婃湰鍦拌祫浜ц浆鎹㈡垚涓存椂 HTTPS 鍥剧墖閾炬帴銆?/p>}
+          <div className={styles.parameterGrid}>
+            <label><span>鏃堕暱</span><select value={duration} onChange={(event) => setDuration(event.target.value)} disabled={!canEdit || !selectedCapability}>{durationOptions.map((value) => <option key={value} value={value}>{value} 绉?/option>)}</select></label>
+            <label><span>鐢婚潰姣斾緥</span><select value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)} disabled={!canEdit || !selectedCapability}>{(selectedCapability?.aspectRatios ?? []).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>鍒嗚鲸鐜?/span><select value={resolution} onChange={(event) => setResolution(event.target.value)} disabled={!canEdit || !selectedCapability}>{(selectedCapability?.resolutions ?? []).map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+            <label><span>鐢熸垚鏁伴噺</span><select value={count} onChange={(event) => setCount(event.target.value)} disabled={!canEdit}>{[1, 2, 3, 4].map((value) => <option key={value} value={value}>{value} 鏉?/option>)}</select></label>
+          </div>
+          <div className={styles.suffixSetting}><label className={styles.checkboxField}><input type="checkbox" checked={suffixEnabled} onChange={(event) => setSuffixEnabled(event.target.checked)} disabled={!canEdit || suffixLoading} /><span>杩藉姞缁熶竴鍚庣紑</span></label><small>{suffixEnabled ? "浠诲姟浣跨敤鏈嶅姟绔凡淇濆瓨鐗堟湰锛涚紪杈戜絾鏈繚瀛樼殑鍐呭涓嶄細鐢熸晥" : "褰撳墠浠诲姟涓嶈拷鍔犵粺涓€鍚庣紑"}</small></div>
+          <label className={styles.stackField}><span>缁熶竴鍚庣紑鍐呭锛?0000 褰撳墠鐗堟湰锛?/span><textarea value={suffixDraft} onChange={(event) => setSuffixDraft(event.target.value)} readOnly={!canEdit || suffixLoading} maxLength={30_000} placeholder="姝ｅ湪璇诲彇 10000 鍚庣紑..." /></label>
+          <div className={styles.suffixSaveBar}><div className={styles.suffixStatus}><span className={suffixDirty ? styles.suffixUnsaved : styles.suffixSaved}>{suffixLoading ? "姝ｅ湪璇诲彇" : suffixDirty ? "鏈夋湭淇濆瓨淇敼" : suffixSource === "10000" ? "宸茶浇鍏?10000 鍚庣紑" : `宸蹭繚瀛?{suffixUpdatedAt ? ` 路 ${new Date(suffixUpdatedAt).toLocaleString()}` : ""}`}</span><small>鍚庣紑鍐呭 {Array.from(suffixDraft).length.toLocaleString()} 瀛?/small></div><button type="button" className={styles.secondaryAction} onClick={() => void saveSuffix()} disabled={!canEdit || suffixLoading || suffixSaving}>{suffixSaving ? "淇濆瓨涓?.." : "淇濆瓨鍚庣紑"}</button></div>
+          <div className={styles.videoSubmit}><div><span>{promptMode === "manual" ? `瑙嗛鎻愮ず璇?${Array.from(prompt).length.toLocaleString()} 瀛梎 : selectedImagePid ? `褰撳墠鍟嗗搧 ${selectedImagePid}` : "绛夊緟閫夋嫨鍟嗗搧鍙傝€冨浘"}</span>{message && <small role="status" aria-live="polite">{message}</small>}{promptMode === "asset-template-child-prompt" && templateReferenceIssue && <small className={styles.referenceValidation}>{templateReferenceIssue}</small>}{unmatchedTemplateReference && <small className={styles.referenceValidation}>褰撳墠 PID 鏈尮閰嶏紝鎻愪氦鏃堕渶瑕佺‘璁?/small>}</div><button type="submit" disabled={!canEdit || busy || audioUploading || !selectedSupplier?.configured || !selectedCapability || Boolean(templateReferenceIssue)}>{audioUploading ? "姝ｅ湪淇濆瓨闊抽..." : busy ? "澶勭悊涓?.." : !canEdit ? "鍙鏌ョ湅" : promptMode === "asset-template-child-prompt" ? "鐢熸垚鎻愮ず璇嶅苟鍔犲叆闃熷垪" : "鍔犲叆鐢熶骇闃熷垪"}</button></div>
+        </section>
+      </form>
+
+      <aside className={styles.queuePanel}>
+        <header><div><span>PRODUCTION QUEUE</span><h3>鐢熶骇闃熷垪</h3></div><div className={styles.queueHeaderTools}><div className={styles.queueInventoryNotice} role="status" aria-live="polite"><span>鏈叆搴?<strong>{unstoredTasks.length}</strong> 鏉?/span>{firstUnstoredTask && <button type="button" className={styles.queueJumpLink} onClick={() => { setQueueTab("all"); setQueueFocusTaskId(firstUnstoredTask.id); }} title="璺宠浆鍒版湭鍏ュ簱浠诲姟">璺宠浆</button>}</div><label className={styles.queueDateFilter}><CalendarDays size={14} aria-hidden="true" /><span className={styles.visuallyHidden}>鎸夋棩鏈熺瓫閫夌敓浜т换鍔?/span><input type="date" value={queueDate} onChange={(event) => { if (event.target.value) setQueueDate(event.target.value); }} /></label></div></header>
+        <div className={styles.queueTabs} role="tablist" aria-label="浠诲姟鐘舵€?>
+          <button type="button" role="tab" aria-selected={queueTab === "all"} className={queueTab === "all" ? styles.queueTabActive : styles.queueTab} onClick={() => setQueueTab("all")}>鍏ㄩ儴锛坽visibleDateTasks.length}锛?/button>
+          <button type="button" role="tab" aria-selected={queueTab === "active"} className={queueTab === "active" ? styles.queueTabActive : styles.queueTab} onClick={() => setQueueTab("active")}>杩涜涓紙{activeTasks.length}锛?/button>
+          <button type="button" role="tab" aria-selected={queueTab === "completed"} className={queueTab === "completed" ? styles.queueTabActive : styles.queueTab} onClick={() => setQueueTab("completed")}>瀹屾垚锛坽completedTasks.length}锛?/button>
+          <button type="button" role="tab" aria-selected={queueTab === "failed"} className={queueTab === "failed" ? styles.queueTabActive : styles.queueTab} onClick={() => setQueueTab("failed")}>澶辫触锛坽failedTasks.length}锛?/button>
+        </div>
+         <div ref={taskListRef} className={styles.taskList}>{visibleTasks.length === 0
+          ? <div className={styles.emptyQueue}><span>{queueTab === "all" ? "QUEUE" : queueTab === "active" ? "00:00" : queueTab === "completed" ? "DONE" : "CLEAR"}</span><strong>{queueTab === "all" ? "褰撳ぉ鏆傛棤鐢熶骇浠诲姟" : queueTab === "active" ? "鏆傛棤杩涜涓殑浠诲姟" : queueTab === "completed" ? "鏆傛棤宸插畬鎴愪换鍔? : "鏆傛棤澶辫触浠诲姟"}</strong></div>
+          : visibleTasks.map((task) => <TaskCard
+              key={task.id}
+              task={task}
+              suppliers={suppliers}
+              canEdit={canEdit}
+              busyAction={taskActionBusy}
+              onViewPrompt={openTaskPrompt}
+              onRestore={(task) => window.location.assign(productionRestoreHref(task.accountId, task.id))}
+              onAction={runTaskAction}
+            />)}</div>
+      </aside>
+      {dialogTask && <TaskPromptDialog
+        task={dialogTask}
+        prompt={dialogPrompt}
+        loading={dialogLoading}
+        onClose={closeTaskDialog}
+      />}
+      {assetPickerOpen && selectedCapability && <AssetImagePickerDialog accountId={accountId} canEdit={canEdit} images={assetImages} selectedIds={assetImageIds} maxSelection={referenceFileLimits?.images.max ?? 0} searchValue={assetSearch} onSearchChange={setAssetSearch} onImagesUploaded={handleImagesUploaded} onImagesImported={handleImagesUploaded} onClose={() => setAssetPickerOpen(false)} onConfirm={(ids) => { setAssetImageIds(ids); setAssetPickerOpen(false); setMessage(""); }} />}
+    </div>
+  );
+}
+
+function TaskCard({
+  task,
+  suppliers,
+export type ProductionQueueTab = "all" | "active" | "completed" | "failed";
+
+export interface ProductionQueueTask {
+  status: string;
+}
+
+export interface UnstoredVideoQueueTask extends ProductionQueueTask {
+  id: string;
+  inventorySaved: boolean;
+}
+
+export function productionQueueGroup(status: string): Exclude<ProductionQueueTab, "all"> {
+  if (status === "completed") return "completed";
+  if (status === "failed") return "failed";
+  return "active";
+}
+
+export function filterProductionQueue<T extends ProductionQueueTask>(
+  tasks: readonly T[],
+  tab: ProductionQueueTab,
+): T[] {
+  if (tab === "all") return [...tasks];
+  return tasks.filter((task) => productionQueueGroup(task.status) === tab);
+}
+
+export function findFirstUnstoredVideoTask<T extends UnstoredVideoQueueTask>(
+  tasks: readonly T[],
+): T | null {
+  return tasks.find((task) => task.status === "completed" && !task.inventorySaved) ?? null;
+}
+
+export function preserveTaskAccountName<T extends { accountName?: string }>(
+  task: T,
+  fallbackAccountName: string,
+): T & { accountName: string } {
+  return {
+    ...task,
+    accountName: task.accountName?.trim() || fallbackAccountName,
+  };
+}

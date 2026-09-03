@@ -1,0 +1,114 @@
+
+> shujukanban@0.1.0 test
+> vitest run
+
+
+ RUN  v4.1.9 C:/Users/EDY/Desktop/集成
+
+
+ Test Files  116 passed (116)
+      Tests  698 passed (698)
+   Start at  15:41:32
+   Duration  3.79s (transform 8.97s, setup 0ms, import 20.40s, tests 5.42s, environment 15ms)
+
+warning: in the working copy of '.env.example', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'package.json', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'prisma/schema.prisma', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'restart-kanban.ps1', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/files/[fileId]/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/files/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/files/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/generate-image/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/generate-prompt/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/generate-video-prompt/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/generate-video/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/generate-video/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/image-tasks/[taskId]/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/image-tasks/[taskId]/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/image-tasks/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/image-tasks/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/production-drafts/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/prompt-conversations/[conversationId]/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/prompt-conversations/[conversationId]/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/prompt-conversations/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/prompt-conversations/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/prompts/[promptId]/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/prompts/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/video-reference/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/video-tasks/[taskId]/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/video-tasks/[taskId]/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/video-tasks/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/[id]/video-tasks/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/accounts/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/shared-products/[pid]/files/[fileId]/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/shared-products/[pid]/files/[fileId]/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/shared-products/route.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/shared-products/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/api/workspace/video-settings/route.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/WorkspaceClient.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/assets/AssetClient.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/assets/SharedProductGallery.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/assets/assets.module.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/assets/audio-assets-ui.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/assets/drop-files.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/assets/page.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/assets/shared-product-gallery-ui.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/AssetImagePickerDialog.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/ImageProductionPanel.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/ProductionClient.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/asset-image-picker.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/asset-image-picker.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/page.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/panels.module.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/production-queue.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/production-queue.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/production-workspace-navigation.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/production-workspace-navigation.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/production.module.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/prompt-draft-save-ui.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/shared-product-production.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/types.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/video-audio-reference.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/video-prompt-input.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/accounts/[id]/production/video-prompt-input.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/page.tsx', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/app/workspace/workspace.module.css', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/auth/roles.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/auth/roles.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/file-drop.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/assets.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/assets.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/audio-bridge.server.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/audio-bridge.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/catalog.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/catalog.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/image-generation.server.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/image-generation.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/image-generation.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/image-tasks.server.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/image-tasks.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/reference-bridge.server.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/reference-bridge.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/server-catalog.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/server-catalog.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-capabilities.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-capabilities.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-generation.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-generation.submit.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-generation.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-prompt.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-reference.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-reference.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-task-processor.server.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-task-processor.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-tasks.server.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/production/video-tasks.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/schemas.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/schemas.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/shared-product-gallery.server.test.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/shared-product-gallery.server.ts', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'src/lib/workspace/shared-product-gallery.ts', LF will be replaced by CRLF the next time Git touches it

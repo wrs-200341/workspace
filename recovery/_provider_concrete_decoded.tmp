@@ -1,0 +1,3564 @@
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 9 userMessage len=71 ===
+帮我把192.168.0.133:10000这个项目用9999端口项目的minimax的模型接进去，key环境变量已经写好了，只需要接进去就行
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 12 agentMessage len=82 ===
+我先检查两个端口项目的启动方式、模型调用封装和环境变量命名，确认 9999 项目里 MiniMax 的接法后，再把同样的配置接到 10000 项目并做一次本地验证。
+
+=== 01a02249-3f53-7cc0-859c-3640aa367444 30 agentMessage len=58 ===
+我先只读摸一下工作区，定位 `9999` 项目里 MiniMax 的真实接入点、环境变量名和调用入口，不动任何文件。
+
+=== 01a02249-3f53-7cc0-859c-3640aa367444 38 agentMessage len=87 ===
+我已经把候选项目范围收窄到 `Desktop` 下几个像样的代码库了，接下来直接找 `9999` 和 `MiniMax` 的实际引用，确认是哪一个项目在跑、哪一个项目在接入。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 39 agentMessage len=122 ===
+我已经把范围缩到两个很像的候选工程：`Desktop\\视频生成手搓版` 和 `Desktop\\集成`。接下来我会只在这两个目录里追 `9999/10000`、`MiniMax` 和启动入口，先确认真实项目边界，再看 provider 链路。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 50 agentMessage len=132 ===
+我已经确认 `9999` 侧就是 `Desktop\\视频生成手搓版`，里面有独立的 `MiniMaxProvider` 和对应测试。现在补一层：我只扫启动脚本、web server 和 provider 实现，顺手确认 `10000` 项目到底是不是另一个目录。
+
+=== 01a02249-3f53-7cc0-859c-3640aa367444 66 agentMessage len=100 ===
+`9999` 项目里已经看到 `MINIMAX_API_KEY` 和 `minimax_provider.py` 了；我现在补齐它的模型清单和真正发请求的符号位置，再对照 `10000` 项目看差异。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 64 agentMessage len=107 ===
+我还没看到一个独立的 `10000` 源码目录，现在线索更像是部署地址而不是项目名。下一步我只抓两件事：`9999` 项目里 MiniMax 的真实实现，以及 `10000` 端点在工作区里对应的启动脚本/服务名。
+
+=== 01a02249-3f53-7cc0-859c-3640aa367444 86 agentMessage len=155 ===
+我把关键链路缩成两条了：`9999` 这边是 `web_server -> _build_task -> runner.make_video_provider -> MiniMaxProvider`，`10000` 这边还停在 `funai/grok/oairegbox` 分支里。现在补行号，方便你直接定位。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 78 agentMessage len=97 ===
+我现在用进程和端口反查，避免把“10000 端口”误当成一个目录名。与此同时我只读 `9999` 的 `MiniMaxProvider`、`web_server` 和测试，提炼出它的真实接入面。
+
+=== 01a02249-3f53-7cc0-859c-3640aa367444 103 agentMessage len=92 ===
+我已经拿到两个项目的骨架了。下一步只补证据：启动入口、模型注册表、以及 MiniMax 的 HTTP 请求方法在哪一行，方便后面决定到底是“拷一份 provider”还是“只接配置”。
+
+=== 01a0224b-5bd1-7193-aeee-3988074e8dc8 21 agentMessage len=77 ===
+我先检查 `veo接口自动化` 的现有测试结构、依赖和 9999 项目中的 MiniMax 调用约定，再按现有风格补测试；只会修改测试文件，不动生产代码。
+
+=== 01a02249-3f53-7cc0-859c-3640aa367444 117 agentMessage len=87 ===
+我已经确认了：`9999` 项目确实带着 MiniMax provider，`10000` 项目当前还没接入它。最后我补一眼两个项目的启动入口和文档说明，避免把“端口”看错。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 114 agentMessage len=164 ===
+我已经确认 `10000` 的 Python 进程就是 `veo_automation.web_server --port 10000`。这说明它不是另一套语言栈，而是同一个 Python Web 服务的另一个实例；我接下来会核对它的启动脚本和 provider 注册点，看是不是代码本身已经有 MiniMax，只是实例没挂上。
+
+=== 01a0224b-5bd1-7193-aeee-3988074e8dc8 55 agentMessage len=132 ===
+已确认：`9999` 目录已有完整的 `minimax_provider` 及对应测试，而 `10000` 当前尚无该模块。接下来我会把关键契约测试迁移到 `10000`，并补充路由选择、任务构建和 MiniMax 请求字段断言，让父代理实现后可以直接验证兼容性。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 136 agentMessage len=192 ===
+已定位清楚：9999 项目已经完整支持 `minimax-h3`，使用 `MINIMAX_API_KEY` 和 `https://token.secure-skill.com/v1`；10000 项目则是旧版本，当前没有 MiniMax provider。接下来我会把 provider、模型选项、任务构建和 runner 分发逻辑逐项移植，保留 10000 项目现有的其它模型能力。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 128 agentMessage len=135 ===
+我已经确认 `10000` 是这份 Python 服务的第二个实例，不是 `Desktop\\集成` 那个 Next 项目。现在补最后一段：看 `web_server` 里 provider 是怎么分发的、`MiniMaxProvider` 是不是已经被挂到模型选择里。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 146 agentMessage len=122 ===
+我会先新增独立的 `minimax_provider.py`，再在旧项目的模型注册、provider 路由和 Web 任务配置处接入。这样不会影响原有 FunAI、Grok、RegBox 等路径，也不会把 9999 项目的其它升级内容误带过来。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 142 agentMessage len=165 ===
+我已经看到关键结论雏形了：`runner.make_video_provider()` 已经把 `minimax-h3` 路由到 `MiniMaxProvider`，而 `web_server` 也在按模型名把 `MINIMAX_API_KEY` 填进任务配置。现在只差确认前端下拉列表和任务模板里是不是也已经把这个模型暴露出来。
+
+=== 01a0224b-5bd1-7193-aeee-3988074e8dc8 74 agentMessage len=116 ===
+我会新增两个测试文件：一个覆盖 MiniMax provider 的提交、轮询、URL、比例、鉴权和输入校验；另一个覆盖 runner 的 provider 分发。这样不会改动现有测试行为，也能把 9999 的关键接口契约锁定下来。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 156 agentMessage len=150 ===
+我已经确认最关键的一点：`MiniMax` 在 9999 这套代码里不是“缺的模块”，而是已经被 `runner`、`web_server`、`funai_models`、前端 UI 全链路接好了。现在我把 HTTP 路由和交互入口补完整，给你一份“如果要迁到别的项目，实际会动哪些文件”的精确清单。
+
+=== 01a02249-3f53-7cc0-859c-3640aa367444 154 agentMessage len=3322 ===
+我只做了只读定位，没改文件。
+
+现在能确认的结论是：
+
+`9999` 端口对应的项目是 `Desktop\视频生成手搓版`，它已经把 MiniMax 接好了。真实接入点在这些位置：
+
+- [Desktop\视频生成手搓版\veo_automation\minimax_provider.py](C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\minimax_provider.py:15)  
+  这里定义了 `DEFAULT_MINIMAX_BASE = "https://token.secure-skill.com/v1"`、`DEFAULT_MINIMAX_API_KEY_ENV = "MINIMAX_API_KEY"`、`DEFAULT_MINIMAX_MODEL = "minimax-h3"`，以及 `class MiniMaxProvider`。
+- 同一个文件里，核心调用是 `submit()`、`status()`、`download()`，底层请求走 `_json_request()`，请求头走 `minimax_headers()` / `minimax_download_headers()`。
+- [Desktop\视频生成手搓版\veo_automation\runner.py](C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\runner.py:158)  
+  `make_video_provider()` 在这里把 `provider_name` 或 `model == "minimax-h3"` 映射到 `MiniMaxProvider`。
+- [Desktop\视频生成手搓版\veo_automation\funai_models.py](C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\funai_models.py:6)  
+  模型注册表里当前只暴露 `minimax-h3`，`provider` 是 `minimax`。
+- [Desktop\视频生成手搓版\veo_automation\web_server.py](C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\web_server.py:89)  
+  `model_provider_name()` / `model_base_url()` / `model_api_key_env()` / `model_api_label()` 都已经把 `minimax` 分支接上。
+- [Desktop\视频生成手搓版\veo_automation\web_server.py](C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\web_server.py:520) 和 [Desktop\视频生成手搓版\veo_automation\web_server.py](C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\web_server.py:732)  
+  `start()` 和 `_build_task()` 都会通过 `funai_model_config()` 拿到 `minimax-h3`，然后把 `base_url` / `api_key_env` / `provider` 塞进任务。
+- 启动入口是 [Desktop\视频生成手搓版\veo_automation\web_server.py](C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\web_server.py:2505) 的 `main()`，默认端口是 `9999`。
+- 启动脚本是 [Desktop\视频生成手搓版\启动_9999.bat](C:\Users\EDY\Desktop\视频生成手搓版\启动_9999.bat:3)，它明确读取 `MINIMAX_API_KEY`，然后启动 `python -m veo_automation.web_server --host 0.0.0.0 --port 9999 --open`。
+
+`10000` 端口对应的项目是 `Desktop\veo接口自动化`，它目前还没有 MiniMax 接入：
+
+- [Desktop\veo接口自动化\veo_automation\web_server.py](C:\Users\EDY\Desktop\veo接口自动化\veo_automation\web_server.py:86) 这里只识别 `grok_video`、`oairegbox`、`funai`。
+- [Desktop\veo接口自动化\veo_automation\web_server.py](C:\Users\EDY\Desktop\veo接口自动化\veo_automation\web_server.py:198) 和 [Desktop\veo接口自动化\veo_automation\web_server.py](C:\Users\EDY\Desktop\veo接口自动化\veo_automation\web_server.py:487) 的 `start()` / `_build_task()` 也只会走这三类 provider。
+- [Desktop\veo接口自动化\veo_automation\runner.py](C:\Users\EDY\Desktop\veo接口自动化\veo_automation\runner.py:222) 的 `make_video_provider()` 也没有 `MiniMaxProvider` 分支。
+- `10000` 项目的默认模型还是 `regbox-omni-fast-no-water`，见 [Desktop\veo接口自动化\veo_automation\web_server.py](C:\Users\EDY\Desktop\veo接口自动化\veo_automation\web_server.py:52)。
+- 它的启动入口是 [Desktop\veo接口自动化\veo_automation\web_server.py](C:\Users\EDY\Desktop\veo接口自动化\veo_automation\web_server.py:1466)，默认端口是 `10000`。
+- 启动脚本是 [Desktop\veo接口自动化\启动_10000.bat](C:\Users\EDY\Desktop\veo接口自动化\启动_10000.bat:3)，只启动 `--port 10000`。
+- 这个项目的环境变量示例里目前是 `FUNAI_API_KEY`、`OAIREGBOX_API_KEY`、`GPT_KEY`、`GPT_BACKUP_KEY`，没有 `MINIMAX_API_KEY`，见 [Desktop\veo接口自动化\配置环境变量_示例.bat](C:\Users\EDY\Desktop\veo接口自动化\配置环境变量_示例.bat:2) 和 [Desktop\veo接口自动化\迁移说明.txt](C:\Users\EDY\Desktop\veo接口自动化\迁移说明.txt:11)。
+
+另外我注意到一个小异常：`Desktop\veo接口自动化\启动_9999.bat` 里实际还是 `--port 10000`，所以文件名和端口不一致，这个是现状，不是我改出来的。
+
+如果你要我继续接，我下一步就直接按 `9999` 项目的现有 MiniMax 方式，把 `10000` 项目补成同一套 provider/config/call chain；但那一步就属于修改代码了，需要你确认我可以开始动手。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 170 agentMessage len=139 ===
+我现在只差把“有没有单独的 `10000` 启动脚本/入口”钉死。若没有，那结论就很明确：`10000` 只是同一套 `veo_automation.web_server` 的另一个进程实例，代码里已经包含 MiniMax，迁移目标要么是配置层，要么是别的项目根本不是这份代码。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 184 agentMessage len=87 ===
+我已经拿到足够证据说明 MiniMax 不是缺失模块，而是现成接入。最后我补一下测试层和路由层的具体符号，方便你判断“要不要改代码”以及“如果是别的仓库该从哪几个文件下手”。
+
+=== 01a0224b-5bd1-7193-aeee-3988074e8dc8 118 agentMessage len=72 ===
+父代理的 MiniMax 生产模块已落地，我会立即重跑新增测试，确认测试契约与实际实现一致，并根据失败信息只调整测试断言或向父代理反馈实现差异。
+
+=== 01a02249-5bf9-7f23-8148-cb5631eaa2cc 198 agentMessage len=1971 ===
+我已经把 `192.168.0.133:10000` 对应的进程和代码路径确认清楚了：它不是 `Desktop\集成` 那个 Next.js 工程，而是同一套 Python 服务 `veo_automation.web_server` 的另一个实例。当前监听 `10000` 的进程命令行是：
+
+`"D:\py\python.exe" -m veo_automation.web_server --host 0.0.0.0 --port 10000`
+
+结论先说：在你现在这份 `Desktop\视频生成手搓版` 代码里，MiniMax 其实已经接好了，不需要再补一套 provider。关键链路都已经存在：
+
+- provider 实现：`[veo_automation/minimax_provider.py](<C:/Users/EDY/Desktop/视频生成手搓版/veo_automation/minimax_provider.py:21>)`
+- 模型注册：`[veo_automation/funai_models.py](<C:/Users/EDY/Desktop/视频生成手搓版/veo_automation/funai_models.py:6>)`
+- 运行时分发：`[veo_automation/runner.py](<C:/Users/EDY/Desktop/视频生成手搓版/veo_automation/runner.py:158>)`
+- Web 表单/任务构造：`[veo_automation/web_server.py](<C:/Users/EDY/Desktop/视频生成手搓版/veo_automation/web_server.py:89>)`
+- 单测：`[tests/test_minimax_provider.py](<C:/Users/EDY/Desktop/视频生成手搓版/tests/test_minimax_provider.py:19>)`、`[tests/test_web_server_helpers.py](<C:/Users/EDY/Desktop/视频生成手搓版/tests/test_web_server_helpers.py:293>)`
+
+我看到的真实行为是：
+
+- `runner.make_video_provider()` 已经把 `provider=minimax` 或 `model=minimax-h3` 路由到 `MiniMaxProvider`。
+- `web_server` 已经把 `minimax` 这条模型分支固定映射到 `DEFAULT_MINIMAX_BASE` 和 `MINIMAX_API_KEY`。
+- 前端页面也已经把 `MiniMax H3 / token.secure-skill.com` 和 `MINIMAX_API_KEY` 显示出来。
+- `funai_models.py` 里当前 UI 暴露的唯一模型就是 `minimax-h3`。
+
+对应的 HTTP 路由也已经在 `web_server.py` 里统一实现好了，不是分散在多个 route 文件里：
+
+- `GET /api/me`
+- `GET /api/accounts`
+- `GET /api/status`
+- `GET /api/master_prompt`
+- `GET /api/prompt_suffix`
+- `POST /api/setup`
+- `POST /api/login`
+- `POST /api/logout`
+- `POST /api/start`
+- `POST /api/stop`
+- `POST /api/pause`
+- `POST /api/resume`
+- `POST /api/resume_queue`
+- 以及账号管理相关的 `/api/accounts/*`
+
+所以如果你的意思是“把 9999 这套 MiniMax 能力迁到另一个 10000 项目”，那在当前工作区里我没找到另一个独立仓库需要改；如果你指的就是这份 `Desktop\视频生成手搓版`，那它已经接上了。当前代码里也没有单独的 `启动_10000.bat`，只有 `启动_9999.bat`、`启动_9999_局域网账号版.bat` 和 `启动_10001_局域网账号版.bat`。
+
+你如果要我继续往下做，我需要你确认一件事：你说的“10000 端口项目”是不是另一个仓库路径，而不是这份 `Desktop\视频生成手搓版`。如果是另一个仓库，把那个目录发我，我再按同样的 provider / 路由 / 测试链路继续只读对比。
+
+=== 01a0224b-5bd1-7193-aeee-3988074e8dc8 147 agentMessage len=839 ===
+已完成测试补充并验证通过，修改仅涉及测试文件：
+
+- [tests/test_minimax_provider.py](C:/Users/EDY/Desktop/veo接口自动化/tests/test_minimax_provider.py)
+  - MiniMax H3 提交请求字段
+  - `/videos` 提交和状态轮询
+  - `duration`、`ratio`、`aspect_ratio`
+  - `prompt_optimize`
+  - `image_urls` Base64 图片
+  - 无参考图请求
+  - 视频 URL 嵌套解析
+  - 宽高比转换
+  - Bearer 鉴权和幂等键
+  - 缺少 `MINIMAX_API_KEY`
+  - 参考图数量限制
+
+- [tests/test_minimax_integration.py](C:/Users/EDY/Desktop/veo接口自动化/tests/test_minimax_integration.py)
+  - `minimax-h3` 模型到 MiniMax provider 的路由
+  - `MINIMAX_API_KEY` 和 `https://token.secure-skill.com/v1` 配置
+  - runner provider 分发
+
+验证结果：
+
+```text
+python -m unittest tests.test_minimax_provider tests.test_minimax_integration
+Ran 11 tests
+OK
+```
+
+完整测试：
+
+```text
+python -m unittest discover -s tests -p "test*.py"
+Ran 123 tests in 13.133s
+OK
+```
+
+当前环境没有安装 `pytest`，所以使用项目现有的 `unittest` 测试方式完成验证。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 224 agentMessage len=100 ===
+MiniMax provider 和旧项目的路由已接好，新增测试也已通过。现在我做最后一步运行态验证：重启 10000 端口服务让新代码加载，并检查页面/API 是否正常返回；不会动 9999 服务。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 356 agentMessage len=145 ===
+10000 服务已重新加载新代码并恢复监听，`http://192.168.0.133:10000/` 页面已能看到 `MiniMax H3` 选项；`MINIMAX_API_KEY` 不会写入任务文件或日志，只在 provider 发请求时从环境变量读取。最后我再核对改动范围和测试结果。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 368 agentMessage len=1219 ===
+已把 `9999` 项目的 MiniMax 模型接入到 `10000` 项目。
+
+改动位置：
+
+- 新增 MiniMax provider：[minimax_provider.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/minimax_provider.py)
+  - 接口地址：`https://token.secure-skill.com/v1`
+  - 模型：`minimax-h3`
+  - API Key 环境变量：`MINIMAX_API_KEY`
+  - 支持视频提交、状态轮询、视频下载、参考图 Base64 编码、宽高比转换和错误处理
+- 注册 MiniMax 模型：[funai_models.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/funai_models.py)
+- 接入运行时 provider 分发：[runner.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/runner.py)
+- 接入 Web 页面模型选项、任务配置和 provider 配置：[web_server.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/web_server.py)
+- 增加了 MiniMax provider 单元测试和集成测试：
+  - [test_minimax_provider.py](C:/Users/EDY/Desktop/veo接口自动化/tests/test_minimax_provider.py)
+  - [test_minimax_integration.py](C:/Users/EDY/Desktop/veo接口自动化/tests/test_minimax_integration.py)
+
+验证结果：
+
+```text
+python -m unittest discover -s tests -p "test*.py"
+Ran 123 tests
+OK
+```
+
+另外已验证：
+
+```text
+model: minimax-h3
+provider: minimax
+base_url: https://token.secure-skill.com/v1
+api_key_env: MINIMAX_API_KEY
+duration: 15
+size: 720x1280
+```
+
+10000 服务已重新加载并正在监听：
+
+```text
+http://192.168.0.133:10000/
+```
+
+页面中已经可以看到 `MiniMax H3` 模型选项。使用时选择该模型即可，Key 会从现有的 `MINIMAX_API_KEY` 环境变量读取，不会写入任务文件或日志。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 376 userMessage len=50 ===
+然后帮我把9999的minimax接口修复[Image #1] 这是qingqing这个号运行的任务
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 379 agentMessage len=165 ===
+报错原因已经明确：`qingqing` 账号的 9999 服务向 MiniMax `/videos` 请求中带了 `prompt_optimize`，上游返回 `HTTP 400: prompt_optimize is not supported`。我会先在 9999 项目补一个回归测试，再移除该字段并重启 9999 服务验证。
+
+=== 01a02268-63a2-7161-b8c6-44d847b53549 27 agentMessage len=104 ===
+我先检查 9999 项目的 MiniMax provider、调用参数和现有测试，重点确认 `prompt_optimize` 为什么被传给接口，以及最小回归测试应覆盖什么。按分工我只会补测试，不改生产代码。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 396 agentMessage len=128 ===
+我已确认 9999 当前运行的代码正是这条旧实现，问题字段在 `veo_automation/minimax_provider.py:50`。我先把现有测试改成“请求不得包含 `prompt_optimize`”，先验证它会在当前实现下失败，再改生产代码。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 408 agentMessage len=88 ===
+回归测试已按预期先失败，证明测试确实覆盖了上游拒绝的字段。现在移除 `prompt_optimize`，保留其余 MiniMax 请求参数不变，然后跑完整测试并重启 9999。
+
+=== 01a02268-63a2-7161-b8c6-44d847b53549 66 agentMessage len=165 ===
+现有回归测试已经暴露根因：`test_submit_payload...` 明确要求 payload 不含 `prompt_optimize`，但当前 provider 仍默认加入该字段，因此测试失败与截图的 400 完全一致。我会补一条“即使任务配置显式带该选项也不能向 MiniMax 发送”的测试，确保修复不会只针对默认值。
+
+=== 01a02247-4772-70f3-b212-80fae01e376e 436 agentMessage len=90 ===
+9999 项目的 MiniMax 单测和完整测试均已通过（91 个测试全部 OK）。现在重启 `qingqing` 使用的 9999 服务，让修复立即生效，然后检查端口和页面状态。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 54 userMessage len=26 ===
+然后看看这个minimax用前端调用生视频能不能成功
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 57 agentMessage len=103 ===
+我会按真实前端流程做一次最小化的视频生成测试，检查页面配置、请求是否成功提交、任务状态以及最终视频结果。这个操作可能会实际消耗 MiniMax API 额度；你刚才的指令视为授权进行一次测试，不会批量生成。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 83 agentMessage len=137 ===
+目前服务正常、MiniMax API Key 也已配置，但前端启用了账号登录；新的自动化浏览器没有登录态。
+
+请先在刚打开的 `http://127.0.0.1:9999/` 页面完成登录，然后告诉我“已登录”。我再继续通过前端提交一次最小视频生成测试，并检查任务是否完成。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 110 agentMessage len=78 ===
+已用 Edge 打开项目页面：http://127.0.0.1:9999/
+
+请在页面完成登录，然后告诉我“已登录”，我继续测试 MiniMax 视频生成。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 135 agentMessage len=198 ===
+当前 Edge 没有开启远程调试，所以我无法接管你已经登录的页面。
+
+请在页面做一次最小测试：
+
+- 模型：`MiniMax H3`
+- 时长：`4 秒`
+- 尺寸：`720×1280`
+- 不上传参考图
+- 提示词：`一只橘猫坐在窗边，微风吹动窗帘，镜头缓慢推进，自然光，画面稳定`
+- 点击“开始生成”
+
+提交后告诉我“已提交”，我会直接监控后台任务、MiniMax 返回状态和最终视频文件。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 166 agentMessage len=159 ===
+已经定位到本次任务：`web_20260821_120431_9904693d`。前端确实成功创建了任务，但 MiniMax 首次提交返回了 HTTP 400：参考图被传成了非公网地址，而接口要求 `image_urls` 必须是公网 HTTPS URL。我再确认任务是否会转为最终失败，以及有没有自动重试或后续文件。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 178 agentMessage len=350 ===
+监测结果：这次 `qingqing` 账号的 MiniMax 测试失败，没有生成视频，也没有进入 MiniMax 队列。
+
+任务：`web_20260821_120431_9904693d`
+
+错误是：
+
+```text
+HTTP 400 POST /videos
+image_urls must contain public HTTPS URLs
+```
+
+原因已经确认：前端上传的是本地参考图，后端把它转换成了 `data:image/...;base64` 后放进 `image_urls`；但当前 MiniMax 接口只接受公网 HTTPS 图片地址。任务因此停留在 `ready`，视频目录为空，而且关闭了失败重试。
+
+如果你希望，我下一步可以修复图片上传方案，并在测试通过后重新启动服务。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 186 userMessage len=166 ===
+那把minimax这个改成接口接受的方式来上传参考图，并且把每一个角色自己生成的视频做成该用户名的文件夹，然后里面再放视频文件夹，比如qingqing/日期/pid/，然后里面包含（参考图+视频），因为一个商品参考图可能会对应多个视频，现在就不像之前那样生成多个"pid_日期_随机字符串"这种方式了，而是当天的以pid聚合的文件夹
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 189 agentMessage len=277 ===
+我会按两个目标一起改：
+
+- MiniMax 参考图先上传成接口可访问的公网 HTTPS URL，再把该 URL 传入 `image_urls`。
+- 导出结构改为 `导出根目录/用户名/YYYYMMDD/PID/`，同一账号、同一天、同一 PID 的参考图和多个视频都聚合在该目录，不再为每次任务创建 `PID_日期_随机串` 文件夹。
+
+这属于多文件功能修改，我会遵循项目要求先规划、再用测试驱动实现，并在完成后做代码审查。关于同一 PID 多视频的文件名，我暂定保留不覆盖的序号命名（例如 `PID_001.mp4`、`PID_002.mp4`）。
+
+=== 01a02283-8a4e-7a31-972e-157fca9c0b0d 42 agentMessage len=75 ===
+我会按项目的 planner 要求做只读梳理，重点定位 MiniMax 请求组装、参考图存储/URL 暴露、以及当前任务输出目录规则；这一步不改文件。
+
+=== 01a02283-9eb9-7de1-ae81-5a2f06f43deb 43 agentMessage len=69 ===
+我会按 TDD 先只读梳理现有测试入口、MiniMax 上传链路和落盘逻辑，然后给出能先失败、再驱动实现的精确测试清单；这一步不会改文件。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 209 agentMessage len=121 ===
+我正在核对当前 MiniMax 代理接口的实际上传能力。现有代码把本地图像塞成 base64 data URL，测试也错误地把这种格式当成正确行为；真实接口已经明确拒绝，因此需要找到该服务提供的文件上传端点或其认可的托管方式，不能只改字段名。
+
+=== 01a02283-9eb9-7de1-ae81-5a2f06f43deb 75 agentMessage len=296 ===
+只读检查已完成，并已把建议的失败测试清单发给主任务：
+
+- MiniMax 本地图片必须先上传并取得公网 HTTPS URL，禁止继续发送 `data:` 或本地路径。
+- 上传失败或返回非 HTTPS 地址时，不应提交 `/videos`。
+- 导出结构测试覆盖 `username/YYYYMMDD/pid/`。
+- 同一商品多个视频聚合到同一目录，文件名唯一且不覆盖。
+- 参考图保留一份，重复导出保持幂等。
+- 不同账号、不同 PID 相互隔离。
+- Web 任务需显式把账号信息贯通到导出层。
+
+现有测试仍绑定旧的 `pid_月日_随机字符串` 结构，需要相应替换。未修改任何文件。
+
+=== 01a02283-8a4e-7a31-972e-157fca9c0b0d 96 agentMessage len=277 ===
+只读规划已完成并发给主代理。核心结论：
+
+- MiniMax 修复需要一个真实的公网 HTTPS 图片落点；项目当前没有对象存储或公网媒体服务，不能安全默认匿名图床。
+- 导出应调整为 `共享/用户名/YYYYMMDD/PID/`。
+- 同一 PID 的参考图只保存一次，多个视频采用唯一名称追加，避免覆盖。
+- 需覆盖并发写入、重复导出幂等、同 PID 更换参考图、路径安全和上传失败等测试。
+- 预计修改 `minimax_provider.py`、`web_server.py`、`exporter.py` 及对应测试，并可能新增独立图片上传模块。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 253 agentMessage len=422 ===
+已经确认关键阻塞点：当前项目没有对象存储或公网图片服务，而 MiniMax 中转接口要求参考图必须是公网 HTTPS URL。这里不能擅自上传到匿名图床，否则有商品图片泄露、失效和限流风险。
+
+请你确认这两个细节：
+
+1. 参考图上传到哪里？你是否已有阿里云 OSS、腾讯云 COS、Cloudflare R2 或其他 S3 兼容存储？如果有，请告诉我类型；密钥可以稍后配置为环境变量，不要发在聊天里。
+2. 同一天同一 PID 上传了不同参考图时，是保留全部参考图，还是用新图替换旧图？
+
+目录方面我将采用：
+
+```text
+共享/
+└─ qingqing/
+   └─ 20260821/
+      └─ PID/
+         ├─ reference.jpg
+         ├─ PID_001.mp4
+         └─ PID_002.mp4
+```
+
+确认存储方案和参考图覆盖规则后，我就可以开始按 TDD 实现。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 271 agentMessage len=230 ===
+有，而且你已有公网美国服务器，最合适的是在那台服务器上搭一个很小的“参考图临时托管服务”：项目上传图片到服务器，服务器返回公网 HTTPS URL，MiniMax 再读取它。这样不依赖匿名图床，软件本身免费，只占用你现有服务器的少量磁盘和流量。
+
+我会先核实免费 HTTPS 和部署方式的当前限制，再给你一个明确方案；暂时不会连接或修改服务器。你第 2 点我理解为：同一账号、同一天、同一 PID 已保存过当前参考图时，前端弹窗提醒，并避免重复上传/重复保存。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 279 agentMessage len=677 ===
+有。你已有公网美国服务器，最推荐“自建临时图片托管”，软件成本为零，也不必把商品图交给匿名图床。
+
+方案：
+
+- 美国服务器运行一个受密钥保护的上传接口。
+- 本地项目上传参考图，接口返回类似 `https://img.example.com/ref/随机ID.jpg`。
+- MiniMax 使用该 HTTPS 地址读取图片。
+- 限制文件类型、大小和上传频率，不开放目录浏览。
+- 设置自动清理，例如图片保留 7 天。
+- 使用 Caddy 自动申请和续期 HTTPS 证书；需要域名指向服务器，并开放 80/443 端口。[Caddy 官方说明](https://caddyserver.com/docs/automatic-https)
+
+另一个免费选择是 Cloudflare R2，免费额度包括每月 10GB 存储和一定量请求，但需要注册、创建 bucket 和配置密钥；已有服务器的话反而不如自建直接。[Cloudflare R2 免费额度](https://developers.cloudflare.com/r2/pricing/)
+
+关于第 2 点，我将实现为：
+
+> 当 `用户名/当天/PID/` 已经保存过参考图时，点击“开始生成”会弹窗提示“当前 PID 今天已经上传过参考图”。
+
+请再确认两点后我继续实施：
+
+1. 美国服务器是什么系统，是否已有域名指向它？例如 Ubuntu 22.04 + `img.example.com`。
+2. 弹窗后是否仍允许用户确认并继续生成新视频？我建议允许继续，只是不重复保存相同参考图。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 304 agentMessage len=607 ===
+可以采用完全免费的方案：
+
+```text
+https://你的公网IP.sslip.io
+```
+
+`sslip.io` 会自动把包含在域名里的 IP 解析到你的服务器，无需购买域名；Caddy 再自动申请并续期可信 HTTPS 证书。[sslip.io TLS 说明](https://sslip.io/)、[Caddy 自动 HTTPS](https://caddyserver.com/docs/automatic-https)
+
+我会这样实现：
+
+- Linux 服务器部署受令牌保护的图片上传接口。
+- Caddy 提供 HTTPS。
+- 只允许 JPG、PNG、WebP，限制大小，随机化公网文件名。
+- 图片定期清理，默认保留 7 天。
+- 本地项目将返回的 HTTPS URL 传给 MiniMax。
+- 导出目录改为 `用户名/YYYYMMDD/PID/`。
+- 同一 PID 可保存多个视频。
+- 检测到当天已保存当前参考图时弹窗提醒；用户确认后仍可继续生成，且不重复保存相同图片。
+
+下一步需要你提供：
+
+- 服务器公网 IP
+- SSH 用户名
+- 本机 SSH 私钥文件路径，或者说明已配置可直接运行的 SSH Host 别名
+- 明确授权我连接服务器，安装并配置上传服务和 Caddy
+- 确认服务器的 `80`、`443` 端口可以开放
+
+不要把 SSH 密码或私钥内容发到聊天里。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 315 agentMessage len=235 ===
+可以，改用 Cloudflare Quick Tunnel：本机只启动一个受随机路径保护的只读图片服务，`cloudflared` 临时提供公网 HTTPS 地址；不需要域名、服务器或 Cloudflare 账号。隧道随项目启动，项目关闭后失效，正适合 MiniMax 在生成期间读取参考图。
+
+我会把 `cloudflared.exe` 放在项目自己的工具目录，不修改系统全局配置；同时完成新的按账号/日期/PID 聚合导出和重复参考图确认弹窗。先补失败测试，再实现。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 397 agentMessage len=328 ===
+MiniMax 的本地图像桥接测试已经从失败变为通过：现在提交前会把参考图按内容哈希发布到临时 HTTPS 地址，并明确拒绝 `http:`、`data:` 或本地路径。接下来正在接入项目启动流程和导出聚合逻辑。Cloudflare 官方说明 Quick Tunnel 无需账号，会生成随机 `trycloudflare.com` 地址，但定位为测试/临时用途且不提供 SLA；这与当前选择一致。[官方说明](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/)
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 509 agentMessage len=89 ===
+真实隧道已成功拿到公网地址，但首次从本机回访时受到本机代理环境干扰，TLS 握手被提前关闭。我正在用项目实际采用的“绕过本机代理”方式复测；这不代表 MiniMax 侧访问失败。
+
+=== 01a022a6-a7c5-7c60-a5ab-9482bb9e1e71 65 agentMessage len=65 ===
+我会按代码审查流程只读检查这次改动，重点覆盖参考图隧道、MiniMax 参数、按用户/日期/PID 聚合、并发幂等和前端确认逻辑。
+
+=== 01a022a6-b5b5-7622-b3b4-690a9c3b4a5c 108 agentMessage len=816 ===
+安全审查结果：无 CRITICAL，存在 3 项 HIGH、若干 MEDIUM。
+
+HIGH：
+
+- `reference_bridge.py:51-59` 下载 GitHub `latest` 的 `cloudflared.exe` 后直接执行，没有固定版本、SHA-256 或签名校验。应固定版本并验证官方校验值。
+- `reference_bridge.py:133-149` 的图片地址公网无鉴权；URL 泄露后，隧道存活期间任何人都能读取商品图。内容哈希也可能被已知文件推导。建议使用高熵随机 token、短 TTL/单次读取，并在 MiniMax 拉取后延迟删除。
+- `minimax_provider.py:68-75` 下载视频时可能在跨域重定向中泄露 Bearer key；返回 URL 也缺少协议和域名约束。应逐跳阻止跨域携带认证，只允许 HTTPS 和可信域名。
+
+MEDIUM：
+
+- 图片缓存不清理，重启隧道后历史图片会再次暴露；同时返回 `Cache-Control: public, max-age=604800, immutable`。应设置明确 TTL、启动/停止清理，并改为 `private/no-store` 或很短缓存。
+- 图片仅按扩展名验证，且 `read_bytes()` 无大小限制。应验证真实格式、尺寸和字节上限，并流式计算哈希。
+- 公网桥接使用无限线程模型，无连接数、速率和读取超时限制，慢连接或并发请求可能耗尽资源。
+- `output_lines` 持续累积 cloudflared 输出，没有长度上限。
+- 视频下载使用无上限的 `response.read()`，恶意或异常响应可能耗尽内存；应校验 `Content-Length` 并限额流式写入。
+
+路径方面未发现明显穿越：公网路由严格限定为 64 位十六进制文件名，导出用户名和 PID 也经过了路径字符清理。
+
+=== 01a022a6-a7c5-7c60-a5ab-9482bb9e1e71 115 agentMessage len=136 ===
+审查完成，已向主代理报告 6 项问题。最重要的两项是：
+
+- 跨午夜时，重复检查日期与实际导出日期可能不一致。
+- 前端允许 BMP/GIF，但 MiniMax 参考图隧道只支持 JPG/JPEG/PNG/WebP，任务会入队后才失败。
+
+相关 67 个测试目前全部通过。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 625 agentMessage len=170 ===
+新服务已经加载完成，临时 HTTPS 隧道返回正常，9999 页面也正常。为了验证不只是单元测试，我现在会用 `qingqing` 最近那张参考图发起一次 4 秒的最小 MiniMax 实测；成功后把参考图和视频按新的 `qingqing/日期/minimax_smoke/` 结构导出。此次会实际消耗一次最小时长的 MiniMax 额度。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 632 agentMessage len=146 ===
+真实请求已经成功通过前端同款链路提交，MiniMax 返回任务 ID `02b66f7a1b324b9cb0b5a7e08f2b4d6c`，状态已从 `queued` 进入 `in_progress`。这证明参考图的临时 HTTPS 上传方式已被接口接受；我继续等生成、下载和新目录导出完成。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 640 agentMessage len=99 ===
+任务本身仍在 MiniMax 处理中，但本机到中转站的一次状态查询出现了临时 TLS 断连；这不是生成失败。项目正式运行器会自动继续轮询，我也会用容错轮询接着追踪同一个任务，不会重复扣费或重新提交。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 670 agentMessage len=168 ===
+MiniMax 已经生成成功（100%，约 3.5 MB），但下载阶段暴露出另一个真实兼容性问题：中转 API 需要直连，而它返回的外部 CDN 在这台机器上需要走系统代理。当前代码对两者都强制直连，所以 CDN 返回 403。我会把策略拆开：API 仍直连，跨域 CDN 下载使用系统网络配置且绝不携带 API Key，然后完成导出。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 726 agentMessage len=171 ===
+真实端到端测试已经完成：MiniMax 接受参考图、生成 4 秒视频、下载 3,498,700 字节，并成功导出到：
+
+`共享/qingqing/20260821/minimax_smoke/`
+
+其中包含一张去重参考图和 `video_001.mp4`。我正在做最后一次回归测试与服务重启，确保网页实际运行的是包含 CDN 下载修复的版本。
+
+=== 01a02276-91e0-73f1-bb8b-cc0b4e88c41a 749 agentMessage len=607 ===
+已经完成并上线，MiniMax 真实生成测试成功。
+
+- 参考图通过 Cloudflare Quick Tunnel 临时 HTTPS 地址上传。
+- MiniMax 成功生成 4 秒视频，大小约 3.5 MB。
+- 导出结构改为 `用户名/YYYYMMDD/PID/`。
+- 相同参考图按内容去重。
+- 同一 PID 的多个视频依次保存为 `video_001.mp4`、`video_002.mp4`。
+- 当天重复提交相同 PID 和参考图会弹窗提醒，确认后仍可继续。
+- 临时图片使用随机地址、1 小时过期、不允许缓存。
+- `cloudflared` 固定版本并校验 SHA-256。
+
+实测文件位于：[minimax_smoke](</C:/Users/EDY/Desktop/共享/qingqing/20260821/minimax_smoke>)
+
+```text
+reference_3915ba864c1bab79.jpg
+video_001.mp4
+```
+
+服务已重启：
+
+- 地址：http://127.0.0.1:9999/
+- PID：`46032`
+- 当前临时隧道运行正常
+- 100 项测试全部通过
+
+项目整体测试覆盖率实测为 71%，低于 AGENTS.md 设定的 80%；差距主要来自原有未覆盖模块，并非本次功能测试失败。服务重启后登录会话已清空，刷新页面后需要重新登录。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 9 userMessage len=129 ===
+帮我把10000端口的也就是桌面的"veo生成自动化"这个项目的minimax这个模型请求方式按照9999端口的这个项目建一个临时隧道，或者说引用9999这个临时的cloud flare临时隧道来建立图片公网连接，不然这个minimax的请求接口不能正确请求
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 12 agentMessage len=127 ===
+我先定位桌面上的两个项目、确认 `9999` 端口当前 Cloudflare 临时隧道的生成和图片 URL 拼接逻辑，再把同一套公网图片链路接到 `10000` 项目的 MiniMax 请求中。涉及请求体和异步回调时我会同时核对，不会只改表面的 URL。
+
+=== 01a02404-48f6-7bf0-ad82-5eac21530745 20 agentMessage len=126 ===
+我会先对照 9999 项目的 MiniMax 图片发布实现和测试，再只在 10000 项目的 `tests` 范围内补 RED 测试。重点会固定三类契约：本地图片转换为 HTTPS 地址、拒绝非 HTTPS 地址、桥接目录与环境变量公网基址的路径安全。
+
+=== 01a02404-48f6-7bf0-ad82-5eac21530745 28 agentMessage len=122 ===
+我会采用 ECC 的 `tdd-workflow` 约束这次工作：先把期望行为写成独立测试，并在不改生产代码的前提下运行到明确失败，给后续实现留下可复现的验收边界。现在先完整读取该技能说明，再定位两个端口对应的应用入口与 MiniMax 实现。
+
+=== 01a02404-2915-7152-9fa7-447905e75c10 30 agentMessage len=77 ===
+我会按只读方式追踪两个项目的真实执行路径，重点看 9999 里的公网图片桥接是怎么接到生命周期和 MiniMax 请求里的，再对照 10000 当前缺口。
+
+=== 01a02404-2915-7152-9fa7-447905e75c10 44 agentMessage len=179 ===
+当前机器上 9999 和 10000 都是同一个模块入口 `veo_automation.web_server`，但来自不同桌面项目；9999 旁边已有两个 `cloudflared tunnel --url http://127.0.0.1:<随机端口>` 进程。接下来我会只读定位这些随机端口对应的本地桥接服务和 MiniMax payload 构造点。
+
+=== 01a02404-48f6-7bf0-ad82-5eac21530745 46 agentMessage len=139 ===
+当前 10000 项目的 MiniMax 实现直接把本地图片编码成 `data:` URL，这正是外部 MiniMax 接口无法回取图片的根因候选。9999 监听进程来自另一个启动实例；我正在反查它的工作目录，并搜索其已存在的图片公网发布模块，确保测试契约与实际可复用方案一致。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 84 agentMessage len=189 ===
+基线 123 个测试全部通过；现有 `10000` 的 MiniMax 确实仍把图片编码成 `data:image/...` 直接塞进 `image_urls`，而 `9999` 会先复制到受限缓存，再通过随机 `/ref/<token>` HTTPS 地址交给接口。修复会保持 `10000` 其他模型和现有流水线不变，只替换 MiniMax 的图片传递链路并补完整启停清理。
+
+=== 01a02404-2915-7152-9fa7-447905e75c10 109 agentMessage len=217 ===
+10000 的 `minimax_provider.py` 现在把本地图片转成 `data:image/...;base64` 放进 `image_urls`；9999 则先调用 `publish_reference_image()` 写入 `reference_cache`，再把 `https://*.trycloudflare.com/ref/<随机名>` 放进同一个字段。这个差异正好对应用户说的 MiniMax 拉不到图片。
+
+=== 01a02404-2915-7152-9fa7-447905e75c10 126 agentMessage len=97 ===
+我还会补一段运行链路：上传图片进入 task 的哪个字段，runner 怎么把它交给 provider。这样父代理后面改动时能只动桥接和 MiniMax 相关点，不误伤批量任务、重跑或其它模型。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 116 agentMessage len=197 ===
+我查到 `10000` 最近一批任务的直接失败原因还有一项：接口返回 `HTTP 400: prompt_optimize is not supported`。因此只加隧道仍然会失败；我会按 `9999` 的已工作请求格式一起移除这个不受支持字段，同时把本地 `data:` 图片改成 Cloudflare HTTPS 地址。这两项都属于你要求的 MiniMax 请求方式同步，不动其他供应商。
+
+=== 01a02404-2915-7152-9fa7-447905e75c10 180 agentMessage len=6716 ===
+只读追踪结果如下，未修改任何文件。
+
+**真实执行路径**
+
+9999 项目 `C:\Users\EDY\Desktop\视频生成手搓版` 已经有完整的 MiniMax 参考图公网桥接：
+
+- `veo_automation.reference_bridge.publish_reference_image()`：校验本地图片、读取 `MINIMAX_IMAGE_PUBLIC_BASE_URL` 和 `MINIMAX_IMAGE_CACHE_DIR`，复制到缓存目录并返回 `https://*.trycloudflare.com/ref/<随机64hex>.<ext>`。见 `C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\reference_bridge.py:15`、`:27`、`:36`、`:48`。
+- `ReferenceBridge.start()`：启动 `ThreadingHTTPServer(("127.0.0.1", 0), Handler)`，再启动 `cloudflared tunnel --url http://127.0.0.1:<随机端口> --no-autoupdate`，从输出解析 `trycloudflare.com` 公网 URL，并写入上面两个环境变量。见 `reference_bridge.py:84`、`:94`、`:109`、`:113`、`:130`、`:141`。
+- `ReferenceBridge._serve()`：只允许 `/ref/<64hex>.(jpg|jpeg|png|webp)`，过期或不存在返回 404，响应 `Content-Type`、`Content-Length`、`Cache-Control: no-store`、`X-Content-Type-Options: nosniff`。见 `reference_bridge.py:157`、`:159`、`:161`、`:166`。
+- `web_server.main()`：9999 启动时先 `ensure_cloudflared()`，再 `ReferenceBridge(REFERENCE_CACHE_DIR, CLOUDFLARED_EXE).start()`，服务退出时 `bridge.stop()`。见 `C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\web_server.py:42`、`:63`、`:64`、`:2545`、`:2554`、`:2556`、`:2558`、`:2580`。
+- `MiniMaxProvider.submit()`：把 `image_paths` 逐个调用 `publish_reference_image(Path(path))`，然后把公网 HTTPS URL 放入 `payload["image_urls"]`。见 `C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\minimax_provider.py:12`、`:43`、`:53`、`:54`、`:57`。
+
+10000 项目 `C:\Users\EDY\Desktop\veo接口自动化` 当前缺口：
+
+- 没有 `veo_automation\reference_bridge.py`，也没有 `tools\cloudflared.exe` 或 `reference_cache`。
+- `web_server.main()` 只启动 `ThreadingHTTPServer`，没有 bridge 生命周期。见 `C:\Users\EDY\Desktop\veo接口自动化\veo_automation\web_server.py:1481`、`:1489`、`:1498`。
+- `MiniMaxProvider.submit()` 当前把本地图片转成 `data:image/...;base64` 放入 `payload["image_urls"]`。这就是 MiniMax 无法公网拉图的直接差异。见 `C:\Users\EDY\Desktop\veo接口自动化\veo_automation\minimax_provider.py:12`、`:40`、`:51`、`:52`。
+- 10000 的图片上游仍是本地文件路径：`build_items_for_images()` 写 `item["image_path"]`，runner 再标准化为 `image_paths` 传给 provider。见 `web_server.py:1252`、`:1281`，以及 `C:\Users\EDY\Desktop\veo接口自动化\veo_automation\runner.py:251`、`:257`。因此桥接应接在 provider 层，不需要改图片上传/表格匹配逻辑。
+
+**当前运行态证据**
+
+- 10000 服务：PID `43648`，命令为 `"D:\py\python.exe" -m veo_automation.web_server --host 0.0.0.0 --port 10000`。
+- 9999 服务：PID `46032`，命令为 `"D:\py\python.exe" -m veo_automation.web_server --host 0.0.0.0 --port 9999`。
+- 当前有两个 `cloudflared.exe`，都来自 9999 项目工具目录：
+  - PID `27720`: `...cloudflared.exe tunnel --url http://127.0.0.1:11684 --no-autoupdate`
+  - PID `44212`: `...cloudflared.exe tunnel --url http://127.0.0.1:4146 --no-autoupdate`
+- `127.0.0.1:4146/ref/notfound.jpg` 返回 404，说明至少其中一个随机 bridge origin 是活的，并且路径规则按 `/ref/...` 工作。
+
+**关于“复用 9999 临时隧道”**
+
+从现有代码看，9999 的 tunnel 不是指向 `http://127.0.0.1:9999`，而是指向 `ReferenceBridge` 自己开的随机本地端口。10000 进程也拿不到 9999 进程内的 `MINIMAX_IMAGE_PUBLIC_BASE_URL`，并且 9999 没有暴露“让另一个项目发布图片到它的 reference_cache”的 API。
+
+所以在现有代码边界下，直接“引用 9999 的临时 cloudflare 隧道”不可直接成立，除非额外做以下其中一种事：
+
+- 让 10000 独立启动自己的 `ReferenceBridge`，这是最贴近 9999 已验证实现的路径。
+- 或者新增跨项目共享机制：例如 9999 提供发布接口，或让 10000 明确拿到 9999 的 public base 和 cache dir，并把图片复制进 9999 的 `reference_cache`。这会产生跨项目耦合，而且当前代码没有现成入口。
+
+**最小移植清单**
+
+最小、低耦合移植应围绕 10000 项目做这些文件级变更：
+
+- 新增 `C:\Users\EDY\Desktop\veo接口自动化\veo_automation\reference_bridge.py`
+
+  来源可基于 9999 的 `C:\Users\EDY\Desktop\视频生成手搓版\veo_automation\reference_bridge.py`。核心符号是 `publish_reference_image()`、`ensure_cloudflared()`、`ReferenceBridge`。
+
+- 修改 `C:\Users\EDY\Desktop\veo接口自动化\veo_automation\web_server.py`
+
+  需要引入 `ReferenceBridge, ensure_cloudflared`，新增类似 9999 的 `REFERENCE_CACHE_DIR = ROOT / "reference_cache"` 和 `CLOUDFLARED_EXE = ROOT / "tools" / "cloudflared.exe"`，并在 `main()` 的 server 生命周期前后启动/停止 bridge。参考 9999 的 `web_server.py:42`、`:63`、`:64`、`:2554` 到 `:2582`。
+
+- 修改 `C:\Users\EDY\Desktop\veo接口自动化\veo_automation\minimax_provider.py`
+
+  当前 `from .utils import data_url` 和 `payload["image_urls"] = [data_url(Path(path)) ...]` 应与 9999 对齐为 `publish_reference_image(Path(path))`，并校验返回值必须是 HTTPS。参考 9999 的 `minimax_provider.py:12`、`:53` 到 `:57`。
+
+- 更新/新增测试
+
+  10000 现有 `tests\test_minimax_provider.py:20` 断言 `image_urls[0]` 是 `data:image/jpeg;base64,`，这会和桥接目标冲突。9999 对应测试已覆盖公网 URL 和非 HTTPS 拒绝：`C:\Users\EDY\Desktop\视频生成手搓版\tests\test_minimax_provider.py:19`、`:34`、`:55`、`:62`。还应复制或移植 `C:\Users\EDY\Desktop\视频生成手搓版\tests\test_reference_bridge.py`，重点覆盖 `publish_reference_image()` 依赖 env、复制缓存、返回 `https://.../ref/...`。
+
+- 可选工具文件
+
+  不一定要手动复制 `tools\cloudflared.exe`，因为 9999 的 `ensure_cloudflared()` 会按固定版本下载并校验 SHA-256，见 `reference_bridge.py:17` 到 `:19`、`:51` 到 `:66`。如果希望避免 10000 首次启动联网下载，可以复制 9999 的 `tools\cloudflared.exe` 到 10000，同样必须通过 SHA-256 校验。
+
+**风险点**
+
+- 10000 当前支持 `.bmp` 和 `.gif` 上传，见 `web_server.py:68`；9999 bridge 只允许 `.jpg/.jpeg/.png/.webp`，见 `reference_bridge.py:20`。如果 MiniMax 任务上传 bmp/gif，桥接会拒绝。这一点需要父代理或用户确认是沿用限制，还是在上传层过滤/提示。
+- 10000 当前 `MiniMaxProvider` 会发送 `prompt_optimize`，见 `minimax_provider.py:49`；9999 测试明确要求不要把这个字段发给 MiniMax，见 `C:\Users\EDY\Desktop\视频生成手搓版\tests\test_minimax_provider.py:54`、`:77` 到 `:99`。是否一并移植该行为需要确认，因为它会改变请求 payload。
+- 9999 的 `ReferenceBridge.stop()` 只清理 `MINIMAX_IMAGE_PUBLIC_BASE_URL`，未清理 `MINIMAX_IMAGE_CACHE_DIR`，见 `reference_bridge.py:145` 到 `:147`。因为进程退出通常无影响，但测试或同进程重启时可能留下旧 cache dir env。
+- Quick Tunnel 临时域名随启动变化，README 也说明“隧道随 Web 服务停止而失效、不保证长期可用性”，见 `C:\Users\EDY\Desktop\视频生成手搓版\README.md:77`、`:78`。
+- `ensure_cloudflared()` 首次启动会访问 GitHub 下载二进制，网络失败会导致 bridge 不可用，但 9999 的 `web_server.main()` 当前只是打印 warning 后继续启动服务，见 `web_server.py:2556` 到 `:2561`。10000 是否也允许“无 bridge 继续启动但 MiniMax 图片任务会失败”，需要确认。
+- 公网 URL 是不可预测随机文件名且 TTL 1 小时，见 `reference_bridge.py:22`、`:40`、`:77`。这适合临时生成，但如果 MiniMax 长时间排队超过 TTL，可能拉不到图。
+- 安全边界目前较好：不暴露原始文件名，限制 `/ref/<64hex>`，限制大小 25MB，限制后缀，响应 nosniff。见 `reference_bridge.py:21`、`:24`、`:34`、`:40`、`:159`、`:170`。
+
+**验证办法**
+
+建议父代理实施后在 10000 项目运行这些验证：
+
+- 单测：
+  - `python -m pytest tests/test_reference_bridge.py tests/test_minimax_provider.py`
+  - 如果项目不用 pytest，可用 `python -m unittest tests.test_reference_bridge tests.test_minimax_provider`
+- 启动验证：
+  - 从 10000 项目目录启动 `python -m veo_automation.web_server --host 0.0.0.0 --port 10000`
+  - 控制台应出现类似 `MiniMax reference image tunnel: https://...trycloudflare.com`
+  - 应出现新的 `cloudflared.exe tunnel --url http://127.0.0.1:<随机端口> --no-autoupdate`
+- 本地桥接验证：
+  - 创建一张 jpg/png 测试图，在同一进程环境中调用 `publish_reference_image()`，返回必须是 HTTPS。
+  - 对返回 URL 做 `HEAD` 或 `GET`，应返回 200、正确 `Content-Type`、非零 `Content-Length`。
+- payload 验证：
+  - 用 patched `_json_request` 或查看 `runs/<run>/raw/<slot>/submit_request_*.json`，确认 MiniMax `image_urls` 里是 `https://*.trycloudflare.com/ref/...`，不是 `data:image/...`、不是 localhost、不是 10000 局域网地址。
+- 回归验证：
+  - 跑 10000 现有 `tests/test_web_server_helpers.py` 和 `tests/test_runner_pipeline.py`，确认图片收集、manifest、runner 的 `image_path/image_paths` 链路未变。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 148 agentMessage len=142 ===
+现在开始改生产代码：新增受限图片缓存与临时隧道模块；MiniMax 请求将去掉 `prompt_optimize`、只接受 HTTPS API/下载地址，并把每张本地图片发布为随机 HTTPS `/ref/` URL；Web 服务启动时创建隧道，退出时回收隧道和本地 HTTP 服务。
+
+=== 01a02404-48f6-7bf0-ad82-5eac21530745 126 agentMessage len=1305 ===
+已完成 TDD 的 RED 阶段，只修改了 `C:\Users\EDY\Desktop\veo接口自动化\tests`，没有改动任何生产代码。
+
+修改内容：
+
+- [test_minimax_provider.py](C:/Users/EDY/Desktop/veo接口自动化/tests/test_minimax_provider.py:20)
+  - 本地图片必须交给 `publish_reference_image(Path(...))` 发布。
+  - MiniMax 请求体的 `image_urls` 必须使用发布函数返回的 HTTPS 公网地址，不能再使用 `data:` URL。
+  - 发布函数返回 HTTP 地址时，必须在调用 MiniMax API 前抛出包含 `public HTTPS` 的错误。
+  - 非 HTTPS 校验失败时，断言 `_json_request` 没有被调用。
+
+- [test_reference_bridge.py](C:/Users/EDY/Desktop/veo接口自动化/tests/test_reference_bridge.py:40)
+  - `MINIMAX_IMAGE_PUBLIC_BASE_URL` 决定返回 URL 的公网基址。
+  - `MINIMAX_IMAGE_CACHE_DIR` 决定图片发布缓存目录。
+  - 原始危险文件名不会进入公网 URL；公开文件名必须是 `64` 位十六进制随机名并保留允许的图片扩展名。
+  - 缓存副本必须留在配置目录内并保持原始内容。
+  - 明文 `../` 和百分号编码 `%2e%2e%2f` 的目录穿越请求都必须返回 `404`，且不能输出文件内容。
+  - HTTP 公网基址必须被拒绝。
+
+10000 当前生产代码的 RED 结果：
+
+```text
+Provider: Ran 9 tests
+FAILED (failures=2)
+
+Expected 'publish_reference_image' to be called once. Called 0 times.
+AssertionError: RuntimeError not raised
+```
+
+```text
+Reference bridge: Ran 3 tests
+FAILED (errors=3)
+
+ModuleNotFoundError:
+No module named 'veo_automation.reference_bridge'
+```
+
+为了确认测试契约没有写错，我让同一组测试加载 9999 项目的生产模块运行：
+
+```text
+Provider: Ran 9 tests - OK
+Reference bridge: Ran 3 tests - OK
+```
+
+这证明新增测试准确描述了 9999 项目当前已经工作的 MiniMax 公网图片发布方式，可以直接作为 10000 项目实现阶段的验收标准。项目目录不是 Git 仓库，因此没有创建 TDD RED 检查点提交。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 179 agentMessage len=99 ===
+MiniMax 和桥接单测现已转绿。接下来我会补 Web 服务生命周期测试的隔离：测试中使用假隧道，断言启动调用和退出回收，避免测试套件真的下载或启动 `cloudflared`；然后再跑全量回归。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 206 agentMessage len=122 ===
+全量回归已通过：127 个测试。覆盖率工具测得项目整体 73%，低于仓库要求的 80%，缺口主要来自这次未涉及的旧模块；我会继续把新桥接和 MiniMax 变更的关键分支补到较高覆盖，同时让独立审查代理检查公网文件服务、凭据转发和进程回收风险。
+
+=== 01a0240a-ce56-7dd0-b6f5-e5d5df6f48b3 32 agentMessage len=60 ===
+我会按只读代码审查来查这次变更，重点看公网图片桥接、MiniMax URL 构造、服务生命周期和测试覆盖，不会修改文件。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 33 agentMessage len=134 ===
+我会先做只读排查：确认桌面项目路径、`9999/10000` 的监听进程、现有 Cloudflare 隧道来源，以及 MiniMax 请求里图片 URL 是怎么拼出来的。只有在这些证据清楚后再改，避免把 `9999` 的公网域名错误地直接套到 `10000` 路径上。
+
+=== 01a0240a-ce56-7dd0-b6f5-e5d5df6f48b3 69 agentMessage len=149 ===
+一个比较明确的问题已经出现：`main()` 在绑定 10000 端口之前就启动了 Cloudflare 隧道。如果 10000 端口已被占用或服务器创建失败，当前代码没有进入 `finally`，会留下 `cloudflared` 和本地图片服务进程。继续查 MiniMax 请求与图片发布行为。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 46 agentMessage len=119 ===
+目前看到桌面项目实际目录是 `C:\Users\EDY\Desktop\veo接口自动化`，`9999` 正在监听，`10000` 有两个监听进程。下一步我会把这些 PID 对应的启动命令和两个项目里的隧道/MiniMax 代码定位出来。
+
+=== 01a0240a-ce56-7dd0-b6f5-e5d5df6f48b3 88 agentMessage len=99 ===
+MiniMax 的提交路径现在确实会把本地图片复制到缓存目录，再把 `https://.../ref/<随机名>` 放进 payload；我接下来跑相关单测，确认现有测试能不能覆盖这些生命周期边界。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 64 agentMessage len=154 ===
+代码里已经出现了与 `MINIMAX_IMAGE_PUBLIC_BASE_URL`、`ReferenceBridge`、MiniMax 图片发布相关的新实现和测试痕迹，说明当前目录可能已有一版改动。我会先按 owner review 的方式核对这些改动是否真的满足公网图片链路和安全边界，再决定是否需要补修。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 80 agentMessage len=129 ===
+没有 Git 仓库元数据，所以我不能用 `git diff` 区分哪些是刚改的；我会按文件时间和相关搜索结果直接审查当前实现。重点会放在图片发布目录、Cloudflare 隧道生命周期、MiniMax payload 以及 HTTP 客户端的跳转/凭据处理。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 97 agentMessage len=144 ===
+当前实现思路是“`10000/9999` 启动时开一个独立的本地图片服务，再让 cloudflared 临时隧道指向这个图片服务”，而不是把业务端口直接暴露。这比复用 `9999` 业务端口更贴近需求，但我还要看启动入口是否稳定，以及异常时会不会把 MiniMax 请求发成失效 URL。
+
+=== 01a0240a-ce56-7dd0-b6f5-e5d5df6f48b3 111 agentMessage len=3236 ===
+审查结果如下。目录 `C:\Users\EDY\Desktop\veo接口自动化` 不是 Git 仓库，所以我按当前文件快照审查，行号基于当前文件内容。
+
+**Findings**
+
+1. **High: 10000 端口绑定失败时会泄漏隧道进程和本地图片服务**  
+   [web_server.py](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/web_server.py:1494>) 先执行 `ensure_cloudflared()` 和 `bridge.start()`，然后才在 [web_server.py:1500](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/web_server.py:1500>) 创建 `ThreadingHTTPServer`。如果 10000 端口已被占用、权限不足、handler 初始化异常等导致 server 构造失败，代码不会进入 [web_server.py:1511](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/web_server.py:1511>) 的 `finally`，`bridge.stop()` 不会执行，`cloudflared` 子进程和 `ReferenceBridge` 的本地 HTTP server 会留下。  
+   这正好是 10000/9999 端口场景里最容易遇到的失败模式。建议把 server 创建也纳入同一个生命周期 `try/finally`，或先成功绑定 10000 后再启动 bridge；并补一个 `ThreadingHTTPServer` 构造抛 `OSError` 时确认 `bridge.stop()` 被调用的测试。
+
+2. **High: 所有 web server 启动都会被 Cloudflare 下载/隧道启动阻塞，非 MiniMax 用户也受影响**  
+   [web_server.py:1494](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/web_server.py:1494>) 无条件调用 `ensure_cloudflared()`；如果本地没有二进制，[reference_bridge.py:63](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/reference_bridge.py:63>) 使用 `urllib.request.urlretrieve()` 下载但没有超时。网络卡住时，整个 10000 服务会一直起不来。即使二进制存在，[reference_bridge.py:140](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/reference_bridge.py:140>) 也可能等待 Quick Tunnel 最多 45 秒，期间 web UI 不监听 10000。  
+   这是明显的启动行为回归，因为即使用户不用 MiniMax，也会被这个公网图片桥接拖住。现有 `test_main_*` 都 mock 掉了 `ensure_cloudflared` 和 `ReferenceBridge.start()`，没有覆盖下载超时、隧道超时、非 MiniMax 启动路径。建议至少给下载设置超时，最好把 tunnel lazy-start 到真正提交 MiniMax 图片任务之前，或让 web server 先启动、bridge 后台初始化并把不可用状态暴露给 MiniMax 请求。
+
+3. **Medium: 高并发 MiniMax 提交时，过期缓存清理存在竞态，可能随机让图片发布失败**  
+   [minimax_provider.py:54](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/minimax_provider.py:54>) 每个 MiniMax 提交都会调用 `publish_reference_image()`；runner 默认视频并发很高，`submit_one` 会在线程池里并行跑。`publish_reference_image()` 在 [reference_bridge.py:46](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/reference_bridge.py:46>) 每次都会调用 `_cleanup_expired()`，而 `_cleanup_expired()` 在 [reference_bridge.py:82](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/reference_bridge.py:82>) 到 [reference_bridge.py:84](</C:/Users/EDY/Desktop/veo接口自动化/veo_automation/reference_bridge.py:84>) 对同一个 cache 目录无锁遍历、`stat()`、`unlink()`。两个提交线程同时清理同一个过期文件时，一个线程删除后另一个线程可能在 `stat()` 或 `unlink()` 处抛 `FileNotFoundError`，导致当前 MiniMax 请求失败。  
+   建议清理逻辑容忍 `FileNotFoundError`/`OSError`，或用进程内锁控制 cleanup；补一个并发 `publish_reference_image()` + 已过期文件的测试。
+
+4. **Medium: 现有测试没有覆盖真实公网可访问性，仍可能复现用户原始问题**  
+   当前新增测试主要验证 payload 中出现 `https://.../ref/...`，以及 `_serve()` 能本地返回文件。但 [test_minimax_provider.py:35](</C:/Users/EDY/Desktop/veo接口自动化/tests/test_minimax_provider.py:35>) 直接 mock `publish_reference_image()`，而 [test_reference_bridge.py:158](</C:/Users/EDY/Desktop/veo接口自动化/tests/test_reference_bridge.py:158>) 也 mock `cloudflared` 输出，并没有验证 “生成 URL 后外部能 GET/HEAD 到图片”。  
+   这不一定要在普通单测里真的打 Cloudflare，但至少应有一个可选集成测试或启动后健康检查：发布一张临时图片，对 `public_base/ref/<name>` 做 HEAD/GET，确认 200、content-type、content-length，再允许 MiniMax 提交。否则代码可能只生成了看起来正确的 URL，但隧道尚未可用或路由不通。
+
+**已验证**
+
+运行了：
+
+```powershell
+python -m unittest tests.test_reference_bridge tests.test_minimax_provider tests.test_web_server_helpers
+```
+
+结果：`Ran 50 tests in 1.156s - OK`。现有测试通过，但没有覆盖上面几个生命周期和并发边界。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 138 agentMessage len=212 ===
+我发现 `10000` 的业务进程是 `python -m veo_automation.web_server --host 0.0.0.0 --port 10000`，视频任务是在同一个 Python 进程的线程池里跑，环境变量中的公网图片基址可以被 MiniMax provider 读到。这一点链路上是通的；现在重点是确认隧道是否真的启动、cloudflared 是否可用，以及实现里还有没有会导致生产失败的边界问题。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 190 agentMessage len=131 ===
+准备改两个点：缓存清理只处理本模块生成的随机图片文件/临时文件，不再碰目录里的其他文件；MiniMax 的 JSON 请求和下载请求遇到重定向时，只允许继续走 HTTPS，跨域时继续去掉 `Authorization`。这两处都是行为边界，不涉及密钥或远端资源。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 200 agentMessage len=87 ===
+实现边界已经收紧。接下来补对应测试，确保旧的图片文件会按 TTL 清理，但同目录里的无关文件不会被删；同时验证 MiniMax HTTP 客户端会拒绝 HTTP 降级重定向。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 220 agentMessage len=75 ===
+已补完安全边界和启动脚本修正。现在跑相关单元测试和一次完整测试发现回归；如果完整测试太慢，我会至少把 MiniMax、图片桥接、启动入口这些路径跑完。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 286 agentMessage len=138 ===
+`10000` 当前状态接口显示 `running:false`、上一批任务已结束，所以重启主服务不会中断正在跑的任务。我会只重启 `10000` 这个旧 Python 服务，让它加载新代码并在启动时创建 MiniMax 图片 Quick Tunnel；`9999` 先不动。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 315 agentMessage len=160 ===
+隧道已经起来了，公网基址是 `https://folding-joining-browser-pmid.trycloudflare.com`。我还会用项目里的真实图片走一遍“发布到 reference_cache -> 从 Cloudflare URL 拉取”的验证，确认 MiniMax 拿到的不是 404/HTML。
+
+=== 01a0240b-3e08-7353-b276-f9252d91c91e 326 agentMessage len=198 ===
+验证前发现一个更关键的正确性问题：`publish_reference_image` 用的是 `shutil.copy2`，它会保留原图的旧修改时间。项目里的上传图很多是历史时间，复制进 `reference_cache` 后会被服务端立刻判定“超过 1 小时 TTL”，公网 URL 直接 404。这就是 MiniMax 拿不到图的核心风险之一；我会改成发布时使用当前时间，并补测试覆盖旧图片。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 363 agentMessage len=173 ===
+真实公网验证抓到了一个单测没覆盖到的关键问题：缓存用 `copy2` 保留了原图旧修改时间，而图片服务把修改时间当 TTL 起点；刚发布的旧图片会立刻被判定“已过期”，所以 Cloudflare 返回 404。这正是看似生成了公网 URL、MiniMax 仍拉不到图的原因。我会先加回归测试，再改为发布时写入新的缓存时间，然后重新做公网 GET。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 492 agentMessage len=146 ===
+代码回归现在是 138/138 通过；新增桥接模块覆盖率 92%，本次 MiniMax+桥接改动合计 80%。当前 `10000` 没有运行任务，我现在会重启为最终代码版本，并把标准输出落到项目日志，随后用它实际发布一张旧时间戳图片并从 Cloudflare 公网做 HEAD/GET 校验。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 532 agentMessage len=165 ===
+最终 `10000` 已启动并通过真实公网验证：Cloudflare 对测试图片的 `HEAD` 和 `GET` 都返回 `200`，类型 `image/jpeg`，长度 `144094` 字节。验证用的是缓存副本；我会立即删掉这一个测试缓存文件，原始图片不受影响，实际 MiniMax 请求仍会按需生成各自的一小时临时 URL。
+
+=== 01a02418-8cdd-77b3-b8ee-51a1827ffb8b 34 agentMessage len=107 ===
+我先做只读检查：定位桌面上的两个项目、确认 `9999/10000` 端口对应的进程命令行，再看 MiniMax 和 Cloudflare 隧道相关代码。涉及具体方案选择前，我会先把证据和不确定点摆出来，不直接改。
+
+=== 01a02418-8cdd-77b3-b8ee-51a1827ffb8b 59 agentMessage len=151 ===
+这个目录不是 git 仓库，所以我没法用 `git diff/status` 区分历史改动；我会按当前文件做证据审查。项目里已经有 `reference_bridge.py` 和 MiniMax 测试文件，说明很可能已有一套“本地图片转公网 URL”的实现，需要确认它是否覆盖 10000 的请求路径。
+
+=== 01a02418-8cdd-77b3-b8ee-51a1827ffb8b 73 agentMessage len=147 ===
+当前代码已经不是“未接入”状态：MiniMax 会调用 `publish_reference_image()`，并且 `web_server` 主入口里有启动 Quick Tunnel 的逻辑。现在我重点看这条链路有没有只在 9999 生效、10000 没拿到环境变量，或有安全/生命周期漏洞。
+
+=== 01a02418-8cdd-77b3-b8ee-51a1827ffb8b 90 agentMessage len=153 ===
+我看到 `9999` 和 `10000` 两个服务都是同一个 `web_server` 模块启动；按当前实现，每个端口进程都会独立启动一个 MiniMax 图片 Quick Tunnel，而不是硬编码复用 9999。这个方案对 10000 更直接，但我要继续验证启动日志和测试结果，确认实际隧道有没有成功。
+
+=== 01a02418-8cdd-77b3-b8ee-51a1827ffb8b 107 agentMessage len=173 ===
+日志里没有看到 “MiniMax reference image tunnel” 成功行，只有本地服务启动行；这意味着当前正在跑的进程可能是旧版本启动的，或隧道启动失败但输出没进这些日志。我会查 `cloudflared.exe` 进程和本地 `/api/status`，再决定是否需要重启 10000，这一步属于外部状态变更，确认前我不会动它。
+
+=== 01a02418-8cdd-77b3-b8ee-51a1827ffb8b 131 agentMessage len=47 ===
+我不再扩大范围了，最后只跑 MiniMax/图片桥接相关测试，确认这条链路和安全边界是否通过。
+
+=== 01a02418-8cdd-77b3-b8ee-51a1827ffb8b 145 agentMessage len=157 ===
+测试通过，并且 10000 的当前日志明确显示隧道已启动：`https://incorporate-requirements-blackberry-birthday.trycloudflare.com`。我再做一次公网图片 URL 只读访问验证，确认 MiniMax 实际可从外网拉到 `/ref/...` 图片。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 622 agentMessage len=2061 ===
+已完成。桌面项目 `C:\Users\EDY\Desktop\veo接口自动化` 的 MiniMax 图片请求现在使用独立的 Cloudflare Quick Tunnel，不再发送 `data:image/...;base64`。
+
+**已处理**
+
+- 新增 [reference_bridge.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/reference_bridge.py:35)，启动本地受限图片服务，并为图片生成 `https://*.trycloudflare.com/ref/<64位随机名>` 公网地址。
+- MiniMax 在 [minimax_provider.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/minimax_provider.py:43) 中改为将本地图片发布到临时隧道，再把 HTTPS URL 放进 `image_urls`。
+- 移除了 MiniMax 不支持的 `prompt_optimize` 字段。此前 `10000` 最近两条任务实际失败原因正是：
+  ```text
+  HTTP 400: prompt_optimize is not supported
+  ```
+- Web 服务在 [web_server.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/web_server.py:1484) 启动时自动建立隧道，退出时回收 `cloudflared` 和本地图片服务。
+- 修复了一个真实公网验证才发现的问题：原实现会保留原图的旧修改时间，导致刚发布的图片立即被 TTL 判定为过期并返回 `404`；现在每次发布都会产生新的缓存时间。
+- 图片只允许 `.jpg/.jpeg/.png/.webp`，最大 25 MB；公网路径必须是不可预测的 64 位随机文件名；其他路径和目录穿越请求返回 `404`。
+- 图片一小时后过期；缓存清理增加了并发锁，只会清理桥接模块自身管理的文件。
+- `cloudflared.exe` 使用固定版本下载并进行 SHA-256 校验，实际哈希为：
+  ```text
+  c29eee2b121f5436a642eed69fd9767da7e7b8c510fa50aaa130337f931357b5
+  ```
+- API、下载和重定向均限制为 HTTPS；跨域跳转时会移除 `Authorization`，避免 API Key 泄露。
+
+**实际验证**
+
+- 全量测试：`138/138` 通过。
+- 新增桥接模块覆盖率：`92%`。
+- 本次 MiniMax 和桥接模块合计覆盖率：`80%`。
+- 整个旧项目当前总覆盖率为 `75%`，未达到仓库全局 80% 指标；主要缺口在本次未改动的 `file_inputs`、旧供应商客户端等模块。
+- 使用一张具有旧修改时间的真实图片进行公网验证：
+  ```text
+  HEAD 200
+  GET 200
+  Content-Type: image/jpeg
+  Content-Length: 144094
+  ```
+- 验证图片随后已被标记过期，公网再次访问返回 `404`；原始图片没有修改。
+- 没有实际提交 MiniMax 付费生成任务，避免产生费用。请求体和公网取图链路都已分别验证。
+
+`10000` 服务已经用最终代码重新启动，当前 Python PID 为 `44456`，对应 `cloudflared` PID 为 `28188`。可以直接访问：
+
+- [http://10.1.10.146:10000/](http://10.1.10.146:10000/)
+- 本机备用地址：[http://127.0.0.2:10000/](http://127.0.0.2:10000/)
+
+这里使用 `127.0.0.2` 是因为百度网盘的 `YunDetectService.exe` 正占用 `127.0.0.1:10000`，直接打开 `localhost:10000` 可能会命中百度网盘服务。服务日志位于 [web_server_10000_stdout.log](C:/Users/EDY/Desktop/veo接口自动化/logs/web_server_10000_stdout.log) 和 [web_server_10000_stderr.log](C:/Users/EDY/Desktop/veo接口自动化/logs/web_server_10000_stderr.log)。
+
+页面上仍会显示上一次失败任务的历史错误，这是旧运行记录，没有被篡改。现在可以从页面重新提交或重跑这两条 MiniMax 任务；新请求会使用当前 Cloudflare 公网图片链路。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 647 agentMessage len=177 ===
+最新任务已经明确：不是 MiniMax，也不是视频池占满，而是 GPT 提示词阶段连续 3 次重试后被标记 `blocked`。两个 GPT 通道都报同一个底层错误 `SSL: UNEXPECTED_EOF_WHILE_READING`，我继续验证两个上游域名当前的 TLS/DNS 可达性，以及代码是否把代理/连接复用配置成了容易触发 EOF 的方式。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 708 agentMessage len=1953 ===
+最新的 `10000` 任务不是 MiniMax 报错，而是在 GPT 子提示词阶段失败了。
+
+任务目录：
+
+[20260824_135236_web_20260824_135235_7051b6a9](C:/Users/EDY/Desktop/veo接口自动化/runs/20260824_135236_web_20260824_135235_7051b6a9)
+
+任务状态是：
+
+```text
+status: blocked
+prompt_status: gpt_failed
+prompt_retry_count: 3
+video_status: blocked
+provider_task_id: 空
+submit_attempt: 0
+```
+
+也就是说，GPT 提示词没有生成出来，所以后面的 MiniMax 视频请求根本没有开始。
+
+**直接原因**
+
+这次两个 GPT 通道都失败了：
+
+```text
+All GPT channels failed:
+备用通道: GPT network error:
+SSL: UNEXPECTED_EOF_WHILE_READING
+
+主通道: GPT network error:
+SSL: UNEXPECTED_EOF_WHILE_READING
+```
+
+程序在 [runner.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/runner.py:608) 中会把网络错误自动重试。当前配置的最大重试次数是 3 次，3 次都失败后，任务才被标记成 `blocked`。所以页面上显示的“提示词通道阻塞”实际上是“GPT 重试耗尽后的任务终态”，不是 GPT 队列真的被并发占满。
+
+**备用通道存在确定性证书问题**
+
+当前备用地址：
+
+```text
+https://api.apiplus.cloud/
+```
+
+服务器证书信息：
+
+```text
+Subject:   CN=api.apiplus.cloud
+Issuer:    CN=R13, O=Let's Encrypt, C=US
+NotBefore: 2026-05-24 05:34:41
+NotAfter:  2026-08-22 05:34:40
+```
+
+当前日期是 `2026-08-24`，这个证书已经过期两天。
+
+Python 当前实际请求备用通道时会得到：
+
+```text
+SSLCertVerificationError:
+certificate has expired
+```
+
+`curl` 也复现了同样的问题：
+
+```text
+SEC_E_CERT_EXPIRED
+```
+
+因此备用通道目前不能继续使用，需要服务方续签 `api.apiplus.cloud` 的证书，或者把备用地址换成新的 HTTPS 域名。
+
+**主通道当前是可达的**
+
+主通道：
+
+```text
+https://2999api.com
+```
+
+当前证书有效期：
+
+```text
+NotBefore: 2026-07-20 23:05:50
+NotAfter:  2026-10-18 23:05:49
+```
+
+我测试了 Python TLS 和 HTTPS 根地址，均正常：
+
+```text
+TLS: TLSv1.3
+HTTPS status: 200
+Server: nginx/1.30.4
+```
+
+主通道的 `/v1/chat/completions` 路径也能正常完成 TLS 并返回 HTTP 响应，说明当前不是本机 DNS、系统时间或整体网络断开问题。最新任务执行的那个时间点，主通道也出现过一次 `UNEXPECTED_EOF`，更像是上游临时断开或连接被中途关闭；但备用通道是确定性的证书过期问题。
+
+**建议处理顺序**
+
+1. 暂时禁用 `api.apiplus.cloud` 备用通道，避免每次主通道异常时切过去必然触发证书错误。
+2. 让 `api.apiplus.cloud` 的服务方续签证书，或替换成新的有效 HTTPS 地址。
+3. 先只保留 `https://2999api.com` 主通道，重新重跑这条被阻塞的任务。
+4. 如果主通道仍偶发 `UNEXPECTED_EOF`，再进一步处理主通道的连接重试和 HTTPS 长连接问题；目前没有证据表明是 `workers=50` 把 GPT 通道挤满，因为这次只有 1 条任务，且失败发生在单条任务的两个通道请求上。
+
+这次任务没有产生 MiniMax 请求，也没有产生视频生成任务费用；失败点在 GPT 提示词生成阶段。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 776 agentMessage len=118 ===
+现在能确认：这不是 MiniMax 或 Cloudflare 隧道阶段的失败，任务在 GPT 子提示词生成阶段就被阻断；而且备用通道的证书已过期。接下来我会把当前请求体和曾经成功的请求做离线对比，确认主通道断开是否由请求格式/体积触发。
+
+=== 01a03271-cf82-7653-a688-eed232073ab3 68 agentMessage len=100 ===
+我已经确认了这次“blocked”不是视频/Minimax 阶段，而是 GPT 子提示词阶段先死掉了。现在我在比对最近失败和历史成功的请求结构，看看主通道断开是不是由 payload 形态变化触发的。
+
+=== 01a03271-cf82-7653-a688-eed232073ab3 182 agentMessage len=2297 ===
+结论先说：这次 10000 端口报的“提示词通道有阻塞”，不是 Minimax 视频阶段卡住，而是 GPT 生成子提示词阶段先失败了；`generate_one_child_prompt()` 里一旦 GPT 请求抛异常，就会直接把这条任务标成 `prompt_status=gpt_failed`、`status=blocked`、`video_status=blocked`，连续重试 3 次后就变成你看到的“GPT 重试已用完 (3/3)”状态。[gpt_prompt_provider.py](<C:/Users/EDY/Desktop/veo接口自动化/veo_automation/gpt_prompt_provider.py:448>)
+
+主通道这次失败的最可能原因，是 `https://2999api.com/v1/chat/completions` 在 POST 阶段被对端主动断开了连接，也就是 `RemoteDisconnected: Remote end closed connection without response`。这类错误的含义很具体：TCP/TLS 已经连上了，但服务端在返回 HTTP 响应前把连接掐掉了；它不像是本地 JSON 组包错误，也不像是证书错误。对应的请求入口在 `GPTPromptProvider._json_request()`，主通道走 `/v1/chat/completions`，备通道走 `/v1/responses`。[gpt_prompt_provider.py](<C:/Users/EDY/Desktop/veo接口自动化/veo_automation/gpt_prompt_provider.py:126>) [gpt_prompt_provider.py](<C:/Users/EDY/Desktop/veo接口自动化/veo_automation/gpt_prompt_provider.py:156>) [gpt_prompt_provider.py](<C:/Users/EDY/Desktop/veo接口自动化/veo_automation/gpt_prompt_provider.py:191>) [gpt_prompt_provider.py](<C:/Users/EDY/Desktop/veo接口自动化/veo_automation/gpt_prompt_provider.py:312>)
+
+我把这次和历史成功批次对比过了，证据不支持“请求太大”或“请求形态改坏了”：
+- 这次实际拼出来的主通道请求大约是 `315,084` 个 UTF-8 字节。
+- 历史成功批次同样是主通道 `chat_completions`，请求大约是 `440,326` 个 UTF-8 字节，反而更大。
+- 历史成功记录里明确写了 `selected_channel: 主通道`、`request_format: chat_completions`，说明这条主通道路径以前是通的，不是天生不兼容。[runs/20260820_171654_web_20260820_171653_03cd2187/raw/1731764237220154023_v8_gpt_response.json](C:/Users/EDY/Desktop/veo接口自动化/runs/20260820_171654_web_20260820_171653_03cd2187/raw/1731764237220154023_v8_gpt_response.json) [runs/20260824_141642_web_20260824_141641_27e7c86d/manifest.json](C:/Users/EDY/Desktop/veo接口自动化/runs/20260824_141642_web_20260824_141641_27e7c86d/manifest.json) [utils.py](<C:/Users/EDY/Desktop/veo接口自动化/veo_automation/utils.py:78>)
+
+备通道这边是另外一个独立问题：`api.apiplus.cloud` 的证书已经过期，所以它报的是 `CERTIFICATE_VERIFY_FAILED / certificate has expired`。这解释了为什么本次两个 GPT 通道都没活下来，但它不解释主通道的 `RemoteDisconnected`。[runs/20260824_141642_web_20260824_141641_27e7c86d/pipeline_state.json](C:/Users/EDY/Desktop/veo接口自动化/runs/20260824_141642_web_20260824_141641_27e7c86d/pipeline_state.json)
+
+所以，独立判断下来，主通道最可能的问题是：
+1. `2999api.com` 侧的临时服务端故障或边缘代理异常；
+2. 该站点对当前 POST 请求/账号状态/上游路由做了直接断开；
+3. 不是本地提示词长度、不是图片大小、也不是请求格式从成功路径上偏离。
+
+如果你要我继续往下查，我会优先盯这三个方向里的“服务端是否还接受 `/v1/chat/completions` 的 POST”，因为现在本地证据已经基本把“代码构造错了”排除了。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1196 agentMessage len=271 ===
+修复已经加载到 10000 服务：
+
+- `http://127.0.0.2:10000/` 返回 200。
+- 项目自己的 MiniMax 图片 Quick Tunnel 已重新建立；10000 进程对应的新 tunnel 正常运行。
+- GPT provider 当前打印确认使用 `http://127.0.0.1:7897`。
+- 全量测试 `140 passed`。
+
+注意，原来那条失败运行不会自动变成成功，必须在 10000 页面重新点一次“重跑 GPT 失败任务”；我没有替你自动发起这次真实 GPT 请求，避免再次消耗额度。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1419 agentMessage len=221 ===
+修复方向已经明确：10000 启动时已有 Cloudflare Quick Tunnel，MiniMax provider 正在把图片发布成 HTTPS URL；GPT provider 目前却仍把同一图片编码成 Base64。我要让 GPT 复用这条已存在的图片隧道，API 请求本身继续经 `7897` 代理发往 2999，这样保留代理要求，同时避免这次容易被上游断开的 Base64 请求。隧道不可用时会保留明确错误，不会静默绕过代理。
+
+=== 01a03293-4967-7d50-8a0d-8fdd4da8b552 134 agentMessage len=176 ===
+provider 测试已通过 33 项。实现保留了 `build_prompt_messages()` 的直接调用兼容性，但 `GPTPromptProvider.__init__` 默认开启公网图片发布，因此真实 GPT 请求不会再走 Base64；代理 opener 逻辑未改动。现在检查差异和全套测试，确认没有影响 MiniMax 或其他调用方。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1475 userMessage len=67 ===
+但是你确定这个quick tunnel是能正确请求gpt然后返回的吗，这个通道是因为minimax接口参考图只能通过公网地址的图片上传
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1482 userMessage len=67 ===
+但是你确定这个quick tunnel是能正确请求gpt然后返回的吗，这个通道是因为minimax接口参考图只能通过公网地址的图片上传
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1485 agentMessage len=195 ===
+你的理解是对的：这个 Quick Tunnel 原本是给 MiniMax 参考图用的，它本身不是 GPT API 隧道，也不能“代理 GPT 返回结果”。我会把两条链路分开验证：`GPT API 请求 -> 7897 代理 -> 2999`，以及 `2999 上游读取图片 -> 10000 Quick Tunnel -> 本地图片`；只有第二条能实际返回图片，才有资格让 GPT 引用它。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1690 agentMessage len=1594 ===
+你说得对。Quick Tunnel 的用途本来就是给 MiniMax 提供公网参考图地址，它不是 GPT API 的代理隧道，也不会转发 GPT 的返回结果。
+
+现在两条链路已经分开：
+
+```text
+GPT 请求：
+10000 Python
+  -> http://127.0.0.1:7897
+  -> https://2999api.com/v1/chat/completions
+  -> GPT 返回提示词
+
+GPT 读取参考图：
+2999 上游服务器
+  -> https://当前 trycloudflare.com/ref/...
+  -> 10000 内置图片桥接
+  -> 本地参考图
+```
+
+我已经实际验证了第二条链路。当前 10000 重启后生成的新隧道是：
+
+`https://vacancies-capture-marshall-bass.trycloudflare.com`
+
+通过代理和直连分别访问一张本地参考图，结果都是：
+
+```text
+HTTP 200
+Content-Type: image/jpeg
+Content-Length: 228888
+返回内容与本地原图完全一致
+```
+
+所以可以确认：
+
+- Quick Tunnel 能正确对外提供图片；
+- 图片地址是公网 HTTPS；
+- 2999 理论上可以用 `image_url` 读取这张图；
+- Quick Tunnel 不负责 GPT 请求本身，GPT API 仍然必须走 `7897` 代理。
+
+我还用一个无效测试 token 向 `2999api.com` 发送了带公网 `image_url` 的请求，接口返回的是正常的 `HTTP 401 Invalid token`，而不是之前的 `Remote end closed connection without response`。这说明公共 URL 形式已经能正常到达 2999 接口，但因为没有使用真实有效的新 key，这一步不能证明 GPT 视觉模型已经成功解析图片并返回提示词。
+
+代码现在已经改为：
+
+- GPT 不再把图片编码成 `data:image/jpeg;base64,...`；
+- 先通过 [reference_bridge.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/reference_bridge.py:35) 发布图片；
+- 再把临时 HTTPS URL 放进 GPT 的 `image_url`；
+- 2999 请求继续使用 [gpt_prompt_provider.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/gpt_prompt_provider.py:115) 中的 `7897` 代理；
+- 隧道不可用时会明确报错，不会悄悄绕回失败的 Base64 方案。
+
+本地验证结果：
+
+```text
+pytest: 142 passed
+unittest: 142 tests OK
+compileall: OK
+10000: HTTP 200
+```
+
+之前重试仍失败，是因为程序只是把同一个 Base64 图片请求重新发送了三次。代理虽然生效，但 2999 或中间上游在这个请求形态下仍然主动断开，所以三次都失败后被标记为“主通道阻塞”。
+
+现在还差最后一个真实验证条件：请先在服务商后台撤销之前已经暴露过的旧 key，配置一个新的 `GPT_KEY`，然后重启 10000，再重跑一条 GPT 提示词任务。不要把新 key 粘贴到聊天里。只有这次真实请求返回了 GPT 生成内容，才能最终确认“2999 读取 Quick Tunnel 图片并成功返回提示词”的完整链路。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1829 userMessage len=135 ===
+为什么改的这么乱啊，很简单的一个逻辑非要搞得这么复杂，2999可以通过base64传图片，而且只是minimax需要公网图片链接，你分开处理不就完了吗，这么小一个问题搞这么久，先生成提示词，然后给miniamx，再把图片用quick tunnel给minimax就行了啊
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1832 agentMessage len=179 ===
+你说得对。这里不应该让 GPT 依赖 Quick Tunnel：2999 已经支持 Base64，Quick Tunnel 只应该出现在 MiniMax 的参考图提交阶段。我现在把 GPT provider 恢复成“代理 + Base64”，保留 MiniMax 原有的公网图片桥接，删除刚才引入的 GPT 公网 URL、回退和相关测试，然后跑完整测试确认。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1909 agentMessage len=233 ===
+已经按你说的逻辑收简了：
+
+- GPT 阶段：只走 `2999 + 7897`，图片直接 Base64；
+- MiniMax 阶段：才调用 `publish_reference_image()`，用 Quick Tunnel HTTPS URL；
+- GPT provider 不再导入、不再调用 Quick Tunnel；
+- 删除了 GPT 公网图片、自动回退等额外逻辑。
+
+测试结果 `141 passed`。现在重启 10000 让运行中的服务加载这版代码。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1924 agentMessage len=984 ===
+你说得对，前一版确实把一个简单问题绕复杂了。现在已经恢复成最简单、正确的两段逻辑：
+
+1. GPT 提示词阶段  
+   `10000 -> 127.0.0.1:7897 代理 -> https://2999api.com`  
+   图片直接使用 Base64，不经过 Quick Tunnel。
+
+2. MiniMax 视频阶段  
+   只有提交参考图给 MiniMax 时，才调用 Quick Tunnel，把图片转换成公网 HTTPS URL。
+
+当前 10000 的 GPT provider 已经完全移除：
+
+- `reference_bridge` 导入；
+- GPT 发布公网图片；
+- GPT `image_url`；
+- GPT 公网图片失败后的额外回退逻辑。
+
+GPT 请求现在重新固定使用：
+
+```text
+data:image/jpeg;base64,...
+```
+
+MiniMax 原来的公网图片逻辑保持不变，当前 10000 重启后生成的临时隧道是：
+
+```text
+https://opinions-resorts-educated-ontario.trycloudflare.com
+```
+
+这个地址只给 MiniMax 参考图使用，不会被 GPT 请求使用。
+
+你刚才那次失败的真实错误是：
+
+```text
+GPT HTTP 400:
+Unable to download content from the provided URL before the timeout
+```
+
+这说明新 key 已经通过认证，2999 也确实收到请求了；失败是因为当时 GPT 被错误地传入了 Quick Tunnel URL，而 2999 抓取这个临时图片地址超时。现在已经改回 Base64，因此不会再走这条失败路径。
+
+验证结果：
+
+```text
+pytest: 141 passed
+compileall: OK
+10000: HTTP 200
+服务已重启并加载最新代码
+```
+
+之前那个运行目录里的任务仍然会保持 `blocked`，因为它记录的是历史失败状态。重新点击重跑后，新任务会按现在的逻辑执行：先用 Base64 生成 GPT 提示词，成功后再由 MiniMax 使用 Quick Tunnel 上传参考图。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1968 agentMessage len=1145 ===
+我查了当前批次，看到的不是“同一个已经进入视频生成的任务又退回提示词阶段”，而是你又启动了一个新的 run。
+
+证据很明确：
+
+- `15:44:46` 的批次 `20260824_154446...`：
+  - 已经有 `prompt_status: gpt_ok`
+  - 已经生成了 `*_child_prompt.txt`
+  - 已经有 `provider_task_id`
+  - 最终状态是 `completed`
+- 后面的 `15:53:35` 批次 `20260824_155335...`：
+  - 是全新的运行目录
+  - `prompt_path` 指向的是新的母提示词文件
+  - 没有 `prompt_raw_path`
+  - 没有 `provider_task_id`
+  - `prompt_status` 最后变成了 `gpt_failed`
+  - MiniMax 根本还没有开始
+
+所以它重新进入提示词阶段是正常的，因为系统把它当成了一条新任务，而不是继续 `15:44:46` 那条已经完成的任务。
+
+当前逻辑是：
+
+```text
+新建任务
+  -> GPT 生成子提示词
+  -> MiniMax 提交视频
+  -> 轮询视频
+```
+
+如果是 GPT 阶段失败后的重试，系统会清除原来的 `prompt_status`，重新从母提示词生成子提示词：
+
+```text
+GPT 失败
+  -> 重试
+  -> 重新进入 GPT 提示词阶段
+```
+
+只有任务本身已经保存了：
+
+```text
+prompt_status = gpt_ok
+prompt_path = *_child_prompt.txt
+provider_task_id = ...
+```
+
+才会跳过 GPT，直接继续视频阶段。
+
+这次最新批次最后失败的原因仍然是：
+
+```text
+GPT network error: Remote end closed connection without response
+```
+
+也就是说这次不是 MiniMax 失败，也不是 Quick Tunnel 阶段失败；GPT 请求再次被 2999 上游断开，因此没有进入 MiniMax。
+
+如果你看到页面上有一条“正在进行中的任务”，同时又点了新建、重试或提交，页面就会同时出现两个不同 run。已经完成的那条不会被新任务复用。当前最新状态已经是：
+
+```text
+running: false
+phase: completed
+blocked: 1
+MiniMax: 未开始
+```
+
+因此这次确实是新任务重新走了 GPT，而不是旧的 MiniMax 任务被退回提示词阶段。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 1994 agentMessage len=1015 ===
+成功的那一次 GPT 图片使用的是 Base64，不是 Quick Tunnel 公网 URL。
+
+成功批次是：
+
+```text
+runs\20260824_154446_web_20260824_154445_b3b2d9ea
+```
+
+它的 GPT 记录显示：
+
+```text
+selected_channel: 主通道
+base_url: https://2999api.com
+request_format: chat_completions
+ok: true
+```
+
+当时实际使用的图片结构是：
+
+```json
+{
+  "type": "image_url",
+  "image_url": {
+    "url": "data:image/jpeg;base64,..."
+  }
+}
+```
+
+也就是：
+
+```text
+本地图片
+  -> Base64 编码
+  -> 通过 127.0.0.1:7897 代理
+  -> https://2999api.com/v1/chat/completions
+```
+
+它没有经过 Quick Tunnel。
+
+需要区分成功批次里另一个 `image_url` 记录：
+
+```text
+raw\...\submit_request_1.json
+image_url: "<image 1731767216139110948.jpg bytes=228888>"
+```
+
+这个是视频接口提交时的脱敏调试记录，不是 GPT 请求，而且那一批实际视频 provider 是 `oairegbox`，不是 MiniMax。它不能用来判断 GPT 的图片传输方式。
+
+成功批次的 GPT 原始响应文件只保存了返回结果，没有保存完整的出站请求体；但当时加载的 [gpt_prompt_provider.py](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/gpt_prompt_provider.py:723) 已经是 Base64 逻辑，并且文件修改时间早于该批次启动。因此可以确定：
+
+```text
+成功的 GPT 调用 = 2999 主通道 + 7897 代理 + Base64 图片
+```
+
+Quick Tunnel 只应该用于：
+
+```text
+MiniMax 提交参考图
+```
+
+不能用于 GPT 图片请求。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2013 userMessage len=65 ===
+当时那个omin成功的，为什么这个就能成功，你看看跟minimax的请求路径的区别，为什么omin的任务用gpt生子提示词就能成功
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2016 agentMessage len=139 ===
+我来把成功的 Omni 批次和失败的 MiniMax 批次做一份逐项对比：GPT 通道配置、请求协议、图片文件大小/哈希、生成的 JSON 请求体大小、并发和重试设置。这样能判断到底是“MiniMax 路径影响了 GPT”，还是两次 GPT 请求本身的输入不同导致一成功一失败。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2027 agentMessage len=139 ===
+对比结果已经很清楚：成功的 Omni 批次和失败的 MiniMax 批次，GPT 图片是同一张，SHA-256 完全一致；两次 GPT 都是 `gpt-5.5 + 2999 + chat_completions`。我再补一项母提示词/请求内容对比，确认不是图片或提示词内容差异。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2066 agentMessage len=1759 ===
+结论是：成功的 Omni 任务并不是因为 Omni 的 GPT 图片上传方式不同。它和失败的 MiniMax 任务，GPT 阶段使用的是同一套请求方式。
+
+对比结果：
+
+| 项目 | Omni 成功批次 | MiniMax 失败批次 |
+|---|---|---|
+| GPT Base | `https://2999api.com` | `https://2999api.com` |
+| GPT 模型 | `gpt-5.5` | `gpt-5.5` |
+| 请求协议 | `chat_completions` | `chat_completions` |
+| 图片大小 | `228888` 字节 | `228888` 字节 |
+| 图片 SHA-256 | `7ed6dd1c...d6fc95` | 完全相同 |
+| 母提示词 | 5080 字节 | 5080 字节 |
+| 母提示词 SHA-256 | `f4a9d965...10fa92` | 完全相同 |
+| 图片形式 | Base64 | Base64 |
+| 成功/失败 | 主通道返回 200 | `Remote end closed connection without response` |
+| 视频接口 | `oairegbox / regbox-omni-fast-no-water` | `minimax / minimax-h3` |
+
+成功 Omni 批次的 GPT 原始记录明确是：
+
+```json
+{
+  "selected_channel": {
+    "base_url": "https://2999api.com",
+    "model": "gpt-5.5",
+    "request_format": "chat_completions"
+  },
+  "attempts": [
+    {
+      "request_format": "responses",
+      "ok": false,
+      "error": "备用通道证书过期"
+    },
+    {
+      "request_format": "chat_completions",
+      "ok": true
+    }
+  ]
+}
+```
+
+所以成功的实际路径是：
+
+```text
+Base64 图片
+  -> 7897 代理
+  -> 2999 主通道
+  -> GPT 返回提示词
+  -> Omni 视频接口
+```
+
+失败的 MiniMax 批次则是：
+
+```text
+Base64 图片
+  -> 7897 代理
+  -> 2999 主通道主动断开
+  -> GPT 没有返回提示词
+  -> MiniMax 根本没有开始
+```
+
+关键点在这里：GPT 生成阶段和视频 provider 是分开的。`runner.py` 会先执行 GPT 子提示词任务，只有 `prompt_status == "gpt_ok"` 后，才会进入视频提交阶段。因此 MiniMax 的公网图片、Quick Tunnel、`minimax_provider.py` 都没有参与这次失败的 GPT 请求。
+
+两次的真正差别是：
+
+1. Omni 成功那次，2999 主通道当时正常；
+2. MiniMax 失败那次，2999 主通道在返回响应前断开；
+3. Omni 成功批次启用了备用通道，但备用通道证书已经过期，最终仍然是主通道成功；
+4. MiniMax 失败批次关闭了备用通道，所以主通道一断开就直接阻塞。
+
+因此可以排除：
+
+- 不是 Omni 和 MiniMax 的图片格式不同；
+- 不是 MiniMax Quick Tunnel 导致 GPT 失败；
+- 不是图片文件不同；
+- 不是母提示词不同；
+- 不是 MiniMax API 请求路径影响了 GPT。
+
+这次本质上是 `2999` 主通道同一个 Base64 GPT 请求的瞬时网络/上游断连。成功 Omni 批次证明了这套 Base64 方案本身是能成功的；失败 MiniMax 批次发生在视频阶段之前，和 MiniMax 路径没有关系。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2076 userMessage len=56 ===
+可是为什么omin一次就成功，但是minimax请求的时候，在gpt生成提示词的阶段就会一直失败，不会这么巧合吧
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2079 agentMessage len=144 ===
+你的直觉值得查。我不会只用“随机网络波动”敷衍：我会直接检查任务构建代码，确认选择 `minimax-h3` 时是否改变了 GPT 的消息、图片编码、固定后缀、代理或并发；同时把最近所有 Omni/MiniMax 批次的 GPT 结果列出来，看失败是否和 MiniMax 配置有稳定关联。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2099 agentMessage len=119 ===
+我先把 Omni 成功批次和 MiniMax 失败批次的实际运行记录、请求配置和调用顺序再对一遍，确认是不是“模型分支影响了 GPT 请求”，还是恰好是上游连接在那几次发生了不同表现。重点会看失败时 MiniMax 是否真的已经开始提交。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2160 agentMessage len=2411 ===
+不是 MiniMax 接口把 GPT 请求弄失败了。根据这两次任务的运行记录，失败发生在 MiniMax 请求之前，二者只是时间上刚好对应，实际调用链没有连到一起。
+
+| 对比项 | Omni 成功任务 | MiniMax 失败任务 |
+|---|---|---|
+| 图片 | 同一张图片，SHA-256 相同 | 同一张图片，SHA-256 相同 |
+| 母提示词 | 内容相同，SHA-256 相同 | 内容相同，SHA-256 相同 |
+| GPT 地址 | `https://2999api.com` | `https://2999api.com` |
+| GPT 模型 | `gpt-5.5` | `gpt-5.5` |
+| GPT 图片格式 | Base64 `data:image/...` | Base64 `data:image/...` |
+| GPT 代理 | `127.0.0.1:7897` | `127.0.0.1:7897` |
+| GPT 结果 | 主通道 HTTP 200 | `Remote end closed connection without response` |
+| MiniMax 是否开始 | 是，之后生成成功 | 否，`provider_task_id` 不存在 |
+
+失败任务的状态已经明确写成：
+
+```text
+prompt_status: gpt_failed
+video_status: blocked
+provider_task_id: 不存在
+error: GPT network error: Remote end closed connection without response
+```
+
+这表示 MiniMax 的 `submit()` 根本没有执行，所以：
+
+- MiniMax 的 API 没有收到请求；
+- MiniMax 的参考图公网化没有执行；
+- Quick Tunnel 没有参与这次失败；
+- 失败不是因为 MiniMax 的 `image_urls` 格式；
+- 失败也不是因为 MiniMax 模型名称改变了 GPT 的提示词请求。
+
+代码顺序也是分开的：
+
+- [runner.py:372](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/runner.py:372) 先创建视频 provider；
+- [runner.py:374](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/runner.py:374) 创建 GPT prompt provider；
+- [runner.py:728](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/runner.py:728) 先提交 GPT 子提示词任务；
+- [runner.py:257](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/runner.py:257) 只有 GPT 成功后，才调用视频 provider 的 `submit()`；
+- [minimax_provider.py:43](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/minimax_provider.py:43) 之后才会进入 MiniMax 请求；
+- [minimax_provider.py:54](C:/Users/EDY/Desktop/veo接口自动化/veo_automation/minimax_provider.py:54) 才会通过 Quick Tunnel 发布图片。
+
+两次任务真正重要的差异是 GPT 备用通道：
+
+成功的 Omni 任务：
+
+```text
+主通道：启用
+备用通道：启用
+```
+
+失败的 MiniMax 任务：
+
+```text
+主通道：启用
+备用通道：关闭
+```
+
+成功的 Omni 任务里，备用通道虽然报了证书过期，但主通道返回了成功结果：
+
+```text
+备用通道：CERTIFICATE_VERIFY_FAILED
+主通道：ok: true
+```
+
+而 MiniMax 任务里，主通道在返回任何 HTTP 响应之前就断开了：
+
+```text
+Remote end closed connection without response
+```
+
+因此没有第二条可用通道兜底。系统虽然重试了 3 次，但这 3 次仍然是同一个 `2999api.com`、同一个 `7897` 代理出口、同一种 Base64 请求方式，并没有更换网络路径，所以连续失败并不奇怪。
+
+`Remote end closed connection without response` 是连接层错误，表示代理或上游服务在返回 HTTP 状态码之前主动断开连接。若是图片格式、提示词内容或请求参数不合法，通常会得到 `400`、`401`、`413` 等 HTTP 响应，而不是这个错误。
+
+所以现在最准确的结论是：
+
+```text
+Omni 成功 ≠ Omni 使用了特殊 GPT 图片格式
+MiniMax 失败 ≠ MiniMax 请求影响了 GPT
+```
+
+实际情况是：
+
+```text
+Omni 任务执行时：2999 主通道刚好正常
+MiniMax 任务执行时：2999 主通道在代理链路上断开
+MiniMax 请求：尚未开始
+```
+
+当前应该排查的是 `2999api.com + 7897 代理出口` 的稳定性，以及备用 GPT 通道的证书问题；MiniMax 的 Quick Tunnel 和公网图片逻辑不需要再改。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2168 userMessage len=45 ===
+意思是关于提示词生成的部分流程两个接口是完全一眼的操作，只是minimax的时候波动了是吧
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2171 agentMessage len=681 ===
+对。按现在的代码和这两条实际运行记录，两个任务在“GPT 生成提示词”阶段使用的是同一套操作：
+
+- 同一张本地图片；
+- 同样转换成 Base64；
+- 同一个 `https://2999api.com`；
+- 同一个 `gpt-5.5`；
+- 同一个 `chat_completions` 请求格式；
+- 同一个 `7897` 代理；
+- 同一份母提示词；
+- 同一个提示词生成函数。
+
+GPT 请求本身不知道后面的视频模型是 Omni 还是 MiniMax。MiniMax 的公网图片 URL 和 Quick Tunnel 只会在 GPT 成功、进入视频提交阶段后才使用，所以这次 MiniMax 任务在 GPT 阶段失败时，MiniMax API 和 Quick Tunnel 都还没有参与。
+
+唯一明显的运行配置差异是：
+
+```text
+Omni 成功任务：主通道 + 备用通道
+MiniMax 失败任务：只有主通道
+```
+
+Omni 那次备用通道虽然证书过期，但主通道正常返回了；MiniMax 那次主通道在返回 HTTP 响应前断开，于是没有备用路径可以接住。
+
+所以更准确地说：
+
+```text
+提示词生成流程基本完全一样；
+MiniMax 不是导致 GPT 失败的原因；
+失败发生在 2999 + 7897 这条 GPT 网络链路的瞬时波动或上游断开。
+```
+
+这里的“波动”不是指 MiniMax 模型波动，而是 GPT 主通道当时连接被远端提前关闭。两次的请求内容相同，但请求发生的时间、代理出口状态和 2999 上游连接状态不同。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2204 agentMessage len=149 ===
+目前项目里还保留着多批历史记录，不能把整个 `tasks` 或 `runs` 目录一锅删掉，因为里面有更早的任务和已经导出的成品。最近这次排查至少涉及 3 个批次：Omni 成功、一次 GPT 失败、一次 MiniMax GPT 失败；我正在确认当前 10000 是否空闲，然后需要按这个范围清理。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2238 agentMessage len=363 ===
+我已经确认 10000 当前没有正在运行的任务。项目里今天和这次排查相关的历史批次共有 6 个：
+
+```text
+13:52  MiniMax
+14:16  MiniMax
+14:49  MiniMax
+15:44  Omni 成功
+15:48  GPT/备用通道失败
+15:53  MiniMax/GPT 失败
+```
+
+每个批次都同时有 `tasks` 记录、`runs` 运行目录和 `inbox/web_uploads` 上传目录。为了不误删更早的历史任务和已经导出的成品，请确认清理范围：
+
+- 删除上面这 6 个今天的相关批次及其运行/上传文件；
+- 保留 `D:\接口导出` 里的已导出视频和图片；
+- 保留项目配置、代码和更早日期的任务。
+
+回复“删除这 6 个”后我就执行清理，然后你可以重新提交一条测试。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2288 userMessage len=53 ===
+minimax这一次的还是失败了，你一直监测一次，然后你准备好了的时候我再跑一次，查出到底是什么节点的问题
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2298 agentMessage len=131 ===
+我继续处理这次排查。先读取你刚才新跑出的 MiniMax 批次和 10000 当前状态，确认失败停在 GPT、Quick Tunnel 图片发布，还是 MiniMax 提交/轮询；然后我会把一次监测需要的节点日志准备好，准备好后只通知你再跑，不会先替你发起任务。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2327 agentMessage len=146 ===
+这次新批次已经确认仍然停在 GPT，且两条通道的节点信息更明确了：备用通道是证书过期，主通道是 `2999` 在响应前断开；MiniMax 和 Quick Tunnel 仍未开始。为了下一次不靠最终错误猜测，我准备一个只记录节点状态的单次监测器，等你启动新任务后记录完整时间线和网络探针结果。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2343 agentMessage len=131 ===
+我会把监测器限定为一次任务：等待新的运行目录出现，按秒记录 GPT/视频队列状态，任务结束后分别探测 `7897 -> 2999`、备用域名证书和 MiniMax 上游的连接结果。日志只包含时间、节点、HTTP 状态和异常，不会记录 API key 或请求正文。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2407 agentMessage len=163 ===
+监测器已经启动，正在等待新的 10000 批次，当前还没有发起任何 GPT 或 MiniMax 请求。现在你可以只提交一条 `minimax-h3` 任务；提交后告诉我“已提交”，我会让这次监测完整跑到结束，再根据时间线判断是 `7897`、`2999`、备用证书、MiniMax 上游，还是 Quick Tunnel 节点。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2536 agentMessage len=254 ===
+这次任务其实已经被监测器捕获到了，失败时间线很清楚：GPT 第 1 次是 SSL `UNEXPECTED_EOF_WHILE_READING`，第 3 次变成 `Remote end closed connection without response`；整个过程中 `submit_active=0`、`provider_task_id` 为空，所以 MiniMax 和 Quick Tunnel 没有进入。现在我补做三条无密钥网络探针，确认当前断点是在 7897、2999，还是仅仅是请求链路被上游关闭。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2554 agentMessage len=203 ===
+探针结果已经把两个“节点”分开了：`7897` 端口在监听，经过 `7897` 访问 `2999` 能拿到 HTTP 404（说明 TLS/代理/上游连接是通的）；备用域名当前确实因证书不受信任失败；MiniMax 上游能返回 404（说明它也能连通）。我再用不输出 key 的方式做两个最小 POST：纯文本和同一张 Base64 图片，用来判断是 2999 的模型请求整体失败，还是图片请求体触发断开。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2601 agentMessage len=1611 ===
+这次测试已经被监测器完整捕获，问题节点已经可以锁定到 GPT 主通道链路，不是 MiniMax。
+
+**这次任务时间线**
+
+```text
+17:19:10  开始 GPT 提示词请求
+17:19:17  第 1 次失败：SSL UNEXPECTED_EOF_WHILE_READING
+17:19:22  第 2 次重试仍失败
+17:20:26  第 3 次失败：Remote end closed connection without response
+17:21:27  任务阻塞结束
+```
+
+整个过程始终是：
+
+```text
+provider_task_id: 空
+submit_active: 0
+ready_for_submit: 0
+remote_active: 0
+video_completed: 0
+```
+
+也就是说，MiniMax API 和 Quick Tunnel 在这次任务里完全没有被调用。
+
+**节点探针结果**
+
+| 节点 | 结果 |
+|---|---|
+| 本地 `7897` | 端口正常监听，进程是 `verge-mihomo` |
+| `7897 -> 2999 /v1/models` | 能收到 HTTP 404，说明代理连接和 TLS 通路正常 |
+| `7897 -> 2999` 纯文本 POST | HTTP 200 |
+| `7897 -> 2999` 同一张 Base64 图片 POST | HTTP 200 |
+| 备用通道 `api.apiplus.cloud` | SSL 证书过期，确定有问题 |
+| MiniMax `token.secure-skill.com` | 能收到 HTTP 404，网络可达 |
+
+两个实际诊断请求的结果：
+
+```text
+纯文本请求：HTTP 200，97 字节请求体
+同一张图片 Base64 请求：HTTP 200，305409 字节请求体
+```
+
+这说明：
+
+1. 当前 GPT key 是有效的；
+2. Base64 图片格式没有被 2999 拒绝；
+3. 300 KB 左右的图片请求体也能正常通过；
+4. `7897` 不是完全断网；
+5. MiniMax 上游目前也能连通；
+6. 失败发生在某些时刻的 `7897 -> 2999` 主通道连接建立或复用过程中，属于间歇性 EOF/远端提前断开；
+7. 备用通道则是另一个确定的问题：证书过期，而且这次任务没有启用备用通道。
+
+所以现在能够确定的故障节点是：
+
+```text
+GPT 主通道：127.0.0.1:7897 -> https://2999api.com
+```
+
+更细地说，应用层目前无法仅凭 `Remote end closed connection without response` 判断断开究竟是 `verge-mihomo` 代理进程主动关闭，还是 2999 上游在代理隧道内关闭；但可以排除 GPT 代码逻辑、Base64 图片、MiniMax API 和 Quick Tunnel。
+
+监测记录保存在：
+
+- [monitor_10000_once.ps1](C:/Users/EDY/Desktop/veo接口自动化/scripts/monitor_10000_once.ps1)
+- [monitor_10000_once_20260824_171427.jsonl](C:/Users/EDY/Desktop/veo接口自动化/logs/monitor_10000_once_20260824_171427.jsonl)
+
+监测日志不包含 API key 或请求正文。下一步应该处理主通道的连接重试/代理路由稳定性，并修复备用通道证书；继续改 MiniMax 的图片公网逻辑不会解决这次 GPT 阶段失败。
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2609 userMessage len=46 ===
+这个minimax的子提示词生成和omin的子提示词生成的方式是一模一样的是吗，我再确认一次
+
+=== 01a023e2-cb4b-7ad0-aa0e-1672022ecf84 2612 agentMessage len=766 ===
+是的。就“GPT 子提示词生成流程”而言，MiniMax 和 Omni 使用的是同一套方式：
+
+```text
+本地图片
+  -> Base64 data URL
+  -> 通过 127.0.0.1:7897 代理
+  -> https://2999api.com/v1/chat/completions
+  -> gpt-5.5
+  -> 生成子提示词
+  -> GPT 成功后才提交视频
+```
+
+两种视频模型都调用同一个 `GPTPromptProvider.generate_child_prompt()`，都使用同一种 `chat_completions` 请求格式和 Base64 图片格式。MiniMax 的 Quick Tunnel 只在 GPT 成功之后、提交 MiniMax 视频时才会参与，不能改变 GPT 子提示词阶段的请求方式。
+
+不过要区分两件事：
+
+- “生成方式和调用链一样”：是；
+- “每个请求的 JSON 字节完全一模一样”：不一定。
+
+请求内容可能因为母提示词后缀长度、最大输出 token、任务时间和备用通道开关不同而有少量差异。例如：
+
+```text
+Omni 成功任务：GPT 主通道 + 备用通道
+MiniMax 失败任务：GPT 主通道，备用通道关闭或证书不可用
+```
+
+但这些差异不包括“MiniMax 使用了另一种 GPT 图片上传方式”。MiniMax 模型名不会传入 GPT 请求，也不会让 GPT 改用公网图片 URL。
+
+因此可以再次确认：
+
+```text
+Omni 的 GPT 子提示词生成方式
+=
+MiniMax 的 GPT 子提示词生成方式
+
+当前差异在 GPT 主通道的网络稳定性和备用通道证书，
+不在 MiniMax 子提示词逻辑或图片上传格式。
+```
+
+=== 01a03822-54ae-7ea0-af4b-342012c7a819 160 agentMessage len=5404 ===
+已定位：3000 端口当前跑的是 `C:\Users\EDY\Desktop\集成` 的 Next.js 生产构建，进程命令为：
+
+```text
+node C:\Users\EDY\Desktop\集成
+ode_modules\.bin\..
+ext\dist\bin
+ext start -H 0.0.0.0 -p 3000
+```
+
+`.next` 构建时间是 `2026/8/25 16:32:40`，构建产物里也确认了 Grok 分支仍是同一套请求格式。
+
+**Grok 上游请求格式**
+当前“生产 > 生视频 > Grok”最终不是直接从浏览器请求 Grok，而是：
+
+```text
+浏览器生产板块
+  -> POST /api/workspace/accounts/{accountId}/generate-video
+  -> 写入 workspaceVideoTask 并 queueWorkspaceVideoTaskProcessing(task.id)
+  -> 后台 worker 调 submitVideo(...)
+  -> POST https://snumom.com/v1/videos
+```
+
+最终发给 Grok/snumom 的请求：
+
+```http
+POST https://snumom.com/v1/videos
+Accept: application/json
+Authorization: Bearer <GROK_VIDEO_API_KEY>
+Content-Type: application/json
+User-Agent: WorkspaceProduction/1.0
+```
+
+当前 `.env` 中 `GROK_VIDEO_BASE_URL=https://snumom.com/v1`，`GROK_VIDEO_API_KEY` 已配置但已脱敏；所以实际 endpoint 是：
+
+```text
+https://snumom.com/v1/videos
+```
+
+请求 body 基础结构：
+
+```json
+{
+  "model": "grok-imagine-video-1.5（按次）",
+  "prompt": "<最终视频提示词>",
+  "duration": 10,
+  "extra": {
+    "aspect_ratio": "9:16",
+    "resolution": "720p"
+  }
+}
+```
+
+如果选了 1 张参考图，会多一个顶层字段：
+
+```json
+{
+  "model": "grok-imagine-video-1.5（按次）",
+  "prompt": "<最终视频提示词>",
+  "duration": 10,
+  "extra": {
+    "aspect_ratio": "9:16",
+    "resolution": "720p"
+  },
+  "input_reference": "https://<公网桥接域名>/api/workspace/minimax-reference/<token>.jpg"
+}
+```
+
+如果选了多张参考图，代码不用 `input_reference`，而是在 `extra.reference_images` 里传数组：
+
+```json
+{
+  "model": "grok-imagine-video-1.5（按次）",
+  "prompt": "<最终视频提示词>",
+  "duration": 10,
+  "extra": {
+    "aspect_ratio": "9:16",
+    "resolution": "720p",
+    "reference_images": [
+      {
+        "url": "https://<公网桥接域名>/api/workspace/minimax-reference/<token-1>.jpg",
+        "role": "reference_image"
+      },
+      {
+        "url": "https://<公网桥接域名>/api/workspace/minimax-reference/<token-2>.png",
+        "role": "reference_image"
+      }
+    ]
+  }
+}
+```
+
+没有看到 `stream: true` 或任何流式提交字段。服务端 `fetchJson` 是普通 `fetch`，然后 `response.text()` 读完整响应，再 `JSON.parse`。
+
+**字段映射**
+前端生产板块提交的是内部 API：
+
+```json
+{
+  "supplierId": "grok-video",
+  "modelId": "grok",
+  "promptMode": "manual",
+  "templateId": undefined,
+  "prompt": "<手写提示词，或模板模式时为空>",
+  "promptModel": "gpt-2999",
+  "suffixEnabled": false,
+  "duration": "10",
+  "aspectRatio": "9:16",
+  "resolution": "720p",
+  "count": "1",
+  "referenceAssetId": "<第一张参考图 id>",
+  "referenceAssetIds": ["<参考图 id>"],
+  "referenceRow": {
+    "pid": "...",
+    "title": "...",
+    "description": "..."
+  }
+}
+```
+
+服务端 schema 会把这些字段校验/转换：
+
+```text
+supplierId -> 供应商配置 id，Grok 必须是 grok-video
+modelId -> 视频模型 id，Grok 必须是 grok
+duration -> number，Grok 能力范围 6-30
+aspectRatio -> "9:16" | "16:9" | "1:1"
+resolution -> "480p" | "720p"
+count -> 1-4，只影响创建多少个本地任务，不进入单次 Grok 上游请求
+referenceAssetIds -> 本地图片读成 base64，再发布成公网 HTTPS URL
+prompt/finalPrompt -> 上游 body.prompt
+```
+
+参考图不是以 base64 传给 Grok。Grok 分支会先执行 `publishPublicReferenceImage(reference)`，生成可访问的 HTTPS 图片 URL，然后放进 `input_reference` 或 `extra.reference_images`。
+
+**状态查询格式**
+任务提交成功后，后续轮询状态也是 Grok/snumom 上游：
+
+```http
+GET https://snumom.com/v1/videos/{providerTaskId}
+Accept: application/json
+Authorization: Bearer <GROK_VIDEO_API_KEY>
+Content-Type: application/json
+User-Agent: WorkspaceProduction/1.0
+```
+
+下载时如果状态响应里没有直接给视频 URL，会 fallback 到：
+
+```http
+GET https://snumom.com/v1/videos/{providerTaskId}/content
+Accept: video/mp4,video/*,*/*
+Authorization: Bearer <GROK_VIDEO_API_KEY>
+```
+
+**证据文件**
+- 3000 进程：`next start -H 0.0.0.0 -p 3000`，项目目录 `C:\Users\EDY\Desktop\集成`
+- Grok supplier 配置：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\server-catalog.ts:43`
+  - `id: "grok-video"`
+  - `provider: "grok-video"`
+  - `apiKeyEnv: "GROK_VIDEO_API_KEY"`
+  - `baseUrlEnv: "GROK_VIDEO_BASE_URL"`
+  - `defaultBaseUrl: "https://snumom.com/v1"`
+  - `model: "grok-imagine-video-1.5（按次）"`
+- 当前环境 base URL：`C:\Users\EDY\Desktop\集成\.env:21`
+  - `GROK_VIDEO_BASE_URL=https://snumom.com/v1`
+- Grok payload 构造函数：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:70`
+  - `buildGrokVideoPayload(...)`
+  - `model/prompt/duration/extra.aspect_ratio/extra.resolution`
+  - 单图 `input_reference`
+  - 多图 `extra.reference_images`
+- 最终上游提交：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:317`
+  - Grok 分支
+  - `POST ${baseUrl}/videos`
+  - `headers(apiKey)`
+  - `body: JSON.stringify(payload)`
+- headers 定义：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:259`
+- 非流式 JSON 读取：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:157`
+- 前端内部 API 提交：`C:\Users\EDY\Desktop\集成\src\app\workspace\accounts\[id]\production\VideoProductionPanel.tsx:417`
+- 内部 API 入参 schema：`C:\Users\EDY\Desktop\集成\src\lib\workspace\schemas.ts:89`
+- 服务端创建任务并排队：`C:\Users\EDY\Desktop\集成\src\app\api\workspace\accounts\[id]\generate-video\route.ts:176` 和 `C:\Users\EDY\Desktop\集成\src\app\api\workspace\accounts\[id]\generate-video\route.ts:230`
+- worker 调用 `submitVideo`：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-task-processor.server.ts:207`
+- 参考图公网桥接 URL 生成：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\reference-bridge.server.ts:221` 和 `C:\Users\EDY\Desktop\集成\src\lib\workspace\production\reference-bridge.server.ts:252`
+- 构建产物核验：`C:\Users\EDY\Desktop\集成\.next\server\chunks\5818.js:18` 确认运行中的构建产物也是 `POST ${baseUrl}/videos`，payload 为 `model/prompt/duration/extra`，Grok 单图 `input_reference`、多图 `reference_images`。
+
+=== 01a03821-d909-7ed3-95bc-11d4faf4189d 123 agentMessage len=139 ===
+源码与当前 `.next` 生产构建中的请求构造完全一致，且运行环境的 `GROK_VIDEO_BASE_URL` 明确是 `https://snumom.com/v1`。我最后跑一下这部分现有单测，只验证 JSON 的三种分支（无图、单图、多图），不会发真实 Grok 请求。
+
+=== 01a03821-d909-7ed3-95bc-11d4faf4189d 145 agentMessage len=3093 ===
+已确认，`3000` 端口当前运行的是 `C:\Users\EDY\Desktop\集成` 的 Next.js 生产构建。生产板块中的 Grok 是**视频生成模型**，不是 `/chat/completions` 聊天请求。
+
+**实际上游请求**
+
+```http
+POST https://snumom.com/v1/videos
+Accept: application/json
+Authorization: Bearer <GROK_VIDEO_API_KEY>
+Content-Type: application/json
+User-Agent: WorkspaceProduction/1.0
+```
+
+当前供应商模型名是：
+
+```text
+grok-imagine-video-1.5（按次）
+```
+
+无参考图时，请求体为：
+
+```json
+{
+  "model": "grok-imagine-video-1.5（按次）",
+  "prompt": "<最终视频提示词>",
+  "duration": 10,
+  "extra": {
+    "aspect_ratio": "9:16",
+    "resolution": "720p"
+  }
+}
+```
+
+选择 **1 张参考图**时，使用顶层 `input_reference`：
+
+```json
+{
+  "model": "grok-imagine-video-1.5（按次）",
+  "prompt": "<最终视频提示词>",
+  "duration": 10,
+  "input_reference": "https://operation-place.nat100.top/api/workspace/minimax-reference/<token>.jpg",
+  "extra": {
+    "aspect_ratio": "9:16",
+    "resolution": "720p"
+  }
+}
+```
+
+选择 **2 至 7 张参考图**时，不再传 `input_reference`，改为 `extra.reference_images`：
+
+```json
+{
+  "model": "grok-imagine-video-1.5（按次）",
+  "prompt": "<最终视频提示词>",
+  "duration": 10,
+  "extra": {
+    "aspect_ratio": "9:16",
+    "resolution": "720p",
+    "reference_images": [
+      {
+        "url": "https://operation-place.nat100.top/api/workspace/minimax-reference/<token-1>.jpg",
+        "role": "reference_image"
+      },
+      {
+        "url": "https://operation-place.nat100.top/api/workspace/minimax-reference/<token-2>.png",
+        "role": "reference_image"
+      }
+    ]
+  }
+}
+```
+
+参考图不会以 Base64 直接传给 Grok。服务端会先把本地素材转换成临时公网 HTTPS 地址，再写入上述字段。
+
+**当前参数限制**
+
+- `duration`：整数，`6` 到 `30` 秒，页面默认 `10`
+- `aspect_ratio`：`9:16`、`16:9`、`1:1`
+- `resolution`：`480p`、`720p`，页面默认选择最高的 `720p`
+- 参考图：`0` 到 `7` 张
+- `prompt`：手动提示词，或模板生成的子提示词；开启后缀时，服务端会把已保存的后缀追加到最终提示词
+- `count`：页面允许 `1` 到 `4`，但它只决定创建多少个独立任务，不会进入单次 Grok 上游请求
+
+**浏览器提交到 3000 端口的内部请求**
+
+```http
+POST /api/workspace/accounts/{accountId}/generate-video
+Content-Type: application/json
+```
+
+```json
+{
+  "supplierId": "grok-video",
+  "modelId": "grok",
+  "promptMode": "manual",
+  "prompt": "<视频提示词>",
+  "promptModel": "gpt-2999",
+  "suffixEnabled": false,
+  "duration": 10,
+  "aspectRatio": "9:16",
+  "resolution": "720p",
+  "count": 1,
+  "referenceAssetId": "<第一张素材ID，可省略>",
+  "referenceAssetIds": ["<素材ID，可省略>"]
+}
+```
+
+浏览器请求只负责创建本地任务；后台 worker 随后才会调用 `https://snumom.com/v1/videos`。
+
+**状态查询**
+
+提交响应需要包含 `task_id`、`id` 或 `video_id` 之一。之后系统通过以下请求轮询：
+
+```http
+GET https://snumom.com/v1/videos/{providerTaskId}
+Accept: application/json
+Authorization: Bearer <GROK_VIDEO_API_KEY>
+Content-Type: application/json
+User-Agent: WorkspaceProduction/1.0
+```
+
+没有流式字段，也没有 `stream: true`。请求和状态响应都是等待完整响应文本后再执行 `JSON.parse`。
+
+对应实现位于 [video-generation.server.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:70)、[server-catalog.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:43)、[video-capabilities.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:47) 和 [VideoProductionPanel.tsx](C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:417)。同时核对了当前 `.next` 生产构建，格式与源码一致；相关单测 `12/12` 通过。
+
+=== 01a03821-d909-7ed3-95bc-11d4faf4189d 198 agentMessage len=3929 ===
+`image_20260825083543_51eb18-1_20260825_02` 这一次实际提交的请求如下，API Key 已脱敏：
+
+```http
+POST https://snumom.com/v1/videos
+Accept: application/json
+Authorization: Bearer <GROK_VIDEO_API_KEY>
+Content-Type: application/json
+User-Agent: WorkspaceProduction/1.0
+```
+
+```json
+{
+  "model": "grok-imagine-video-1.5（按次）",
+  "prompt": "基于我提供的固定参考图生成一条9:16竖屏、10–13秒、最长不超过15秒的真实TikTok UGC镜前穿搭展示视频。严格保持参考图中的同一人物、同一身体比例、同一肤色、同一服装、同一服装颜色与结构、同一背景、同一房间、同一镜子、同一家具、同一光线、同一基础构图和整体视觉风格，禁止重新设计、替换、增加或改变任何人物、服装和环境元素，整个视频必须像参考图中的人物在原场景中自然继续活动。摄像机和镜子全程固定，不跟拍、不平移、不摇镜、不环绕、不主动推近或拉远、不突然裁切放大、不跳切特写，画面远近变化只能由人物主动靠近和远离镜子产生。固定动作路线必须保持一致：0–1.5秒，人物保持参考图中的初始较远位置，正面完整展示穿搭，自然站立，轻微调整重心或轻整理服装；1.5–3秒，人物主动向镜子靠近一步，镜头固定，画面自然从完整穿搭变成medium full / thigh-up；3–5秒，人物继续靠近半步，画面自然进入torso或服装主要区域，做第一次轻柔自然的服装互动，例如轻整理、轻触或轻顺当前可见区域；5–7秒，人物保持近距离，双手从上向下自然移动，轻微整理腰部、衣摆、中段或参考图中真实可见的服装区域，不得大幅拉扯；7–9秒，继续展示下装、裤腿、裙摆、衣摆、腰侧或第二个真实可见区域，使用与前一个动作不同但同样轻柔自然的动作；9–11秒，人物主动向后退回，摄像机完全不动，画面自然重新恢复medium full或完整穿搭比例；11–13秒，人物进行非常轻微的侧前或小幅侧面角度变化，禁止转背、禁止大角度侧身、禁止360度旋转，随后立即回到正面，以完整穿搭、自然站姿、双手放松的状态稳定收尾。所有动作必须轻、慢、自然，像真实用户站在镜子前检查自己的穿搭，不要专业模特姿势，不要T台动作，不要夸张扭腰扭臀，不要比心、指镜头、大幅挥手或广告式表演。如果参考图是不露脸构图，则整个视频必须始终保持head out of frame、face out of frame、crop below chin、neck-down或collarbone-down framing，人物靠近镜子时也绝不能出现下巴、嘴巴、鼻子、眼睛、半张脸、侧脸、完整头部、镜中脸部或手机反射脸；宁可减少头颈区域，也不要露脸。服装只能延展参考图中真实存在的内容，禁止换衣、换颜色、增加新图案、改变版型或长度、增加或删除部件、改变服装结构、生成第二件衣服或自动补全未知背面。整条视频不要Voz、不要voice-over、不要对白、不要旁白、不要人物说话、不要口型同步、不要自动字幕、不要商品标题、价格、促销文字或大型营销文案。仅保留轻微真实环境声、脚步声、衣料摩擦声，并加入轻快、自然、日常TikTok风格的低存在感背景音乐。最终画面必须保持真实手机UGC质感、自然人体运动、真实衣料物理效果、稳定镜前构图，核心节奏始终固定为：正面完整穿搭 → 主动靠近 → 再靠近 → 上部展示 → 中段展示 → 下部/第二重点展示 → 主动后退 → 轻微角度变化 → 回正面完整穿搭收尾。
+
+Reglas fijas:
+
+Producto (Cumplimiento estricto): ¡Todos los detalles de la ropa en el video deben ser idénticos a la imagen de referencia! (Esto incluye, entre otros, la cantidad, posición, forma, grosor y color de elementos como tirantes, botones, cremalleras, hebillas, escotes, costuras y dobladillos; deben ser exactamente iguales).
+
+Escena: Crea un entorno personalizado, realista, estéticamente agradable, específico y único para el producto, asegurando una integración armoniosa de los objetos y la iluminación; no hay requisitos obligatorios de saturación, contraste o tono. La filmación puede realizarse en diferentes áreas de la misma ubicación.
+
+Continuidad: Los productos y objetos en la escena no deben cambiar, reaparecer ni desaparecer sin transiciones naturales. Las bolsas deben permanecer cerradas: no deben abrirse, ni exponerse sus interiores, ni colocarse ni extraerse objetos, ni rebuscar en ellas.
+
+Ropa: Incluye la ropa solo cuando sea claramente visible en el encuadre; debe estar puesta (no sostenida) y ser el foco visual. El movimiento de la cámara, la composición y el énfasis visual deben centrarse en la ropa; los rostros, los cuerpos y los fondos no deben eclipsarla. Vídeo de 10 segundos: Contiene de 3 a 4 tomas (de 4 a 10 segundos cada una); debe incluir una toma de 6 segundos con zoom lento o un primer plano para llenar el encuadre con la prenda, mantener el enfoque y mostrar dos detalles distintos; evite usar tomas fijas o panorámicas de gran angular. Vídeo de 15 segundos: Contiene de 3 a 5 tomas (de 5 a 15 segundos cada una); debe incluir una toma de 10 segundos (como se describe anteriormente) que muestre tres detalles distintos. Mantenga la silueta, el largo, las capas y el estilo de la prenda; no añada detalles que no sean visibles en el encuadre (como la parte delantera, trasera o elementos estructurales).
+
+Evite movimientos bruscos de cabeza o cuello, y no contorsione el cuerpo, las manos ni el producto. No añada subtítulos, logotipos, marcas de agua, pegatinas, emojis, superposiciones, bordes ni texto en pantalla.",
+  "duration": 15,
+  "input_reference": "https://operation-place.nat100.top/api/workspace/minimax-reference/f9771c262e1bc51f05b774412475a81e6ef248e528bbda3b86f70c8313a1662d.png",
+  "extra": {
+    "aspect_ratio": "9:16",
+    "resolution": "720p"
+  }
+}
+```
+
+=== 01a0386d-cecb-72b3-8673-75824ff678ac 9 userMessage len=387 ===
+POST https://snumom.com/v1/videos  Accept: application/json                                                                                                Authorization: Bearer <GROK_VIDEO_API_KEY>  Content-Type: application/json  User-Agent: WorkspaceProduction/1.0{  "model": "grok-imagine-video-1.5（按次）",  "prompt": "<最终视频提示词>",  "duration": 15,  "extra": {    "aspect_ratio": "9:16",
+
+=== 01a0386d-cecb-72b3-8673-75824ff678ac 20 userMessage len=826 ===
+POST https://snumom.com/v1/videos
+  Accept: application/json                                                                                               
+ Authorization: Bearer <GROK_VIDEO_API_KEY>
+  Content-Type: application/json
+  User-Agent: WorkspaceProduction/1.0
+{
+  "model": "grok-imagine-video-1.5（按次）",
+  "prompt": "<最终视频提示词>",
+  "duration": 15,
+  "extra": {
+    "aspect_ratio": "9:16",
+    "resolution": "720p",
+    "reference_images": [
+      {
+        "url": "https://operation-place.nat100.top/api/workspace/minimax-reference/<token-1>.jpg"
+      },
+      {
+        "url": "https://operation-place.nat100.top/api/workspace/minimax-reference/<token-2>.png"
+      },
+      {
+        "url": "https://operation-place.nat100.top/api/workspace/minimax-reference/<token-3>.jpg"
+      }
+    ]
+  }
+}用这个完整的真实请求一次看看有没有什么问题
+
+=== 01a04274-f81f-7a70-bd75-c173f62426ae 60 agentMessage len=2651 ===
+只读解析完成，未发起网络请求，未读取或记录用户在对话中提供的 API key。
+
+文档文件：[新建 文本文档.txt](</C:/Users/EDY/Desktop/新建 文本文档.txt:1>)
+
+关键执行路径和证据：
+
+- 基础地址：`https://api.manjuai.top`，见第 6-7 行。
+- 鉴权：所有请求携带 `Authorization: Bearer USER_TOKEN`，见第 9-10 行。
+- 模型查询：`GET /v1/models`，见第 12-13 行。
+- 标准创建任务：`POST /v1/videos/generations`，`Content-Type: application/json`，见第 15-17 行。
+- 多参考图 + 音频最直接对应模型：
+  - `wan3.0-r2v`：参考素材生成视频，可传图片、参考视频和音频，见第 19-22 行。
+  - `wan3.0-prime-r2v`：多素材生成视频，可传图片、参考视频和音频，见第 24-27 行。
+- 标准请求字段：
+  - `model`
+  - `prompt`
+  - `media`
+  - `resolution`
+  - `ratio`
+  - `duration`
+  - `prompt_extend`
+  见第 29-36 行。
+- Prime 价格：
+  - `480P`：`0.12 / 秒`
+  - `720P`：`0.17 / 秒`
+  - `1080P`：`0.33 / 秒`
+  见第 38-41 行。
+- 标准 Prime 多素材示例在第 97-110 行，结构为：
+  ```json
+  {
+    "model": "wan3.0-prime-r2v",
+    "prompt": "...",
+    "media": [
+      {"type":"reference_image","url":"https://cdn.example.com/character.png"},
+      {"type":"reference_image","url":"https://cdn.example.com/scene.png"},
+      {"type":"reference_video","url":"https://cdn.example.com/camera.mp4"},
+      {"type":"audio","url":"https://cdn.example.com/voice.mp3"}
+    ],
+    "resolution": "720P",
+    "ratio": "16:9",
+    "duration": 10
+  }
+  ```
+- 媒体限制：图片最多 `10` 张、视频最多 `5` 个、音频最多 `5` 个；URL 必须是 `HTTPS` 且服务端可访问，见第 112-113 行。
+- 任务查询：
+  - 创建成功返回 `id/task_id`
+  - 查询：`GET /v1/videos/tasks/{id}`
+  - `status` 可能为 `queued`、`running`、`succeeded`、`failed`
+  - 完成后返回 `video_url` 和 `download_url`
+  见第 115-118 行。
+- DashScope 原生兼容接口：
+  - `POST /api/v1/services/aigc/video-generation/video-synthesis`
+  - 兼容 `POST /v1/videos/integration`
+  - 兼容 `POST /v1/video/integration`
+  - 可带请求头 `X-DashScope-Async: enable`
+  见第 121-124 行。
+- DashScope 原生格式模型：`wan3.0-video`，见第 128-146 行。
+- DashScope 原生格式中音频类型使用 `reference_audio`，标准 `/v1/videos/generations` 示例中音频类型使用 `audio`。这两个接口格式不要混用，证据分别在第 101-105 行和第 133-136 行。
+- DashScope 原生 media 支持：`first_frame`、`last_frame`、`reference_image`、`reference_video`、`reference_audio`、`file`、`link`；首尾帧不能与其他参考素材混用，见第 148-149 行。
+- DashScope 原生限制：图片最多 `10` 张、参考视频最多 `5` 段、参考音频最多 `5` 段；`duration=-1` 表示智能时长模式，见第 150 行。
+
+不确定点 / 后续真实调用前需要确认或探测：
+
+- 文档没有提供文件上传端点。标准接口要求媒体 `url` 必须是服务端可访问的 `HTTPS` URL，因此如果用户只有本地图片/音频文件，不能直接作为路径传给接口，除非另有上传接口或用户已有公网 HTTPS 素材链接。
+- 文档没有说明 `download_url` 是否需要鉴权下载；真实下载时应先尝试普通 HTTPS 下载，失败再尝试带同一 `Authorization` 头。
+- 文档没有说明异步创建任务响应的完整 JSON envelope，父任务应兼容 `id`、`task_id`、以及可能的 `data.id` / `data.task_id`。
+- 文档没有说明 `/v1/videos/integration` / DashScope 原生接口的任务查询 endpoint；若使用它，应先用低成本请求或接口返回字段判断查询 URL。标准接口的轮询路径是明确的：`GET /v1/videos/tasks/{id}`。
+- 对“多参考图 + 音频”，按文档最稳妥路径应使用标准接口 `POST /v1/videos/generations` + `wan3.0-prime-r2v`，`media` 内放多个 `reference_image` 和一个 `audio`，前提是素材都是公网 HTTPS URL。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 87 agentMessage len=898 ===
+接口的基础测试已经通过：使用你提供的 Key 调用 `GET https://api.manjuai.top/v1/models` 成功，服务端实际返回了 `wan3.0-r2v`、`wan3.0-prime-r2v`、`wan3.0-video` 等模型，鉴权、域名和模型服务均可用。目前还没有提交计费的视频生成任务。
+
+真实生成前需要你确认素材和费用参数，因为 API 只能接收公网 HTTPS 素材地址，不能直接读取本地路径；选中的文件需要临时上传到外部存储。当前可执行的推荐方案是：
+
+- 模型：`wan3.0-prime-r2v`
+- 参考图：
+  - `C:\Users\EDY\Desktop\wallhaven-3q3j6y.jpg`，草原旅行者
+  - `C:\Users\EDY\Desktop\wallhaven-rqqygw.jpg`，红月异星
+  - `C:\Users\EDY\Desktop\wallhaven-gw2gyq.png`，太空黑洞
+- 音频：`C:\Users\EDY\Desktop\dify\e2e\fixtures\test-materials\voice-input.wav`
+  - 8 秒、单声道、16 kHz
+  - 这是目前桌面下找到的唯一音频，而且位于测试夹具目录，需要确认是否允许使用
+- 输出：`480P`、`16:9`、8 秒
+- 文档标价：`0.12 × 8 = 0.96`，文档未标明货币单位
+- 提示词：`融合多张参考图的手绘科幻风格，两名旅行者穿过辽阔草原，天空逐渐变为红月与黑洞交叠的异星景象；保持人物和环境风格连贯，镜头平稳向前推进，环境变化与参考音频的节奏同步，电影感构图，画面稳定，无文字。`
+- 完成方式：轮询任务状态，下载视频到桌面并直接调用系统播放器播放
+
+请直接回复：
+
+`按推荐方案执行，并允许临时公网上传这 3 张图片和该音频`
+
+如果不使用这些素材，请给我图片和音频的完整路径、期望提示词、分辨率以及时长。由于 Key 已经以明文出现在聊天记录中，这次测试完成后建议立即在服务商后台轮换该 Key。
+
+=== 01a042a9-364c-7e52-87f2-8c5c6aa08e66 113 agentMessage len=137 ===
+现有链路已经支持“多参考图字段”和“音频资产字段”，但音频目前被 provider 限制为 MiniMax 且校验只接受 MP3。Wan 接入最关键的分叉点会在 `catalog/server-catalog/video-generation.server` 这组三个文件。
+
+=== 01a042a8-c27e-7042-96d0-5da1c2f803fa 176 agentMessage len=20946 ===
+只读探索完成，未修改文件，未读取/输出任何 API key。3000 端口由 `C:\Users\EDY\Desktop\集成` 的 Next.js 生产实例提供，进程命令是 `next start -H 0.0.0.0 -p 3000`。
+
+**入口路径**
+
+页面入口是 [page.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/page.tsx:18>) 的 `WorkspaceProductionPage`。它根据 `?mode=` 调用 [production-mode.ts](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/production-mode.ts:3>) 的 `resolveProductionMode`，并在同一页加载账号、提示词、图片/音频文件、共享商品图库文件：
+
+- [page.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/page.tsx:39>) 加载 `files`，限定 `kind in ["image", "audio"]`
+- [page.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/page.tsx:90>) 组装图片资产，URL 指向 `/api/workspace/accounts/${account.id}/files/${file.id}`
+- [page.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/page.tsx:105>) 组装音频资产
+- [page.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/page.tsx:119>) 传入 `videoSuppliers={getPublicVideoSuppliers()}`
+
+生产页客户端是 [ProductionClient.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/ProductionClient.tsx:41>) 的 `ProductionClient`。它通过 `PRODUCTION_SECTIONS` 控制三类生产面板，并在：
+
+- [ProductionClient.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/ProductionClient.tsx:47>) 用供应商/模型配置判断“接口已配置”
+- [ProductionClient.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/ProductionClient.tsx:155>) 渲染 `VideoProductionPanel`
+
+**前端视频生成路径**
+
+核心组件是 [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:139>) 的 `VideoProductionPanel`。
+
+现有前端状态和交互：
+
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:140>) 默认 `modelId` 是 `"omni"`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:142>) `promptMode` 支持 `"manual"` 和 `"asset-template-child-prompt"`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:192>) 用 `filterVideoSuppliersByModel(suppliers, modelId)` 根据模型过滤供应商
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:195>) 从 `selectedSupplier.capabilities[modelId]` 取能力契约
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:197>) 根据能力生成时长选项
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:243>) 在能力变化时重置默认时长、比例、分辨率
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:252>) 会按 `referenceImages.max` 截断已选参考图
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:265>) 拉取 `/api/workspace/accounts/${accountId}/video-tasks`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:275>) 每 8 秒轮询任务列表
+
+提交时：
+
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:543>) `submitVideo`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:554>) 校验必需参考图
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:570>) 生成最终提交提示词
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:577>) payload 包含 `supplierId`、`modelId`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:584>) payload 包含 `duration`、`aspectRatio`、`resolution`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:588>) payload 包含 `referenceAssetId/referenceAssetIds`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:590>) 只有 `selectedSupplier.id === "minimax"` 时附带 `audioAssetId`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:604>) POST 到 `/api/workspace/accounts/${accountId}/generate-video`
+
+视频展示：
+
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:662>) `openTaskVideo`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:975>) 完成且有 `videoUrl` 时显示“视频”按钮
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:1005>) 弹窗里用 `<video src={task.videoUrl} controls preload="metadata" playsInline />`
+- [VideoProductionPanel.tsx](</c/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:1010>) 下载链接是 `${task.videoUrl}?download=1`
+
+**模型和供应商注册**
+
+模型列表在 [catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:13>) 的 `VIDEO_MODELS`：
+
+- [catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:14>) `grok`
+- [catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:15>) `omni`
+- [catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:16>) `minimax-h3`
+- [catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:17>) `seedance`
+
+供应商配置在 [server-catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:28>) 的 `VIDEO_SUPPLIER_CONFIGS`。现有 provider union 是 [server-catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:19>)：
+
+`"oairegbox" | "grok-video" | "minimax" | "seedance"`
+
+已注册供应商：
+
+- [server-catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:31>) OAIRegBox，`modelIds: ["omni"]`
+- [server-catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:44>) snumom，`modelIds: ["grok"]`
+- [server-catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:57>) MiniMax H3，`modelIds: ["minimax-h3"]`
+- [server-catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:70>) Seedance，`supportsReferences: false`
+
+`getPublicVideoSuppliers` 在 [server-catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:138>) 生成前端可见供应商，并在 [server-catalog.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:143>) 用对应 `apiKeyEnv` 判断 `configured`。
+
+能力契约在 [video-capabilities.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:41>) 的 `CAPABILITIES`。现有关键契约：
+
+- OAIRegBox/Omni: [video-capabilities.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:43>) 仅 10 秒，`9:16/16:9`，`720p`，0-5 张参考图
+- Grok: [video-capabilities.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:52>) 6-30 秒，默认 15 秒，`9:16/16:9/1:1`，`480p/720p`，0-7 张参考图
+- MiniMax H3: [video-capabilities.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:59>) 5-15 秒，多个比例，`1440p`，0-5 张参考图
+
+`validateVideoCapability` 在 [video-capabilities.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:111>) 校验时长、比例、分辨率、参考图数量。
+
+**提交 API 路由**
+
+提交入口是 [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:150>) 的 `POST`。
+
+执行路径：
+
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:153>) 校验 same-origin
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:168>) 用 `workspaceVideoGenerationSchema.safeParse(body)` 校验输入
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:176>) 用 `videoSubmissionFingerprint` 做幂等指纹
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:205>) 读取 `getVideoSupplierConfig(parsed.data.supplierId)`
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:206>) 校验供应商和模型匹配
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:208>) 校验供应商 API key 环境变量存在
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:226>) 调 `validateVideoCapability`
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:232>) `loadGenerationReferences` 加载参考图
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:242>) `loadAccountAudioReference` 加载音频
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:243>) 当前只有 provider `"minimax"` 允许音频
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:257>) 调 `validateVideoGenerationRequest`
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:285>) 创建 `workspaceVideoTask`
+- [generate-video/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:326>) 创建后调用 `queueWorkspaceVideoTaskProcessing`
+
+输入 schema 是 [schemas.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:112>) 的 `workspaceVideoGenerationSchema`，字段包括：
+
+- [schemas.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:113>) `supplierId`
+- [schemas.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:114>) `modelId: videoModelSchema`
+- [schemas.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:122>) `duration` 1-30
+- [schemas.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:123>) `aspectRatio`
+- [schemas.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:124>) `resolution`
+- [schemas.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:127>) `referenceAssetIds` 最多 7
+- [schemas.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:128>) `audioAssetId`
+
+**队列、供应商调用、轮询**
+
+任务处理在 [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:112>) 的 `processWorkspaceVideoTask`：
+
+- [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:138>) 模板模式下加载参考图并生成子提示词
+- [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:173>) 如果 `submissionStartedAt` 已有但没有 `providerTaskId`，会停止自动重提以避免重复扣费
+- [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:187>) 提交前重新加载参考图
+- [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:192>) 提交前加载音频
+- [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:197>) 再次 `validateVideoGenerationRequest`
+- [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:213>) 调 `submitVideo`
+- [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:230>) 保存 `providerTaskId`
+
+队列入口是 [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:282>) 的 `queueWorkspaceVideoTaskProcessing`。恢复扫描是 [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:288>) 的 `recoverWorkspaceVideoTasks`，启动函数是 [video-task-processor.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:312>) 的 `startWorkspaceVideoTaskWorker`。目前该 worker 由 [health/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/health/route.ts:2>) 引入并启动。
+
+供应商调用在 [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:394>) 的 `submitVideo`：
+
+- [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:397>) 从 `config.baseUrlEnv/defaultBaseUrl` 取 base URL
+- [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:411>) OAIRegBox 提交到 `${baseUrl}/videos`
+- [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:429>) Grok 提交到 `${baseUrl}/videos`
+- [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:451>) MiniMax 提交到 `${baseUrl}/videos`
+- [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:286>) `taskIdFromResponse` 从 `task_id/id/video_id` 取任务 ID
+
+状态查询在 [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:462>) 的 `getVideoStatus`：
+
+- [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:474>) GET `${baseUrl}/videos/${taskId}`
+- [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:482>) `isVideoComplete` 识别 `completed/complete/succeeded/success/done`
+- [video-generation.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:486>) `isVideoFailed` 识别 `failed/error/cancelled/canceled`
+
+任务列表 API 是 [video-tasks/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/video-tasks/route.ts:14>) 的 `GET`：
+
+- [video-tasks/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/video-tasks/route.ts:23>) 查 `workspaceVideoTask`
+- [video-tasks/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/video-tasks/route.ts:34>) 对 `queued/prompting/submitting` 任务重新入队
+- [video-tasks/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/video-tasks/route.ts:37>) 对 `submitted/processing` 且有 `providerTaskId` 的任务调用 `refreshWorkspaceVideoTask`
+- [video-tasks/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/video-tasks/route.ts:43>) 返回 `publicVideoTask`
+
+单任务 API 是 [video-tasks/[taskId]/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/video-tasks/[taskId]/route.ts:46>) 的 `GET`，同样会触发入队或刷新，并在 [video-tasks/[taskId]/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/video-tasks/[taskId]/route.ts:59>) 返回带完整 prompt 的 `publicVideoTask(task, { includePrompt: true })`。
+
+刷新和落盘在 [video-tasks.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:103>) 的 `refreshWorkspaceVideoTask`：
+
+- [video-tasks.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:117>) 调 `getVideoStatus`
+- [video-tasks.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:147>) 完成后调 `downloadVideo`
+- [video-tasks.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:164>) 把视频写入 `workspaceFile`
+- [video-tasks.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:244>) `publicVideoTask` 返回 `videoUrl: /api/workspace/accounts/${task.accountId}/files/${task.videoFileId}`
+
+**公网素材桥接**
+
+现有公网桥接不是对象存储，而是本地缓存 + 公网 base/tunnel：
+
+- 图片桥接在 [reference-bridge.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:10>) 使用 `MINIMAX_IMAGE_PUBLIC_BASE_URL`、`MINIMAX_IMAGE_CACHE_DIR`、`MINIMAX_CLOUDFLARED_PATH`
+- [reference-bridge.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:254>) 生成 `/api/workspace/${route}/${token}` 或 `/ref/${token}` 的公网 URL
+- [reference-bridge.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:258>) 用 `waitForPublicReference(publicUrl)` 验证公网可访问
+- [reference-bridge.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:263>) `publishMiniMaxReferenceImage` / `publishGrokReferenceImage` 共享 `publishReferenceImage`
+- [reference-bridge.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:274>) `readPublicReference`
+- 图片公开路由分别是 [minimax-reference/[token]/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/minimax-reference/[token]/route.ts:23>) 和 [grok-reference/[token]/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/grok-reference/[token]/route.ts:23>)
+- 音频桥接在 [audio-bridge.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/audio-bridge.server.ts:17>) 也复用 `MINIMAX_IMAGE_PUBLIC_BASE_URL`
+- [audio-bridge.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/audio-bridge.server.ts:56>) 音频 token 固定 `.mp3`
+- [audio-bridge.server.ts](</c/Users/EDY/Desktop/集成/src/lib/workspace/production/audio-bridge.server.ts:66>) 音频 URL 是 `/api/workspace/minimax-audio/${token}`
+- 音频公开路由是 [minimax-audio/[token]/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/minimax-audio/[token]/route.ts:23>)
+
+上传/播放本地资产 API：
+
+- [files/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/files/route.ts:171>) 上传文件 `POST`
+- [files/[fileId]/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/files/[fileId]/route.ts:82>) 获取文件 `GET`
+- [files/[fileId]/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/files/[fileId]/route.ts:114>) 设置 `Content-Type`
+- [files/[fileId]/route.ts](</c/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/files/[fileId]/route.ts:117>) `Cache-Control: private, no-store`
+
+**数据库字段**
+
+Prisma 定义：
+
+- [schema.pris
+
+=== 01a042a9-364c-7e52-87f2-8c5c6aa08e66 162 agentMessage len=148 ===
+文档摘录确认 Wan 3.0 Prime 的创建端点不是现有 `/v1/videos`，而是 `/v1/videos/generations`，任务轮询是 `/v1/videos/tasks/{id}`。这意味着它不能只加一个 catalog 条目，还需要一个新的 provider 分支或抽象。
+
+=== 01a042a9-364c-7e52-87f2-8c5c6aa08e66 189 agentMessage len=13213 ===
+只读探索完成，没有改文件，也没有读取或输出用户 API key。结论如下。
+
+**项目定位**
+`C:\Users\EDY\Desktop\集成` 是 Next.js 15 应用，`package.json` 里启动方式是：
+
+- `dev`: `next dev`
+- `build`: `next build`
+- `start`: `next start`
+- `test`: `vitest run`
+- `test:coverage`: `vitest run --coverage`
+
+证据：[package.json](</c:/Users/EDY/Desktop/集成/package.json:6>)
+
+当前本机 `3000` 端口没有监听进程，`Get-NetTCPConnection -LocalPort 3000` 无结果。
+
+项目内没有发现单独的 `AGENTS.md`，只有用户消息提供的 AGENTS 指令；仓库当前是 dirty 状态，且脏改主要集中在文件上传、图片任务、生产图片面板相关文件，不是这次视频 Wan 探索产生的。
+
+**现有生产视频执行路径**
+入口页面是生产板块页：
+
+- [page.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/page.tsx:18>) `WorkspaceProductionPage`
+- 它读取账号素材里的 `image` 和 `audio` 文件，并传给 `ProductionClient`
+- 视频模型供应商通过 `getPublicVideoSuppliers()` 注入前端：[page.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/page.tsx:119>)
+
+视频面板实际在：
+
+- [VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:139>) `VideoProductionPanel`
+- 默认 `modelId` 是 `"omni"`：[VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:140>)
+- 模型按钮来自 `VIDEO_MODELS.map(...)`：[VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:712>)
+- 提交时调用 `/api/workspace/accounts/${accountId}/generate-video`：[VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:604>)
+- 提交 payload 已经包含 `referenceAssetIds` 多图字段：[VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:589>)
+- 但 `audioAssetId` 目前只在 `isMiniMax` 时发送：[VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:590>)
+
+任务展示和播放：
+
+- 任务轮询 `/api/workspace/accounts/${accountId}/video-tasks`：[VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:265>)
+- 完成后点击“视频”打开弹窗：[VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:975>)
+- 弹窗内用 `<video src={task.videoUrl} controls preload="metadata" playsInline />` 播放：[VideoProductionPanel.tsx](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:1005>)
+
+**模型与供应商注册**
+前端可选模型是硬编码 union：
+
+- [catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:13>) `VIDEO_MODELS`
+- 当前只有 `grok`、`omni`、`minimax-h3`、`seedance`
+- `VideoModelId` 从 `VIDEO_MODELS` 推导：[catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:29>)
+- `buildPublicVideoSuppliers()` 会拒绝不在 `VIDEO_MODELS` 里的 model id：[catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:70>) 和 [catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:89>)
+
+服务端供应商配置在：
+
+- [server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:18>) `VideoSupplierConfig`
+- 当前 `provider` union 是 `"oairegbox" | "grok-video" | "minimax" | "seedance"`：[server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:19>)
+- 当前 supplier 表是 `VIDEO_SUPPLIER_CONFIGS`：[server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:28>)
+- `getPublicVideoSuppliers()` 只按 API key 是否存在标记 configured：[server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:138>)
+- `getVideoSupplierConfig()` 按 supplier id 查配置：[server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:147>)
+
+环境变量样例已有视频 provider 区域，但没有 Wan：
+
+- [`.env.example`](</c:/Users/EDY/Desktop/集成/.env.example:29>) video providers 区域
+- 当前有 `OAIREGBOX_*`、`FUNAI_*`、`GROK_VIDEO_*`、`MINIMAX_*`、`SEEDANCE_*`
+- MiniMax/Grok 公网图片桥用 `MINIMAX_IMAGE_PUBLIC_BASE_URL` 或 cloudflared quick tunnel：[`.env.example`](</c:/Users/EDY/Desktop/集成/.env.example:39>)
+
+**服务端提交流程**
+创建任务 API：
+
+- [generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:150>) `POST`
+- 先做登录、同源、权限校验：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:151>)
+- 使用 `readBoundedJson(req)` 读取有限 JSON：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:161>)
+- 用 `workspaceVideoGenerationSchema.safeParse(body)` 验证入参：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:168>)
+- 校验 supplier/model 匹配：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:205>)
+- 校验供应商 API key 环境变量存在：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:208>)
+- 加载多张参考图：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:232>)
+- 加载音频资产：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:242>)
+- 但这里也限制：有音频且 provider 不是 MiniMax 就报错：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:243>)
+- 创建 `WorkspaceVideoTask` 后进入后台队列：[generate-video/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:326>)
+
+后台处理：
+
+- [video-task-processor.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:112>) `processWorkspaceVideoTask`
+- 它重新加载参考图和音频：[video-task-processor.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:187>)
+- 再次 `validateVideoGenerationRequest(...)`：[video-task-processor.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:197>)
+- 调 `submitVideo(...)`：[video-task-processor.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:213>)
+- 成功后保存 `providerTaskId` 和原始 response：[video-task-processor.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-task-processor.server.ts:225>)
+
+任务刷新和下载：
+
+- [video-tasks.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:103>) `refreshWorkspaceVideoTask`
+- 调 `getVideoStatus(...)`：[video-tasks.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:117>)
+- 完成后 `downloadVideo(...)`：[video-tasks.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:147>)
+- 下载后保存为 workspace `video` 文件：[video-tasks.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:157>)
+- `publicVideoTask()` 暴露 `videoUrl` 给前端：[video-tasks.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:244>)
+
+**Provider 现状**
+核心 provider 文件：
+
+- [video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:25>) `VideoGenerationRequest`
+- 已支持 `references: VideoReference[]` 和 `audios?: VideoAudioReference[]`
+- `validateVideoGenerationRequest()` 当前限制：音频只允许 `config.provider === "minimax"`：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:371>)
+- 音频只允许 MP3 且签名匹配：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:373>)
+- `submitVideo()` 当前三条分支：OAIRegBox、Grok、否则走 MiniMax：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:394>)
+- OAIRegBox 调 `${baseUrl}/videos`：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:411>)
+- Grok 调 `${baseUrl}/videos`：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:429>)
+- MiniMax 调 `${baseUrl}/videos`，发送 `image_urls`/`audio_urls`：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:451>)
+- `getVideoStatus()` 当前统一 GET `${baseUrl}/videos/{taskId}`：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:474>)
+- `downloadVideo()` 会从 status response 里的 `video_url/content_url/output_url/download_url/result_url/url` 找视频地址，否则回退 `${baseUrl}/videos/{taskId}/content`：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:503>)
+
+Wan 文档显示的路径不同：
+
+- 创建：`POST /v1/videos/generations`，证据：[新建 文本文档.txt](</c:/Users/EDY/Desktop/新建 文本文档.txt:16>)
+- Prime 多素材模型：`wan3.0-prime-r2v`，证据：[新建 文本文档.txt](</c:/Users/EDY/Desktop/新建 文本文档.txt:27>)
+- Prime 多素材 body 里 `media` 包含 `reference_image` 和 `audio` URL，证据：[新建 文本文档.txt](</c:/Users/EDY/Desktop/新建 文本文档.txt:99>)
+- 创建成功返回 `id/task_id`，轮询：`GET /v1/videos/tasks/{id}`，证据：[新建 文本文档.txt](</c:/Users/EDY/Desktop/新建 文本文档.txt:116>)
+- 状态可能是 `queued/running/succeeded/failed`，完成后返回 `video_url` 和 `download_url`，证据：[新建 文本文档.txt](</c:/Users/EDY/Desktop/新建 文本文档.txt:118>)
+
+所以 Wan 不能只作为 MiniMax/OAIRegBox 的一个 model 塞进去；实际执行路径需要识别新 provider 类型，因为提交端点、轮询端点、payload 字段名都不同。
+
+**能力与入参限制**
+能力配置在：
+
+- [video-capabilities.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:40>) `CAPABILITIES`
+- 当前 `VIDEO_RESOLUTIONS` 支持 `480p`：[video-capabilities.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:4>)
+- `validateVideoCapability()` 校验 duration/aspect/resolution/referenceCount：[video-capabilities.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:111>)
+
+schema 层也会卡住新 model id：
+
+- [schemas.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:100>) `videoModelSchema = z.enum(["grok", "omni", "minimax-h3", "seedance"])`
+- `workspaceVideoGenerationSchema` 使用该 enum：[schemas.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:112>)
+- 多图最多 7 张：[schemas.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:127>)
+- 音频资产 id 已有字段：[schemas.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:128>)
+
+前端音频当前限制为 MP3：
+
+- [types.ts](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/types.ts:35>) `validateReferenceAudioFileSelection`
+- 只接受 `.mp3` / `audio/mpeg` / `audio/mp3`：[types.ts](</c:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/types.ts:41>)
+- 这和之前实测用 `voice-input.wav` 成功有冲突。若产品要求 Wan 支持 WAV 音频，要改前端和服务端音频校验；若统一转 MP3，则要在上传或提交前转码。
+
+**公网素材桥**
+现有公网桥可以复用一部分，但命名偏 MiniMax：
+
+- 图片桥：[reference-bridge.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:222>) `publishPublicReferenceImage`
+- 它支持 JPG/PNG/WebP，生成临时 HTTPS URL：[reference-bridge.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:257>)
+- Grok 已通过同一个桥复用：[reference-bridge.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:266>)
+- 音频桥：[audio-bridge.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/audio-bridge.server.ts:37>) `publishMiniMaxReferenceAudio`
+- 音频桥当前只允许 MP3：[audio-bridge.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/audio-bridge.server.ts:42>)
+- URL 使用 `MINIMAX_IMAGE_PUBLIC_BASE_URL`：[audio-bridge.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/audio-bridge.server.ts:17>)
+
+安全新增 Wan 时，应该避免把 Wan 绑定到 `MINIMAX_*` 命名；可以先复用底层公网桥逻辑，但最好新增 Wan 自己的 provider 环境变量，如 `WAN_VIDEO_API_KEY`、`WAN_VIDEO_BASE_URL`，以及必要时通用化公网桥命名。API key 必须只走服务端环境变量，不能写入 repo、`.env.example` 只能留空占位。
+
+**测试落点**
+现有测试覆盖点已经比较完整，新增 Wan 应该至少覆盖这些位置：
+
+- `catalog.test.ts` 验证新 `VIDEO_MODELS` 和 public supplier 输出
+- `server-catalog.test.ts` 验证 Wan supplier configured 逻辑和 env key
+- `video-capabilities.test.ts` 验证 `wan3.0-prime-r2v` 的 duration/aspect/resolution/reference count
+- `video-generation.test.ts` 验证 Wan payload：`model: "wan3.0-prime-r2v"`、`media: [{type:"reference_image", url}, {type:"audio", url}]`
+- `video-generation.submit.test.ts` 验证 submit 调 `/videos/generations`，status 调 `/videos/tasks/{id}`，不泄漏 key
+- `generate-video/route.test.ts` 验证 Wan 可带音频，不再被 MiniMax-only 限制挡住
+- `video-task-processor.server.test.ts` 验证任务持久化的多图+音频能提交给 Wan
+- `video-audio-reference.test.ts` 若支持 WAV，需要先写失败测试再改 UI/校验
+
+**安全接入建议**
+最低风险路径是新增独立 provider 类型，而不是复用 MiniMax 分支：
+
+- 新增 public model id，例如本地 `wan3-prime-r2v`，label 可显示 `Wan 3.0 Prime R2V`
+- `server-catalog.ts` 增加 provider `"wan"`、`WAN_VIDEO_API_KEY`、`WAN_VIDEO_BASE_URL`，实际远端 model 固定为 `wan3.0-prime-r2v`
+- `video-generation.server.ts` 增加 Wan 专用 payload builder、submit/status 分支
+- Wan 参考图使用现有 `publishPublicReferenceImage`
+- Wan 音频需要确认是支持 WAV 直传还是先转 MP3；当前代码只支持 MP3，之前独立实测用 WAV 成功，所以这是接入前最需要确认的产品/技术细节
+- 前端 `audioAssetId` 发送条件不能再写死 `isMiniMax`
+- 现有播放链路已经够用，完成后会通过任务卡片里的“视频”按钮进入 `<video>` 弹窗播放；如果要求“生成后自动打开播放”，那是额外 UI 行为，不是当前默认链路
+
+**阻塞/待确认点**
+按照用户的“不确定先确认”规则，真正动手前需要确认这几项：
+
+1. 新模型在 UI 上显示名是否用 `Wan 3.0 Prime R2V`。
+2. 音频是否必须支持 WAV；如果必须支持，是否允许服务端转码，还是直接把 WAV 通过公网 URL 交给 Wan。
+3. Wan 参考图数量上限按实测 3 张、文档不明，还是先沿用当前 schema 上限 7 / 能力配置上限 5。
+4. Wan 的默认参数是否用实测值：`8 秒`、`16:9`、`480p`。
+5. 是否要求完成后自动弹出播放窗口；现有默认是点击任务卡片“视频”播放。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 366 agentMessage len=245 ===
+代码结构已经明确：现有生视频板块按“模型 → 供应商 → 能力参数”注册，并由服务端统一提交、轮询、下载和入库存。Wan 需要作为独立的 `ManjuAI / Wan 3.0 Prime` 供应商接入，同时复用现有公网素材桥接；主要差异是创建路径为 `/v1/videos/generations`、查询路径为 `/v1/videos/tasks/{id}`，且支持最多 10 张参考图和 1 个当前工作台音频资产。下一步按 TDD 先补失败测试，再实现 provider、能力与界面条件。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 387 agentMessage len=182 ===
+我先进入 TDD 的 RED 阶段：新增测试来固定以下契约，暂不改实现。测试会要求模型目录出现 `Wan 3.0 Prime`、服务端只通过 `WAN_VIDEO_API_KEY` 判断可用、参数支持 2–30 秒/480p–1080p/最多 10 图/1 音频、创建与轮询使用 Wan 专用路径，并要求界面按“能力”而不是硬编码 MiniMax 来显示参考音频。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 486 agentMessage len=146 ===
+核心 RED 测试现在全部转绿：6 个测试文件、53 个测试通过，新模型的目录、能力、请求体、专用轮询路径、10 图 schema 和能力驱动的音频 UI 都已落地。接下来我会运行全量测试，重点检查旧 MiniMax、任务队列和 API 路由没有因通用化音频能力而回归，再补齐发现的覆盖缺口。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 510 agentMessage len=168 ===
+这一步补的是路由边界覆盖：确保真实 `/generate-video` API 在 `WAN_VIDEO_API_KEY` 存在时允许 Wan 的多图与 MP3 音频，并把 `manjuai / wan3-prime-r2v`、有序参考图 ID 和音频资产 ID 一起写入任务。它不会发起外部计费请求，只验证本地 API 组装与持久化。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 530 agentMessage len=186 ===
+类型检查已通过。现在需要让 3000 的生产进程真正识别供应商：我会把 Key 仅写入 Git 已忽略的 `.env.local` 服务端配置，并设置 `WAN_VIDEO_BASE_URL=https://api.manjuai.top/v1`；不会放进源码、客户端 bundle、`.env.example` 实值或 Git diff。随后重建并重启生产进程使其生效。
+
+=== 01a042b9-44e2-76e1-ab4b-6e07c26a8799 79 agentMessage len=95 ===
+初步看到 Wan 的提交和轮询路径已经接上，但音频桥接复用了 MiniMax 的 MP3-only 逻辑。下一步我会确认文件上传和任务处理是否也继承了这个限制，以及默认 URL 是否会拼错。
+
+=== 01a042b9-8ebb-7d31-b37b-b0aac0d25fb8 100 agentMessage len=109 ===
+Wan 分支复用了 MiniMax 的公网素材发布函数，函数名本身不一定是问题；关键要确认这个发布函数是否有 TTL、文件大小/MIME 校验、是否把下载链接绑定到账号资产，以及是否避免把内部地址当成“公网 URL”。
+
+=== 01a042b9-8ebb-7d31-b37b-b0aac0d25fb8 185 agentMessage len=4185 ===
+安全审查结论：没有看到真实 Wan API key 被写进源码或 diff；Wan 配置走 `WAN_VIDEO_API_KEY`/`WAN_VIDEO_BASE_URL`，前端也没有直接调用上游接口。下面是我认为需要处理的具体问题，按严重性排序。
+
+**High**
+
+1. `Wan + 参考音频` 在未配置固定公网基址时会失败，测试没有覆盖真实桥接路径  
+   文件：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:471`、`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\audio-bridge.server.ts:17`
+
+   Wan 分支同时发布图片和音频：
+
+   - `video-generation.server.ts:472` 使用 `publishMiniMaxReferenceImage`
+   - `video-generation.server.ts:473` 使用 `publishMiniMaxReferenceAudio`
+
+   图片桥接在 `reference-bridge.server.ts:189-193` 支持未配置 `MINIMAX_IMAGE_PUBLIC_BASE_URL` 时自动启动 cloudflared Quick Tunnel；但音频桥接的 `publicBase()` 在 `audio-bridge.server.ts:17-20` 强制要求 `MINIMAX_IMAGE_PUBLIC_BASE_URL`，没有走同一套自动 tunnel。  
+   结果是：用户选择 Wan + 音频时，如果当前生产环境只依赖临时公网 tunnel，图片可以发布，音频会直接报桥接未配置。现有 Wan 测试在 `video-generation.submit.test.ts:213-217` mock 了音频发布函数，所以不会发现这个真实运行失败。
+
+   建议：把图片/音频桥接统一成中性的 public media bridge，让音频也复用 `resolvePublicBase/ensureAutoBridge`；或者在 UI/能力配置中仅当固定公网基址存在时才允许音频。前者更符合用户“允许临时公网上传图片和音频”的需求。
+
+2. 生产环境的 same-origin 校验信任客户端传入的 forwarded headers，部署边界不严时可削弱 CSRF 防护  
+   文件：`C:\Users\EDY\Desktop\集成\src\app\api\workspace\accounts\[id]\generate-video\route.ts:35`
+
+   `sameOrigin()` 使用 `x-forwarded-host` 和 `x-forwarded-proto` 作为期望 origin：
+
+   - `route.ts:40-43`
+
+   如果服务直接暴露，或者反向代理没有清理客户端伪造的 forwarded headers，攻击者可能影响 origin 比较结果。这个端点会创建付费视频任务，风险高于普通写接口。类似模式也出现在文件修改/上传路由里，但这里的扣费面更敏感。
+
+   建议：只在可信代理层注入的头上使用 forwarded host/proto；应用层优先用固定 `APP_ORIGIN`/`NEXT_PUBLIC_APP_URL` 白名单比较 `Origin`，或使用框架/认证层 CSRF token。至少给付费任务端点加测试覆盖：伪造 `X-Forwarded-Host` 不应绕过 origin 检查。
+
+**Medium**
+
+3. Wan payload 的公网 URL 校验过弱，依赖调用方“永远只传桥接产物”  
+   文件：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:229`
+
+   `buildWanPayload()` 只用 `^https:\/\/[^\s]+$` 判断素材 URL：
+
+   - `video-generation.server.ts:229-231`
+
+   当前生产调用路径确实是服务端先发布本地素材，再传桥接 URL，所以直接 SSRF 风险有限。但这个函数是 exported，并且测试中也直接构造 URL。正则会接受带凭据、异常端口、不可解析主机、非公网 DNS 指向等 URL。和下载侧 `public-download.server.ts:122-148` 的严格 public HTTPS 校验相比，上传给供应商的素材 URL 边界明显弱。
+
+   建议：抽一个 `assertPublicHttpsUrl()` 之类的结构化校验，至少用 `new URL()` 禁止 username/password、非 443 端口、空 hostname；如果要防配置误伤，再对固定公网基址做 host allowlist。对于桥接 URL，可以校验必须来自当前配置的 public base 或自动 tunnel base。
+
+4. 供应商返回错误细节会回传给客户端，虽然已做 redaction，但仍应避免把上游原始消息作为 400/503 直接展示  
+   文件：`C:\Users\EDY\Desktop\集成\src\app\api\workspace\accounts\[id]\generate-video\route.ts:105`
+
+   `generationError()` 对命中关键词的错误直接返回 `workspaceError(400, message)`，对 API key/base URL 也直接返回 503：
+
+   - `route.ts:105-120`
+
+   `video-task-error.ts` 有密钥/路径 redaction，`fetchJson()` 也会 redaction 上游错误片段，这点是好的。但这里仍存在两个剩余风险：内部配置名会展示给客户端，且未来某个 provider/bridge error message 如果包含未覆盖的敏感上下文，会被直接展示。对生产付费任务，建议统一客户端消息，详细错误只进服务端日志并经过 redaction。
+
+   建议：客户端只显示分类化错误，比如“供应商配置未完成”“参考素材公网桥接失败”“供应商拒绝请求”；日志保留 redacted detail。
+
+**Low / Test Gaps**
+
+5. 缺少 Wan 真实桥接路径的集成测试，尤其是音频  
+   文件：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.submit.test.ts:213`
+
+   当前 Wan 提交测试验证了 payload、endpoint、idempotency header，但图片/音频发布都被 mock。建议补：
+
+   - 无 `MINIMAX_IMAGE_PUBLIC_BASE_URL` 时，Wan 图片和音频都能共用自动 tunnel，或 UI 禁用音频。
+   - Wan reference URL 拒绝带凭据、非 443 端口、非 HTTPS。
+   - Wan 下载 URL 拒绝私网 DNS、私网 redirect、超大文件，这部分下载层已有测试，可补一条 Wan 状态响应进入 `downloadVideo()` 的集成测试。
+
+6. 临时公网素材端点是匿名可读，当前设计依赖 256-bit token + 1 小时 TTL  
+   文件：`C:\Users\EDY\Desktop\集成\src\app\api\workspace\minimax-reference\[token]\route.ts:10`、`C:\Users\EDY\Desktop\集成\src\app\api\workspace\minimax-audio\[token]\route.ts:10`
+
+   这符合供应商拉取素材的需求，token 强度也足够；但这是隐私边界，生产上应确认：
+
+   - TTL 是否可接受。
+   - 缓存目录是否不被备份/索引。
+   - 访问日志不要长期保存完整 token URL。
+   - 任务完成或失败后是否需要主动删除素材，而不只依赖过期清理。
+
+**已确认的正向点**
+
+- 未在源码或 `.env.example` 中发现真实 Wan key；只看到空的 `WAN_VIDEO_API_KEY=` 示例。
+- Wan 上游调用在服务端 `server-only` 模块内，前端没有拿到上游 key。
+- 任务创建有本地 idempotency：`generate-video/route.ts:170-203`。
+- 后台提交前设置 `submissionStartedAt`，不确定提交结果会停止自动重提，避免重复扣费：`video-task-processor.server.ts:173-184`、`:207-223`、`:238-253`。
+- 下载供应商视频时有 public HTTPS、DNS 私网拦截、redirect 重新校验、大小限制和 MP4 文件头校验：`public-download.server.ts:122-148`、`:192-231`，`video-generation.server.ts:566-575`。
+- 下载鉴权不会转发到跨域 CDN redirect：`video-generation.server.ts:570-572` 配合 `public-download.server.ts:203-222`。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 643 agentMessage len=205 ===
+独立审查发现两个与“把刚才实测能力接入”直接相关的缺口，我会一并修正：第一，刚才真实成功的是 WAV，但现有工作台音频链路只允许 MP3；第二，独立子提示词 schema 仍限制 7 张图，会与 Wan 的 10 图能力冲突。修复会把音频格式纳入模型能力：Wan 接受 MP3/WAV，MiniMax 仍只接受 MP3；界面上传、资产选择、服务端签名校验和临时桥接都会按当前模型约束，不会放宽 MiniMax。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 680 agentMessage len=97 ===
+现有 Wan 默认值已经落到能力表里，但面板还留有一个未使用的旧导入。我会把它与新增测试一起清理，然后按“模型能力决定可接收音频格式”的方式扩展 WAV，确保 MiniMax 仍只接受 MP3。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 767 agentMessage len=104 ===
+我现在先补失败测试，覆盖五个边界：Wan 的 WAV、MiniMax 拒绝 WAV、上传层的 WAV 文件签名、恶意/畸形 HTTPS 素材地址，以及完成任务缺少视频地址时必须失败。测试确认会先红，再改实现。
+
+=== 01a042b9-44e2-76e1-ab4b-6e07c26a8799 287 agentMessage len=127 ===
+Provider-aware 类型传递基本完整：生产页现在给音频资产带上 `mimeType`，提交时按能力选择 MP3/WAV，并且 MiniMax 仍通过专门 wrapper 限制 MP3。我会检查公网音频读取路由是否也接受了新的 WAV 返回类型。
+
+=== 01a042b9-44e2-76e1-ab4b-6e07c26a8799 347 agentMessage len=1675 ===
+无高/中风险发现。
+
+Low findings:
+
+1. 资产库通用音频上传仍是 MP3-only，和 Wan 的 WAV 能力不一致。生产视频面板自己的音频上传已支持 WAV，但如果用户习惯先到资产库上传音频，再回到生视频选择，WAV 仍会被过滤/强制按 MP3 上传。相关位置：`C:\Users\EDY\Desktop\集成\src\app\workspace\accounts\[id]\assets\AssetClient.tsx:69` 的 accept 仍只有 MP3，`C:\Users\EDY\Desktop\集成\src\app\workspace\accounts\[id]\assets\AssetClient.tsx:286` 对 audio 仍强制 `"audio/mpeg"`，`C:\Users\EDY\Desktop\集成\src\lib\file-drop.ts:21` 和 `C:\Users\EDY\Desktop\集成\src\lib\file-drop.ts:82` 仍只过滤 MP3。考虑把通用资产库也对齐到 `audio/wav`/`audio/x-wav`，否则 Wan 的 WAV 支持只在生产面板内完整。
+
+2. 公网音频 route 的 WAV 回归测试还缺一层。`audio-bridge.server.test.ts` 已覆盖 `publishReferenceAudio`/`readReferenceAudio` 的 WAV token 和 MIME，但公开路由测试 `C:\Users\EDY\Desktop\集成\src\app\api\workspace\minimax-audio\[token]\route.test.ts:13` 仍只用 `.mp3`，`route.ts:17` 虽然动态返回 `audio.mimeType`，但没有直接证明 `.wav` token 会通过该 route 返回 `audio/wav`。风险低，建议补一个 GET/HEAD 的 `.wav` 用例。
+
+3. Wan media URL 校验是“标准 HTTPS URL”校验，不是真正的公网 DNS/IP 校验。`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:247` 到 `:254` 会拒绝 http、账号密码和非 443 端口，但不会拒绝 `https://localhost/...` 或私网域名/IP 的 443 地址。当前 Wan URL 主要来自内部 bridge，所以实际风险偏低；如果以后允许外部 URL 或误配 public base，这类 URL 会通过 `buildWanPayload`，最后由供应商侧失败。下载路径已有更强的公网解析保护，这里只是提交前校验不够严格。
+
+已跑验证：
+
+`npm test -- src/lib/workspace/production/video-generation.submit.test.ts src/lib/workspace/production/audio-bridge.server.test.ts src/app/workspace/accounts/[id]/production/video-audio-reference.test.ts src/lib/workspace/production/video-generation.test.ts src/lib/workspace/assets.test.ts src/lib/workspace/schemas.test.ts`
+
+结果：6 个测试文件通过，83 个测试通过。
+
+我没有读取 `.env`/`.env.local`，也没有输出任何 key。`.env.example` 的 diff 扫描只看到空占位，没有发现真实密钥模式。
+
+=== 01a042b9-8ebb-7d31-b37b-b0aac0d25fb8 300 agentMessage len=3843 ===
+复核结论：没有发现真实 Wan key 进入源码或客户端；WAV 支持没有明显扩大上传绕过面；通用音频桥接的 token/路径基本安全。原先的 Wan media URL “只靠正则”的问题已部分解决，但“公网性”仍未真正验证。另一个原问题，即音频桥接不支持自动临时公网 tunnel，当前最新 diff 仍未解决。
+
+**High**
+
+1. Wan + 音频仍不能使用图片那套自动临时公网 tunnel  
+   文件：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\audio-bridge.server.ts:26`、`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:486`
+
+   Wan 现在改为调用 `publishReferenceAudio()`：
+
+   - `video-generation.server.ts:486-488`
+
+   但 `publishReferenceAudio()` 仍在 `audio-bridge.server.ts:76` 拼 `${publicBase(env)}/api/workspace/minimax-audio/...`，而 `publicBase()` 在 `audio-bridge.server.ts:26-31` 依然强制要求 `MINIMAX_IMAGE_PUBLIC_BASE_URL`。它没有复用 `reference-bridge.server.ts` 中图片用的自动 cloudflared tunnel 逻辑。
+
+   影响：如果生产环境按“临时公网 tunnel”方案执行，Wan 的图片参考可以通过图片桥接发布，但 WAV/MP3 音频会因为没有固定 `MINIMAX_IMAGE_PUBLIC_BASE_URL` 而失败。这是功能正确性问题，不是密钥泄露问题；但会直接打断用户要求的“多参考图 + 音频”生产流程。
+
+   建议：把 `resolvePublicBase/ensureAutoBridge` 抽成通用 media bridge，让 `publishReferenceAudio()` 和图片共用同一 public base；或者显式要求固定公网 URL，并在 UI/启动检查里禁用 Wan 音频，避免运行时才失败。
+
+**Medium**
+
+2. Wan media URL 校验禁止了凭据和非标准端口，但仍没有验证“公网”  
+   文件：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-generation.server.ts:247`
+
+   `isStandardHttpsMediaUrl()` 当前检查：
+
+   - `https:`
+   - hostname 存在
+   - 无 username/password
+   - 无端口或 443
+
+   这是比旧正则明显更好的改动，解决了 URL credentials 和非标准端口这类问题。但它仍会接受 `https://localhost/...`、`https://127.0.0.1/...`、`https://10.x.x.x/...`、解析到私网 IP 的域名。函数报错文案写的是“公网 HTTPS”，实际没有 DNS/IP 公网校验。
+
+   当前生产路径里 media URL 由服务端桥接函数生成，用户不能直接提交任意 media URL，所以这不是立即可利用的 SSRF。但这个函数是 exported，后续如果被别的入口复用，容易形成“供应商代 fetch 内网地址”或生产配置误用问题。
+
+   建议：复用 `public-download.server.ts` 的 public URL 判定思路，或至少把 Wan media URL 限定为当前 bridge 生成的 public base / tunnel base。测试应补 `localhost`、`127.0.0.1`、私网 DNS、带凭据、非 443 端口。
+
+3. 音频 public base 校验仍是简单正则，允许不该接受的 URL 形态  
+   文件：`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\audio-bridge.server.ts:10`
+
+   `PUBLIC_BASE_PATTERN = /^https:\/\/[^/]+$/i` 只禁止 slash，未用 `new URL()` 校验，也未禁止 username/password、query/hash、localhost/private IP、非 443 端口。这个值来自环境变量，不是用户输入，所以风险主要是生产配置误伤和凭据型 URL 被转发给供应商，而不是外部用户直接攻击。
+
+   建议：用结构化 URL 校验替代正则，并和 Wan media URL 校验保持同一套规则。
+
+**Low**
+
+4. WAV 文件签名校验是基础 RIFF/WAVE magic check，不验证 `fmt ` chunk 或音频编码细节  
+   文件：`C:\Users\EDY\Desktop\集成\src\lib\workspace\assets.ts:109`
+
+   当前校验要求：
+
+   - offset 0 为 `RIFF`
+   - offset 8 为 `WAVE`
+
+   这对“文件类型签名”足够常见，且服务器不解析音频内容，只存储并转交供应商；同时上传大小被限制在 20MB，存储时会流式检查签名和大小。因此我没有把它判断为上传/签名绕过。
+
+   剩余风险是：伪造或畸形 RIFF/WAVE 仍可能通过本地校验，然后由上游供应商处理。若要更严格，可检查 `fmt ` chunk、WAVE chunk size 合理性、PCM/常见编码格式，但这属于兼容性与供应商报错控制，不是当前代码的明显安全漏洞。
+
+5. 临时音频端点匿名可读是设计所需，但仍依赖 token 保密和日志控制  
+   文件：`C:\Users\EDY\Desktop\集成\src\app\api\workspace\minimax-audio\[token]\route.ts:10`、`C:\Users\EDY\Desktop\集成\src\lib\workspace\production\audio-bridge.server.ts:96`
+
+   安全点是好的：
+
+   - token 必须是 `64 hex + .mp3/.wav`：`audio-bridge.server.ts:9`
+   - 读取前做 path resolve dirname 约束：`audio-bridge.server.ts:101-103`
+   - 拒绝 symlink 和非文件：`audio-bridge.server.ts:104-105`
+   - TTL 过期删除：`audio-bridge.server.ts:106-109`
+   - 读取后重新校验签名：`audio-bridge.server.ts:110-112`
+
+   剩余风险是匿名 URL 在 1 小时内谁拿到谁可读。建议生产访问日志不要长期保存完整 token URL；任务完成/失败后可考虑主动清理 token 文件，而不仅靠 TTL。
+
+**已确认解决 / 未发现问题**
+
+- WAV 没有绕过后端上传校验：`validateWorkspaceUpload()` 只允许新增的 WAV MIME，`storeWorkspaceAsset()` 会按大小限制和签名校验写入，见 `assets.ts:29-33`、`storage.ts:46-80`。
+- Wan 提交前按模型能力校验音频 MIME 和签名，Wan capability 允许 MP3/WAV，MiniMax wrapper 仍只允许 MP3，见 `video-capabilities.ts:90-95`、`video-generation.server.ts:421-427`、`audio-bridge.server.ts:86-93`。
+- Wan API key 仍隔离在服务端环境变量：`server-catalog.ts` 只记录 `WAN_VIDEO_API_KEY` 变量名；源码中没有发现真实 Wan key。前端没有读取 `process.env.WAN_VIDEO_API_KEY` 或 `NEXT_PUBLIC_*WAN*`。
+- Wan 上游请求的 `Authorization` 只在服务端 `video-generation.server.ts:498-505` 生成，未进入客户端 payload。
+- 原 media URL 正则问题已部分解决：现在禁止 URL credentials 和非 443 端口。但“公网 DNS/IP”校验仍是剩余风险。
+
+=== 01a042b9-8ebb-7d31-b37b-b0aac0d25fb8 365 agentMessage len=1709 ===
+未发现新的高/中风险。
+
+**已复核的关键路径**
+
+- Wan 完成但缺 URL：
+  - `downloadVideo()` 对 Wan 缺少 `video_url/content_url/output_url/download_url/result_url/url` 的完成态抛 `VideoOutputMissingError`：`src/lib/workspace/production/video-generation.server.ts:584-590`
+  - `refreshWorkspaceVideoTask()` 只对该专用错误转为终态 `failed`，并写入固定错误文案和 provider response：`src/lib/workspace/production/video-tasks.server.ts:191-201`
+  - 该错误文案不包含 key、URL、headers 或本地路径；没有看到秘密泄露路径。
+
+- 公网音频 WAV 路由：
+  - 路由只调用 `readMiniMaxReferenceAudio()`，异常统一吞掉后返回 hardened 404：`src/app/api/workspace/minimax-audio/[token]/route.ts:10-12`
+  - 成功响应仅返回 `audio/mpeg` 或 `audio/wav`、长度、`no-store`、`nosniff`：`route.ts:13-19`
+  - 没有输入回显、目录路径回显或错误细节泄露。
+
+- 音频桥接 token/路径：
+  - token 白名单限制为 `64 hex + .mp3/.wav`：`src/lib/workspace/production/audio-bridge.server.ts:10`
+  - 读取前做 `path.resolve` + dirname 约束，拒绝 symlink 和非文件：`audio-bridge.server.ts:118-123`
+  - TTL 过期删除，并在读取后按 token 扩展名复验 MP3/WAV 签名：`audio-bridge.server.ts:124-134`
+  - 写缓存前已先校验 public base：`audio-bridge.server.ts:80-88`
+  - 未看到目录穿越或任意文件读取风险。
+
+- 资产库 WAV 支持：
+  - 新增 MIME 仅限 `audio/wav`、`audio/x-wav` 到 `.wav`：`src/lib/workspace/assets.ts:29-33`
+  - 签名校验要求 RIFF + offset 8 的 WAVE：`assets.ts:109-112`
+  - 上传存储仍走大小限制和签名校验：`src/lib/workspace/storage.ts:46-80`
+  - 账号音频读取也复验大小和签名：`src/lib/workspace/production/video-tasks.server.ts:55-65`
+  - 未看到 WAV 导致上传类型/签名绕过的高/中风险。
+
+- SSRF / URL 校验：
+  - Wan media URL 现在拒绝非 HTTPS、localhost、`.localhost`、IP literal、credentials、非 443 端口：`src/lib/workspace/production/video-generation.server.ts:248-259`
+  - 下载供应商视频仍走既有 `downloadPublicHttps()` 公网下载防护链路，未在本次 diff 中看到回退。
+
+**剩余低风险说明**
+
+- Wan media URL 和音频 public base 校验没有做 DNS 解析来拒绝“普通域名解析到私网 IP”的情况。但这些值当前来自服务端桥接/环境配置，不是用户直接输入；在本次关注范围内我不把它列为高/中风险。
+
+=== 01a042b9-44e2-76e1-ab4b-6e07c26a8799 416 agentMessage len=2921 ===
+High: none found.
+
+Medium findings:
+
+1. Audio tunnel failures can still be misclassified as image-reference tunnel failures in the real path. `video-task-processor.server.ts:49` decides image vs audio by checking whether `error.message` contains `音频`, but `publishReferenceAudio` rethrows `waitForPublicReference` errors unchanged at `src/lib/workspace/production/audio-bridge.server.ts:99`. The shared `waitForPublicReference` error text is image-specific at `src/lib/workspace/production/reference-bridge.server.ts:219`, so an actual Wan audio URL reachability failure will not contain `音频` and will be reported as `检查参考图公网地址失败...` from `src/lib/workspace/production/video-task-processor.server.ts:52`. The added test mocks an audio-specific message, so it does not cover the real emitted error. Fix by wrapping `waitForPublicReference` failures inside `publishReferenceAudio` with an audio-specific `ReferenceTunnelError`, or by tagging the error type instead of parsing localized text.
+
+2. 通用资产库 WAV 上传入口还没有补齐。`src/app/workspace/accounts/[id]/assets/AssetClient.tsx:69` still advertises only `audio/mpeg,.mp3`, and `src/app/workspace/accounts/[id]/assets/AssetClient.tsx:286` still forces all audio uploads to `"audio/mpeg"`. The drop filter also still allows only MP3 at `src/lib/file-drop.ts:21` and `src/lib/file-drop.ts:82`. The tests confirm the old behavior rather than the new WAV behavior: `src/app/workspace/accounts/[id]/assets/drop-files.test.ts:88` rejects WAV, and `src/app/workspace/accounts/[id]/assets/audio-assets-ui.test.ts:32`/`:42` assert MP3-only UI/upload headers. Wan production-panel upload supports WAV, but users cannot upload WAV from the shared asset library and then select it later.
+
+No high/medium issues found in:
+
+- `VideoOutputMissingError` itself: `downloadVideo` now throws a typed terminal error for completed Wan tasks without output URL.
+- `video-tasks.server.ts` terminal failure handling: it marks the task failed, sets progress 100, and preserves completed provider response.
+- Wan URL validation: it now rejects credentials, non-HTTPS, non-443 ports, localhost, `.localhost`, and literal IP hosts.
+- WAV route test: `src/app/api/workspace/minimax-audio/[token]/route.test.ts:41` now covers serving a `.wav` token as `audio/wav`.
+
+Validation run:
+
+`npm test -- src/lib/workspace/production/video-generation.submit.test.ts src/lib/workspace/production/video-generation.test.ts src/lib/workspace/production/video-tasks.server.test.ts src/lib/workspace/production/video-task-processor.server.test.ts src/lib/workspace/production/audio-bridge.server.test.ts src/app/api/workspace/minimax-audio/[token]/route.test.ts src/app/workspace/accounts/[id]/assets/drop-files.test.ts src/app/workspace/accounts/[id]/assets/audio-assets-ui.test.ts`
+
+Result: 8 files passed, 74 tests passed.
+
+I did not read `.env`/`.env.local`. A diff scan of `.env.example` did not show a real key pattern.
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 1907 agentMessage len=3059 ===
+已完成接入并部署，最终生产实例正在 3000 端口运行：
+
+- 应用首页：[http://localhost:3000](http://localhost:3000)
+- 生视频直达页：[http://127.0.0.1:3000/workspace/accounts/cmt2oz42j0003rl3wyb799x6d/production?mode=video](http://127.0.0.1:3000/workspace/accounts/cmt2oz42j0003rl3wyb799x6d/production?mode=video)
+- 当前监听 PID：`57964`
+- 健康接口连续返回 `200`
+- 数据库状态：`connected`
+- 最终实例错误日志：`0` 字节
+
+**接入内容**
+
+新增的视频模型是 `Wan 3.0 Prime`，本地模型 ID 为 `wan3-prime-r2v`，供应商显示为 `ManjuAI · 已配置`。模型注册和供应商配置位于 [catalog.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:17>) 和 [server-catalog.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:71>)。
+
+当前支持：
+
+- 时长：`2–30 秒`，默认 `8 秒`
+- 比例：`16:9`、`9:16`，默认 `16:9`
+- 分辨率：`480p`、`720p`、`1080p`，默认 `480p`
+- 参考图：必须选择 `1–10 张`
+- 参考音频：可选一个 `MP3` 或 `WAV`
+- 多张参考图会保持用户选择顺序提交
+- 上游实际模型：`wan3.0-prime-r2v`
+
+能力契约见 [video-capabilities.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:81>)；生产面板会根据模型能力动态显示音频选择器和格式限制，见 [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:198>)。
+
+Wan 专用服务端调用链已经接入：
+
+- 提交：`POST /v1/videos/generations`
+- 轮询：`GET /v1/videos/tasks/{taskId}`
+- 多图使用有序 `reference_image` media
+- 音频使用 `audio` media
+- `480p/720p/1080p` 自动转换为上游要求的大写格式
+- `prompt_extend: false`
+- 转发任务幂等键，降低重复扣费风险
+- 完成后从上游返回的 `video_url` 或 `download_url` 下载并保存到账号资产
+
+实现见 [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:224>)。如果供应商报告完成却没有返回任何视频地址，任务会进入终态失败，不会无限轮询，见 [video-tasks.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:196>)。
+
+通用资产库也已补齐 WAV 上传支持，包括点击上传、拖入、真实 MIME、RIFF/WAVE 签名检查和公网临时音频路由。界面入口见 [AssetClient.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/assets/AssetClient.tsx:72>)，音频公网桥接见 [audio-bridge.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/audio-bridge.server.ts:103>)。
+
+**播放验收**
+
+任务完成后会出现在右侧生产队列。点击“视频”即可在站内弹窗直接播放或下载。
+
+最终生产构建中已使用一个现有完成任务做真实播放验收，没有创建新的付费任务：
+
+- `readyState = 4`
+- 视频尺寸：`720 × 1280`
+- 时长：约 `15.04 秒`
+- 实际调用 `play()` 后播放时间正常前进
+- 媒体错误：无
+- 桌面端无控件重叠
+- `390px` 移动端无横向溢出
+- 移动端仍正确显示 ManjuAI、8 秒、16:9、480p、10 张参考图以及 MP3/WAV 选择器
+
+最终截图保存在：
+
+- [桌面端截图](</C:/Users/EDY/AppData/Local/Temp/wan-production-final-desktop.png>)
+- [移动端截图](</C:/Users/EDY/AppData/Local/Temp/wan-production-final-mobile.png>)
+
+**验证结果**
+
+- Vitest：`89` 个测试文件、`530` 个测试全部通过
+- TypeScript：`npx tsc --noEmit` 通过
+- Next.js 生产构建：成功，27 个静态页面全部生成
+- `npm audit --audit-level=high`：`0` 个漏洞
+- `git diff --check`：通过
+- Git 跟踪文件密钥扫描：未发现密钥候选
+- 最终代码审查：无高、中、低级发现
+- 最终安全审查：无高、中、低级发现
+
+生产构建期间仍会出现该项目已有的 Windows 原生 SWC DLL 初始化警告，但 Next.js 会自动回退，编译、类型检查、静态页面生成和运行时健康检查均成功。
+
+仓库全局覆盖率仍低于 AGENTS.md 要求的 80%。最近一次全局统计约为 Statements `69.79%`、Lines `73.94%`；主要缺口来自项目原有 session、repository、prompt 和旧任务模块，不是此次 Wan 接入路径。本次新增和修改路径均配有针对性测试。
+
+主 Wan 接入已经在本地提交 `69abd8e` 中；最后补充的资产库 WAV 兼容和音频错误脱敏涉及 6 个文件，目前仍作为未提交工作区修改保留，当前 3000 服务使用的是包含这些修改的最终构建。
+
+最后需要处理密钥安全：你提供的 Wan API key 已经在聊天中明文出现。虽然它没有进入 Git 跟踪文件，仍应立即前往 ManjuAI 控制台轮换该 key，并把新 key 更新到本机 `.env.local` 后重启生产服务。
+
+=== 01a042a8-c27e-7042-96d0-5da1c2f803fa 186 agentMessage len=2991 ===
+已完成只读探索，当前没有做上传、修改或真实调用，也没有读取/输出任何密钥。
+
+关键结论：`3000` 端口的生产应用在 `C:\Users\EDY\Desktop\集成`，视频生成板块已经有完整的“模型列表 → 供应商配置 → 能力校验 → 任务入库 → 后台提交 → 轮询状态 → 下载落库 → 前端播放”链路。Wan 接入应落在现有视频模型/供应商体系里，而不是另起页面。
+
+真实执行路径如下：
+
+`src/lib/workspace/production/catalog.ts`
+→ `VIDEO_MODELS` 定义前端可选模型。
+
+`src/lib/workspace/production/server-catalog.ts`
+→ `VIDEO_SUPPLIER_CONFIGS` 定义供应商、环境变量、base URL、真实 provider 类型。
+
+`src/lib/workspace/production/video-capabilities.ts`
+→ `VIDEO_CAPABILITY_CONFIGS` 定义时长、比例、分辨率、参考图数量能力。
+
+`src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx`
+→ `VideoProductionPanel` 渲染视频生成 UI；前端先选 `modelId`，再通过 `filterVideoSuppliersByModel` 过滤供应商；提交到 `/api/workspace/accounts/${accountId}/generate-video`；任务列表每 8 秒拉 `/video-tasks`；完成后用 `<video controls>` 直接播放。
+
+`src/app/api/workspace/accounts/[id]/generate-video/route.ts`
+→ `POST` 提交入口；用 `workspaceVideoGenerationSchema` 校验参数；检查 `supplierId + modelId` 是否匹配；检查供应商 API key 是否在环境变量中；加载参考图/音频；创建 `workspaceVideoTask`；调用 `queueWorkspaceVideoTaskProcessing` 入队。
+
+`src/lib/workspace/production/video-task-processor.server.ts`
+→ `processWorkspaceVideoTask` 后台处理任务；提交前再次加载素材和校验；调用 `submitVideo`；保存 provider task id；带有 `submissionStartedAt` 防重复扣费保护。
+
+`src/lib/workspace/production/video-generation.server.ts`
+→ `submitVideo`、`getVideoStatus`、`downloadVideo` 是真实供应商调用层。现有供应商都走 Bearer token；状态识别已支持 `succeeded`；下载逻辑会从响应里找 `video_url/download_url` 一类字段，或者 fallback 到 `/videos/{id}/content`。
+
+`src/lib/workspace/production/video-tasks.server.ts`
+→ `refreshWorkspaceVideoTask` 轮询远端任务，完成后下载视频并写入 `workspaceFile`；`publicVideoTask` 返回 `videoUrl`，前端弹窗播放。
+
+`prisma/schema.prisma`
+→ `WorkspaceVideoTask` 已有 `referenceAssetIds`、`audioAssetId`、`providerTaskId`、`providerResponse`、`remoteUrl`、`videoFileId`、`submissionStartedAt`、`submissionUncertain` 等字段，足够承载 Wan 任务。
+
+Wan 文档中与接入相关的事实：
+
+- base：`https://api.manjuai.top`
+- 提交：`POST /v1/videos/generations`
+- 查询：`GET /v1/videos/tasks/{id}`
+- 模型：`wan3.0-prime-r2v` 已经真实测试成功
+- 请求字段：`model`、`prompt`、`media`、`resolution`、`ratio`、`duration`、`prompt_extend`
+- 多参考素材：`media` 支持 `reference_image` 和 `audio`
+- 限制：图片最多 10 张，音频最多 5 个，URL 必须是公网 HTTPS
+- 状态：`queued/running/succeeded/failed`
+- 完成字段：`video_url`、`download_url`
+
+还需要注意两个现有代码约束：
+
+1. 前端目前只有 `selectedSupplier.id === "minimax"` 时才传 `audioAssetId`，位置在 `VideoProductionPanel.tsx` 的提交 payload 逻辑。Wan 如果要支持“多参考图 + 音频”，这里需要把音频能力从 MiniMax 特判改成能力/供应商配置驱动。
+
+2. 服务端 `validateVideoGenerationRequest` 当前也只允许 provider `"minimax"` 使用音频。Wan 接入时，这里也要扩展为 Wan 允许音频，且保持 key 只在服务端环境变量中读取。
+
+按照你之前“以后不确定的所有方向以及细节先找我确认”的规则，我现在先停在探索结果，不直接改代码。需要你确认下面几个点后才能进入实现：
+
+1. 新模型在前端显示名称是否用 `Wan 3.0 Prime R2V`？
+2. 只接入已真实测试通过的 `wan3.0-prime-r2v`，还是同时预留 `wan3.0-r2v / wan3.0-t2v / wan3.0-i2v`？
+3. Wan 的参考图上限按文档做 `10` 张，还是先按已验证场景限制为 `3` 张？
+4. Wan 音频上限按文档做 `5` 个，还是先按当前 UI/已验证场景限制为 `1` 个？
+5. 环境变量名是否用 `WAN_API_KEY` 和 `WAN_BASE_URL`？
+6. 是否复用现有 `MINIMAX_IMAGE_PUBLIC_BASE_URL` 公网桥接来临时发布 Wan 参考图片和音频，还是为 Wan 单独建 `WAN_PUBLIC_BASE_URL / WAN_CACHE_DIR` 一套配置？
+
+确认后我可以按现有架构走 TDD，实现为视频生成板块里的一个新模型/供应商，并做本地测试与构建检查。
+
+=== 01a042a9-364c-7e52-87f2-8c5c6aa08e66 226 agentMessage len=137 ===
+生图目前没有 Grok 供应商，只有 PomoAI 和 YuanAI；Grok 只存在于生视频。下一步我会读 `image-generation.server.ts` 后半段和视频 provider 的 Grok 分支，确认 raw.mgrouter 直连需要动哪些最小点。
+
+=== 01a042a9-364c-7e52-87f2-8c5c6aa08e66 256 agentMessage len=8268 ===
+只读检查完成。没有读取 `.env` / `.env.local`，也没有输出任何密钥。
+
+**当前结论**
+`Grok` 目前只接在“生视频”，没有接在“生图”。
+
+生图供应商只有：
+
+- `pomoai`: `Gemini 3.1 Flash Image`
+- `yuanai`: `gpt-image-2`
+
+证据：[catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:8>)、[server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:187>)、[image-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:465>)
+
+生视频 Grok 当前配置是：
+
+- supplier id: `grok-video`
+- label: `snumom`
+- provider: `grok-video`
+- env key: `GROK_VIDEO_API_KEY`
+- base URL env: `GROK_VIDEO_BASE_URL`
+- default base URL: `https://snumom.com/v1`
+- model: `grok-imagine-video-1.5（按次）`
+
+证据：[server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:43>)
+
+但 `.env.example` 里实际给的 Grok video 默认 base 是：
+
+- `GROK_VIDEO_BASE_URL=https://new.dszyym.com/v1`
+
+证据：[.env.example](</c:/Users/EDY/Desktop/集成/.env.example:32>)
+
+这说明当前 Grok 视频不是 `raw.mgrouter.com` 直连结构，而是旧网关/兼容网关结构。
+
+**Grok 生视频请求结构**
+当前 Grok video payload builder 是 `buildGrokVideoPayload()`：
+
+- 顶层字段：`model`
+- 顶层字段：`prompt`
+- 顶层字段：`duration`
+- `extra.aspect_ratio`
+- `extra.resolution`
+- 有参考图时：`extra.reference_images = [{ url }]`
+
+证据：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:161>)
+
+提交端点：
+
+- `POST ${baseUrl}/videos`
+
+证据：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:480>)、[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:490>)
+
+轮询端点：
+
+- 非 Wan provider 统一 `GET ${baseUrl}/videos/{taskId}`
+
+证据：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:546>)、[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:558>)
+
+下载逻辑：
+
+- 优先从 status response 解析 `video_url/content_url/output_url/download_url/result_url/url`
+- 否则 fallback 到 `${baseUrl}/videos/{taskId}/content`
+
+证据：[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:580>)、[video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:591>)
+
+参考图公网桥：
+
+- Grok 通过 `publishGrokReferenceImage()` 把本地参考图转临时 HTTPS URL
+- 底层复用 `publishPublicReferenceImage(..., "grok-reference")`
+
+证据：[reference-bridge.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/reference-bridge.server.ts:266>)
+
+**Grok 生视频能力契约**
+当前 Grok video capability：
+
+- duration: `6-30`
+- defaultDuration: `15`
+- aspectRatios: `9:16`, `16:9`, `1:1`
+- resolutions: `480p`, `720p`
+- referenceImages: `0-7`, not required
+
+证据：[video-capabilities.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:58>)
+
+能力校验入口是 `validateVideoCapability()`，它会校验 duration/aspect ratio/resolution/reference count：
+
+证据：[video-capabilities.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:150>)
+
+**Grok 生图现状**
+生图 API 路径是：
+
+- 前端提交到 `/api/workspace/accounts/${id}/generate-image`
+- 服务端 `POST` 解析 multipart form
+- 调 `generateExternalImages(...)`
+
+证据：[generate-image/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-image/route.ts:104>)、[generate-image/route.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-image/route.ts:138>)
+
+`generateExternalImages()` 的分支只有：
+
+```ts
+input.supplier === "pomoai" ? callPomo(...) : callYuan(...)
+```
+
+证据：[image-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:465>)
+
+所以如果要新增 `raw.mgrouter.com` 的 Grok 生图，不能只加 env；至少还需要：
+
+- `IMAGE_SUPPLIERS` 增加 Grok
+- `ImageSupplierId` 联动扩大
+- `supplierKey()` 支持 `GROK_IMAGE_API_KEY`
+- 增加 Grok image payload/response decoder 或复用官方 OpenAI-compatible image 结构
+- `generateExternalImages()` 增加 Grok 分支
+- `workspaceImageGenerationSchema` 是否允许新 supplier，需要同步确认
+
+**测试落点**
+现有测试落点明确：
+
+生视频 Grok：
+
+- [video-generation.test.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.test.ts:127>) 已测 `buildGrokVideoPayload`
+- [video-generation.submit.test.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.submit.test.ts:44>) 已 mock `grok-video` config
+- [video-generation.submit.test.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.submit.test.ts:74>) 已测 `submitVideo` 的 Grok references 发布与请求
+- [video-capabilities.test.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.test.ts:61>) 已测 Grok capability
+- [server-catalog.test.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.test.ts:8>) 已测 public suppliers 不泄露 credential，但当前覆盖了 OAIRegBox/Wan，没有显式覆盖 Grok configured
+
+生图：
+
+- [image-generation.server.test.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.test.ts:43>) 外部生图主测试
+- [generate-image/route.test.ts](</c:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-image/route.test.ts:51>) workspace 生图 API 测试
+- [schemas.test.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/schemas.test.ts:120>) workspace image generation schema 测试
+- [server-catalog.test.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.test.ts:29>) public image suppliers 测试
+
+**`.env.example` 相关变量**
+当前 image 区域：
+
+- `POMOAI_API_KEY=`
+- `YUANAI_API_KEY=`
+- `YUANAI_IMAGE_MODEL=gpt-image-2`
+
+证据：[.env.example](</c:/Users/EDY/Desktop/集成/.env.example:22>)
+
+当前 video 区域：
+
+- `GROK_VIDEO_API_KEY=`
+- `GROK_VIDEO_BASE_URL=https://new.dszyym.com/v1`
+
+证据：[.env.example](</c:/Users/EDY/Desktop/集成/.env.example:32>)
+
+没有 `GROK_IMAGE_API_KEY` / `GROK_IMAGE_BASE_URL` / `MGROUTER_*` 变量。
+
+**关于 `raw.mgrouter.com` 直连的最小改动点**
+只从代码结构看，最小改动分两种：
+
+1. 只切 Grok 生视频到 raw.mgrouter.com
+
+需要改动点最少：
+
+- [server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:50>) 把 Grok `defaultBaseUrl` 改为 raw.mgrouter 的 `/v1` base
+- [.env.example](</c:/Users/EDY/Desktop/集成/.env.example:33>) 把 `GROK_VIDEO_BASE_URL` 示例改为 raw.mgrouter 的 `/v1` base
+- [video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:161>) 如果官方 raw.mgrouter payload 与当前 `/videos` + `extra.reference_images` 不一致，就新增/调整 `buildGrokVideoPayload`
+- [video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:490>) 如果官方 endpoint 不是 `/videos`，这里要同步
+- [video-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:558>) 如果官方 task 查询不是 `/videos/{id}`，这里要分 provider 改 path
+- 更新 `video-generation.test.ts` 和 `video-generation.submit.test.ts` 对 endpoint/payload 的断言
+
+2. 同时新增 Grok 生图直连
+
+需要新增一条 image provider 路径：
+
+- [catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/catalog.ts:8>) 增加 `IMAGE_SUPPLIERS` 的 Grok 项
+- [server-catalog.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:187>) `getPublicImageSuppliers()` 要支持 Grok 的 configured/model/env
+- [image-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:69>) `supplierKey()` 要支持 Grok image key
+- [image-generation.server.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:441>) `generateExternalImages()` 增加 Grok 分支
+- [image-generation.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.ts:131>) 增加对应 response decoder，或者复用兼容 OpenAI Images 的 decoder
+- [schemas.ts](</c:/Users/EDY/Desktop/集成/src/lib/workspace/schemas.ts:112>) 附近的 image schema 要同步允许新 supplier，具体 enum 需要继续读 schema 前半段确认
+- `.env.example` 增加空占位，不写真实 key
+
+**需要 parent/用户确认的信息**
+我不能从当前 repo 里确认 raw.mgrouter 官方结构。动代码前需要官方结构明确到这几项：
+
+- Grok 生视频官方 base URL 是否是 `https://raw.mgrouter.com/v1`
+- 创建视频 endpoint 是 `/videos`、`/videos/generations`，还是别的
+- task 查询 endpoint 是 `/videos/{id}`、`/videos/tasks/{id}`，还是别的
+- Grok 官方 model id 是否仍是 `grok-imagine-video-1.5`，当前代码里的 `grok-imagine-video-1.5（按次）` 看起来是网关商品名，不像官方模型 id
+- 参考图字段是否仍为 `extra.reference_images: [{ url }]`
+- 生图是否也要接 Grok；如果要，模型 id、endpoint、返回结构、是否支持参考图都需要确认
+
+当前仓库已有一些 Wan 代码改动痕迹，例如 `wan3-prime-r2v` 和 `provider: "wan"`，这些不是本次只读检查产生的。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 2114 agentMessage len=275 ===
+已找到同一账号下三张不同且有效的服装参考图，格式均受官方多图编辑接口支持；生图会直接使用 base64 data URI，不做公网暴露。按 xAI 官方多图编辑合同，本次使用 `POST https://raw.mgrouter.com/v1/images/edits`、`grok-imagine-image-quality`、`images[3]`、`aspect_ratio: 9:16` 和 `resolution: 4k`。这是第一笔真实生成调用；若网关拒绝 4K，我会保留原始错误证据，再切换它实际支持的 4K 模型而不重复盲试同一参数。
+
+=== 01a0464a-ac03-7730-8045-2cb1b84498f2 142 agentMessage len=3691 ===
+已完成只读核对，未读取 `.env`、未输出密钥、未修改文件。当前未提交的 Grok image 实现和现有 Grok video 实现都不能按原样交付。
+
+**关键阻断**
+
+- [image-generation.server.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:26) 的 Grok 默认地址仍是 `token.secure-skill.com`，且错误复用 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`。
+- [image-generation.server.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:108) 把 `9:16` 转成 `portrait`，将 `images` 发送为字符串数组，并主动拒绝 4K；这些都不符合本次要求。
+- [server-catalog.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:187) 仍用 MiniMax 密钥判断 Grok Image 是否已配置。
+- [ImageProductionPanel.tsx](C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/ImageProductionPanel.tsx:117) 的清晰度状态仍只有 `standard | 4k`，非 YuanAI 时控件被禁用；Grok 无法从 UI 提交 4K。
+- [image-tasks route.ts](C:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/image-tasks/route.ts:192) 明确拒绝所有非 YuanAI 4K 请求。
+- [image-tasks.server.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-tasks.server.ts:229) 的任务执行类型仍未包含 `grok-image` 和 `2k`。
+- 生图 UI/API 全局允许 4 张参考图，但官方 Grok 多图编辑上限是 3 张，必须改成供应商级限制。
+- [server-catalog.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:43) 的 Grok Video 还是旧供应商品牌、旧域名，模型名还带中文计费后缀，不能作为官方模型 ID 发送。
+- [video-generation.server.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:161) 仍把 `aspect_ratio`、`resolution`、`reference_images` 放在 `extra` 中。
+- [video-generation.server.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:480) 仍调用 `/videos`，没有 `reference_audios`，也不识别创建响应的 `request_id` 或完成响应的 `video.url`。
+- [`.env.example`](C:/Users/EDY/Desktop/集成/.env.example:32) 仍记录旧 Grok Video 地址，没有统一 Grok 直连配置。
+
+**官方合同**
+
+从当前 `docs.x.ai/llms.txt` 复核到：
+
+- 多图编辑：`POST /v1/images/edits`
+- `images` 每项是 `{ "url": "..." }` 或 `{ "file_id": "..." }`
+- `aspect_ratio` 直接发送 `"9:16"`
+- 官方公开分辨率只有 `1k`、`2k`，未公开承诺 4K
+- 视频创建：`POST /v1/videos/generations`
+- 视频字段全部位于顶层
+- 创建返回 `request_id`
+- 轮询：`GET /v1/videos/{request_id}`
+- 预设声线最多 3 个，提示词需引用 `<AUDIO_0>`、`<AUDIO_1>`
+- 完成状态为 `done`，输出位于 `video.url`
+
+因此 4K 必须作为 `raw.mgrouter.com` 的网关扩展真实验证。此前一次 400 同时包含错误的图片数组形状和 `4k`，不能据此单独判定网关不支持 4K。
+
+**执行计划**
+
+1. 先补 RED 测试：raw 直连配置、官方图像/视频请求体、端点、`request_id`、`video.url`、`expired`、3 图限制、Grok 4K UI/API、两个预设声线。
+2. 使用统一的服务端 Grok 凭证与 `https://raw.mgrouter.com/v1`；可保留明确的旧变量兼容层，但绝不能再回退到 MiniMax。
+3. 用不会生成媒体的非法参数请求捕获 raw 网关完整错误体，确认 4K 对应的模型和字段值。
+4. 根据验证结果只做一次有效付费 4K 重试；若网关确实不支持，必须向用户确认是否接受 2K 或本地超分，不能把两者冒充原生 4K。
+5. 生图使用 3 个临时 HTTPS 图片 URL，按选择顺序发送 `images: [{url}, ...]`，输出 URL 立即经过现有 SSRF 防护下载、验签、验尺寸并存入本地任务结果。
+6. Grok Video 使用精确模型 ID `grok-imagine-video-1.5`，顶层发送多参考图与：
+   ```json
+   [
+     { "voice_id": "eve" },
+     { "voice_id": "leo" }
+   ]
+   ```
+7. 真实视频提示词显式使用 `<IMAGE_n>`、`<AUDIO_0>`、`<AUDIO_1>`；`done` 后解析 `video.url`，立即下载并验证 MP4。
+8. 用 `ffprobe` 验证纵向视频、时长和音轨；已有的 [VideoProductionPanel.tsx](C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:1021) 播放器可以直接复用。
+9. 完成 focused tests、全量测试、覆盖率、`tsc`、构建、安全扫描和密钥扫描后，才重启 3000 端口生产进程并做浏览器验收。
+
+**测试矩阵**
+
+| 层级 | 图像 | 视频 |
+|---|---|---|
+| 单元 | 3 URL 保序、`9:16` 原值、确认后的 4K 值、`/images/edits`、第 4 图拒绝 | 顶层字段、无 `extra`、两个 voice ID、`request_id`、`video.url`、`expired` |
+| 路由 | Grok 4K 不再被 YuanAI gate 拒绝、供应商配置不泄密 | 多图提交、能力校验、不接受 Grok 文件型参考音频 |
+| 任务 | worker 保留 `grok-image/4k`、输出落盘可预览 | `submitted → processing → completed`、MP4 落盘 |
+| 安全 | 私网 URL、HTTP、恶意重定向、超大响应、伪图片均拒绝 | 异源 CDN 下载不携带 Bearer、错误信息不泄密 |
+| 真实调用 | 长边至少 3840、接近 9:16、三图语义可见 | 有视频流和音频流、纵向比例、时长合理、浏览器可播放 |
+
+当前验证基线不是全绿：聚焦测试为 `98/99`，缺密钥错误文案测试失败；`tsc --noEmit` 还有 3 个新增 Grok Image 测试类型错误。最主要的外部风险是 raw 网关可能不支持原生 4K或不透传 `reference_audios`，这两项都必须由真实调用结果决定。
+
+=== 01a0464a-cb8f-74c0-8e40-11a2f46d7de9 194 agentMessage len=1061 ===
+已完成 TDD 测试契约，只修改了分配的 5 个测试文件：
+
+- `video-generation.test.ts`
+- `video-generation.submit.test.ts`
+- `image-generation.server.test.ts`
+- `server-catalog.test.ts`
+- `schemas.test.ts`
+
+覆盖的 Grok 官方契约包括：
+
+- 图像接口默认直连 `https://raw.mgrouter.com/v1`
+- 图像接口使用独立的 `GROK_IMAGE_API_KEY`
+- `POST /images/edits`
+- 3 张多参考图，按 `{ url: "data:..." }` 对象数组传递
+- `9:16`、`4k`
+- 视频提交使用 `POST /videos/generations`
+- `aspect_ratio`、`resolution`、`reference_images` 均位于请求顶层
+- 顶层 `reference_audios` 固定验证 `eve`、`leo`
+- 支持响应中的 `request_id`
+- 轮询 `GET /videos/{request_id}`
+- 从嵌套的 `video.url` 下载成品
+- Grok 目录配置验证直连基址、模型名和供应商名称
+- Schema 接受 Grok Image 的 `4k`、`9:16`
+
+最新聚焦测试结果为 `95` 项中 `87` 项通过、`8` 项失败。当前预期 RED：
+
+- 旧视频提交路径仍为 `/videos`，不是 `/videos/generations`
+- 任务解析尚不支持 `request_id`
+- 下载逻辑尚未识别 `video.url`
+- Grok 视频请求仍使用 `extra`，缺少顶层字段和 `reference_audios`
+- 公开供应商名称仍是旧的 `snumom`
+
+另有一项与本次 Grok 契约无关的既存失败：缺少 PomoAI 密钥时实现返回英文 `pomoai API Key is not configured`，旧测试断言要求包含中文“未配置”。
+
+图像的 4K、直连、三参考图、独立密钥和目录配置已经随着并行实现转绿。`git diff --check` 通过；TypeScript 检查只剩分工之外的 `files/route.ts:203` 可空 `ReadableStream` 错误。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 2507 agentMessage len=155 ===
+核心代码和 RED 测试已同步：图像端不再复用 MiniMax 凭证/域名，视频端已切换创建路径、`request_id`、嵌套 `video.url` 与 `expired` 终态。现在先跑聚焦测试；若出现回归，会先修实现而不是放宽测试，尤其关注 OAIRegBox/Wan 端点没有被 Grok 改动误伤。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 2636 agentMessage len=113 ===
+类型检查已恢复为全绿；Prisma 新模型的类型也已生成。现在运行完整测试套件，重点确认 Grok 改动没有破坏现有 PomoAI、YuanAI、OAIRegBox、MiniMax、Wan，以及刚并入的参考表格/M4A 流程。
+
+=== 01a0465f-89a6-78e1-bee4-0278df327a6d 239 agentMessage len=164 ===
+第一轮 focused tests 里 7 个文件跑了，6 个通过；失败集中在 Grok Image 分支，原因不是供应商返回，而是代码里还残留了旧 `miniMaxContract` 变量名，导致请求构造前就 `ReferenceError`。我会把这块清掉，并顺手确认测试名和 env 名都不再沿用旧 MiniMax 文案。
+
+=== 01a0465f-89a6-78e1-bee4-0278df327a6d 250 agentMessage len=190 ===
+这里发现了更实质的问题：Grok Image 分支还同时支持旧 `MINIMAX_API_KEY/token.secure-skill.com` 路径，而用户明确要求 `https://raw.mgrouter.com` 直连、不走代理。这个会导致配置优先级错用旧供应商，我会移除旧分支并让测试锁定 `GROK_IMAGE_API_KEY + raw.mgrouter.com`。
+
+=== 01a0465f-89a6-78e1-bee4-0278df327a6d 258 agentMessage len=131 ===
+我会直接把 Grok Image 的运输层简化成一个配置来源：`GROK_IMAGE_API_KEY`、`GROK_IMAGE_BASE_URL`、`GROK_IMAGE_MODEL`。旧的 MiniMax 兼容路径不适合这个用户要求，也会造成生产环境选错钥匙。
+
+=== 01a0465f-5ce0-7aa1-baf0-49ed2d60d9f6 298 agentMessage len=132 ===
+当前代码里出现了更关键的问题：Grok Image 实际优先走 `MINIMAX_API_KEY`/`token.secure-skill.com`，这已经和用户指定的 `raw.mgrouter.com` 直连冲突。我再跑一次同一组测试看测试是否能抓到这个偏差。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 2766 agentMessage len=147 ===
+在核对最终构建内容时发现工作树仍有并行改动落入：Grok base URL 校验被进一步收紧并新增了安全测试，但 `.env.example` 留着一条“复用 MiniMax 合同”的过时注释。由于这些变更发生在上一轮构建之后，我先合并检查并清理冲突，再重新跑验证；不会把过时说明带进最终交付。
+
+=== 01a0465f-5ce0-7aa1-baf0-49ed2d60d9f6 312 agentMessage len=9177 ===
+**Findings**
+
+1. Critical: Grok Image path currently has a hard runtime/compile failure from an undefined `miniMaxContract` symbol.
+
+In [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:523>) and [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:525>), `callGrokImage()` references `miniMaxContract`, but the current function signature does not define or receive that parameter. The call site at [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:580>) passes an extra argument, but TypeScript/JS will not bind it unless the function parameter exists. Focused tests confirm this:
+
+`npx vitest run src/lib/workspace/production/image-generation.server.test.ts src/lib/workspace/production/video-generation.submit.test.ts src/lib/workspace/production/video-generation.test.ts src/app/api/workspace/accounts/[id]/image-tasks/route.test.ts src/lib/workspace/production/video-capabilities.test.ts`
+
+Result: 1 failed file, 3 failed tests, all from `ReferenceError: grokImageTransport is not defined` / stale mixed implementation around the Grok Image transport. The current working tree appears internally inconsistent, likely from concurrent edits.
+
+2. High: The current Grok Image implementation no longer satisfies the user’s “direct `https://raw.mgrouter.com` no proxy” requirement if the newer transport edit is retained.
+
+The latest diff showed a version that prefers `MINIMAX_API_KEY`/`MINIMAX_BASE_URL` and `https://token.secure-skill.com/v1` for Grok Image, with `.env.example` text saying “Grok Image uses the MiniMax provider contract”. That directly conflicts with the user’s instruction to use `https://raw.mgrouter.com` direct. In the current file, the top portion still has `DEFAULT_GROK_IMAGE_BASE_URL = "https://raw.mgrouter.com/v1"` at [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:26>), but the lower portion still contains stale references to `grokImageTransport` at [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:564>) and [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:580>). This must be resolved one way: for this task, it should be the direct raw.mgrouter contract, not MiniMax.
+
+3. High: Grok Image 4K is not implemented or testable through the app, while the user explicitly asked to test 4K.
+
+The code rejects `quality === "4k"` before any provider request at [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:118>) and [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:560>). The UI also only exposes `2K` for Grok Image at [ImageProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/ImageProductionPanel.tsx:141>) and [ImageProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/ImageProductionPanel.tsx:340>). If provider docs truly only support `1k`/`2k`, this is acceptable as a product limitation, but it means the requested “4K Grok image live test” is not fulfilled and should be reported as unsupported, not silently converted into a 2K integration.
+
+4. High: Grok video always sends `reference_audios`, but the prompt is not validated or augmented with `<AUDIO_0>` and `<AUDIO_1>`.
+
+`buildGrokVideoPayload()` hard-codes:
+
+[video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:169>)
+[video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:175>)
+
+But `submitVideo()` passes the user/task prompt through unchanged at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:480>) through [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:486>). If the prompt does not mention `<AUDIO_0>` and `<AUDIO_1>`, the official contract says those reference voices may be ignored. The tests only cover prompts that already contain the placeholders, so the production UI can submit a Grok task that includes reference audio fields but gets no audio conditioning.
+
+5. Medium: Grok video preset-audio support is not represented in capabilities/UI, so behavior is hidden and cannot be controlled from the production panel.
+
+`grok-video:grok` has no `referenceAudios` capability at [video-capabilities.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:58>) through [video-capabilities.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:67>). The UI shows the reference audio picker only when `selectedCapability.referenceAudios.max > 0` at [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:211>) and [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:898>). Separately, the route rejects uploaded audio for suppliers without `referenceAudios` at [generate-video/route.ts](</C:/Users/EDY/Desktop/集成/src/app/api/workspace/accounts/[id]/generate-video/route.ts:245>). So Grok will silently use `eve/leo`, but the user cannot see, select, or clear that behavior in the UI. If the intent is preset voice IDs only, add explicit prompt handling and UI copy/state for that; if the intent is uploaded reference audio, the current implementation does not support it.
+
+6. Medium: Grok base URL remains freely overrideable to any HTTPS origin, so “direct raw.mgrouter” is not enforceable.
+
+Image validates only generic HTTPS at [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:70>) through [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:91>). Video validates only generic HTTPS at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:276>) through [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:286>). That may be normal for provider abstraction, but for this user request it means an old local `GROK_VIDEO_BASE_URL` or `GROK_IMAGE_BASE_URL` can silently route elsewhere. At minimum add tests/config checks that the effective Grok URL is `https://raw.mgrouter.com/v1` for this deployment.
+
+7. Medium: Wan/ManjuAI defaults were changed in the same diff, creating unrelated supplier regression risk.
+
+[video-capabilities.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:81>) through [video-capabilities.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:95>) changes ManjuAI/Wan defaults from the prior behavior to `15s`, `9:16`, `720p`, and expands audio MIME types. That may be intentional from the earlier Wan work, but it is not part of the Grok request and changes existing production defaults/cost/profile. The updated tests now assert the new defaults, so they will not catch this as a regression.
+
+**What Looks Correct**
+
+Grok Video’s main endpoint was corrected to `/videos/generations` at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:488>). `request_id` is accepted as task id at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:341>). `video.url` nested output and relative URL handling are covered by `videoUrlFromStatus()` at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:376>). `expired` is treated as terminal failure at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:568>). Completed videos are stored as local workspace files and exposed to the UI through `publicVideoTask.videoUrl` at [video-tasks.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-tasks.server.ts:253>), and the dialog renders a playable `<video>` at [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:1106>).
+
+**Verification Notes**
+
+I ran the focused tests listed above. They currently fail because the Grok Image implementation is inconsistent.
+
+I also did a non-printing secret-pattern scan over modified tracked files excluding `.env*`. The only file-level hit resolved to false positives in `video-task-dialog-title` text at [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:1100>) and [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:1102>). I did not read `.env` or output any real key.
+
+=== 01a0465f-89a6-78e1-bee4-0278df327a6d 283 agentMessage len=98 ===
+现在我会做两处很小的代码替换：去掉 `miniMaxContract` 参数和分支，把 Grok payload 固定为 raw/xAI 风格的 `images: [{url}]` 与原始比例值。
+
+=== 01a0465f-89a6-78e1-bee4-0278df327a6d 291 agentMessage len=79 ===
+旧 MiniMax 分支已经从 Grok Image 服务端路径移除。现在我会再跑同一组 focused tests，确认没有回归，然后再进入真实供应商调用。
+
+=== 01a0465f-89a6-78e1-bee4-0278df327a6d 302 agentMessage len=100 ===
+现在只剩测试期望还停在旧路径：它还在用 `MINIMAX_API_KEY` 并期待 `token.secure-skill.com`。我会把这个测试改成直连 raw.mgrouter 的官方请求形态。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 2937 agentMessage len=189 ===
+测试边界已经确定：旧供应商必须继续命中原来的 `/videos` 与 `extra` 协议，新增供应商才命中 `/videos/generations`、顶层参考图和 `eve`/`leo`；生图同理，旧供应商继续走 MiniMax 字符串图片数组，新供应商才走 MGRouter 的 `{ url }` 数组，并且只有新供应商限制 3 张。现在先把这些断言落成 RED 测试。
+
+=== 01a0465f-5ce0-7aa1-baf0-49ed2d60d9f6 336 agentMessage len=118 ===
+当前结构已经变成“旧 `grok-image/grok-video` 保持 MiniMax/snumom，新 `mgrouter-*` 独立走 MGRouter”。我继续查 UI、API 校验、下载和测试，重点找并存实现里的漏接和回归。
+
+=== 01a0465f-5ce0-7aa1-baf0-49ed2d60d9f6 375 agentMessage len=8364 ===
+**Findings**
+
+1. High: `mgrouter-grok-video` sends `reference_audios`, but nothing guarantees the required `<AUDIO_0>` / `<AUDIO_1>` prompt references.
+
+`buildMgRouterGrokVideoPayload()` always includes `reference_audios` at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:195>) through [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:207>), and `submitVideo()` passes `input.prompt` unchanged at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:530>) through [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:536>). If the user submits an ordinary prompt from the production panel, the provider may ignore the preset voices because the official contract requires the prompt to mention `<AUDIO_0>` / `<AUDIO_1>`. Existing tests cover the payload shape but not validation/auto-append behavior for prompts missing those placeholders.
+
+2. Medium: `mgrouter-grok-video` uses temporary public reference-image bridging, but the UI notice omits the new supplier.
+
+The MGRouter video branch publishes references through `publishGrokReferenceImage()` at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:528>) through [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:536>). The production UI notice only includes `minimax`, `grok-video`, and `manjuai` at [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:961>). Result: MGRouter video behaves like it needs public HTTPS image links, but users do not get the same disclosure before submit.
+
+3. Medium: `mgrouter-grok-video` has hidden preset audio behavior but no capability/UI representation for it.
+
+`mgrouter-grok-video:grok` has no `referenceAudios` capability at [video-capabilities.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:67>) through [video-capabilities.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-capabilities.ts:73>). The UI only shows audio controls when `referenceAudios.max > 0` at [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:211>) and [VideoProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/VideoProductionPanel.tsx:898>). The server also rejects uploaded audio when the capability is absent at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:459>). That is fine if MGRouter only supports fixed `voice_id` presets, but it is currently invisible and non-configurable in production UI while still being sent on every request.
+
+4. Medium: MGRouter image/video base URLs are syntactically validated but not pinned to `raw.mgrouter.com`.
+
+Image uses `MGROUTER_BASE_URL` with generic HTTPS validation at [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:112>) through [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:117>). Video uses the same env through catalog at [server-catalog.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:61>) through [server-catalog.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:63>) and generic `providerUrl()` validation at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:305>) through [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:314>). This preserves configurability, but it does not enforce the user’s “direct `https://raw.mgrouter.com`” requirement if local env is changed to another HTTPS gateway.
+
+5. Low/Medium: MGRouter 4K image generation is explicitly impossible through the app.
+
+Both old `grok-image` and new `mgrouter-grok-image` reject `quality === "4k"` before calling the provider at [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:571>) through [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:572>). The UI exposes `2K`, not `4K`, for MGRouter/Grok suppliers at [ImageProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/ImageProductionPanel.tsx:141>) and [ImageProductionPanel.tsx](</C:/Users/EDY/Desktop/集成/src/app/workspace/accounts/[id]/production/ImageProductionPanel.tsx:340>). This is consistent if the provider only supports `1k`/`2k`, but it does not satisfy the original “test 4K” ask unless the final handoff clearly says 4K is unsupported.
+
+**Checks That Look Correct**
+
+Old `grok-video` appears preserved as snumom: [server-catalog.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:43>) through [server-catalog.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:53>) keeps `GROK_VIDEO_API_KEY`, `GROK_VIDEO_BASE_URL`, `https://snumom.com/v1`, old model label, and `/videos` submit at [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:510>) through [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:520>).
+
+Old `grok-image` appears preserved as MiniMax-gateway-backed: [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:102>) through [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:109>) uses `MINIMAX_API_KEY` and `MINIMAX_BASE_URL`/`token.secure-skill.com`.
+
+New `mgrouter-grok-image` uses `MGROUTER_API_KEY`, `MGROUTER_BASE_URL`, `/images/edits` or `/images/generations`, `images: [{ url }]`, `aspect_ratio: "9:16"` when selected, and max 3 references: [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:112>) through [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:117>), [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:527>) through [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:536>), and [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:568>) through [image-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:569>).
+
+New `mgrouter-grok-video` uses independent `MGROUTER_*`, official `/videos/generations`, `request_id`, nested/relative `video.url`, terminal `expired`, and no fallback content URL when `video.url` is missing: [server-catalog.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:56>) through [server-catalog.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:66>), [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:538>), [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:373>), [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:408>), and [video-generation.server.ts](</C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:636>).
+
+**Verification**
+
+Focused tests passed:
+
+`npx vitest run src/lib/workspace/production/image-generation.server.test.ts src/lib/workspace/production/video-generation.submit.test.ts src/lib/workspace/production/video-generation.test.ts src/lib/workspace/production/server-catalog.test.ts src/lib/workspace/production/video-capabilities.test.ts src/app/api/workspace/accounts/[id]/image-tasks/route.test.ts src/lib/workspace/schemas.test.ts`
+
+Result: 7 files passed, 116 tests passed.
+
+TypeScript passed:
+
+`npx tsc --noEmit`
+
+=== 01a0465f-89a6-78e1-bee4-0278df327a6d 436 agentMessage len=1831 ===
+**Findings**
+
+- High: `src/lib/workspace/production/image-generation.server.ts:392`, `src/lib/workspace/production/image-generation.server.ts:396`, `src/lib/workspace/production/image-generation.server.ts:398`
+  图片供应商错误响应被原样拼进抛出的错误，未经过类似视频侧 `redactSensitiveVideoText()` 的脱敏。MGRouter/Grok 图片请求失败时，如果上游网关把请求体、签名 URL、header 名值、`api_key`/`token` 字段或本地路径回显到 `error.message/detail`，这些内容会进入任务错误、接口响应或日志链路。视频侧 `extractErrorDetail()` 已经做脱敏，图片侧没有同等保护。
+
+- Medium: `src/lib/workspace/production/image-generation.server.ts:71`, `src/lib/workspace/production/image-generation.server.ts:116`, `src/lib/workspace/production/video-generation.server.ts:301`, `src/lib/workspace/production/server-catalog.ts:61`
+  `MGROUTER_BASE_URL` 只校验 HTTPS、无凭据、无 query/hash、标准端口，但没有约束 host/origin 必须是 `raw.mgrouter.com`。由于 MGRouter 请求会携带 `Authorization: Bearer ...`，一旦环境变量被误配成任意 HTTPS 域名，服务端会把 MGRouter key 发给该域名。这和“直连 raw.mgrouter.com、不走代理”的要求不一致。建议对 MGRouter 单独做 origin allowlist，或移除可配置 base URL。
+
+- Medium: `src/lib/workspace/production/reference-bridge.server.ts:18`, `src/lib/workspace/production/reference-bridge.server.ts:50`, `src/lib/workspace/production/reference-bridge.server.ts:257`
+  临时公网参考图的 `MINIMAX_IMAGE_PUBLIC_BASE_URL` 使用 `^https:\/\/[^/]+$` 校验，允许形如 `https://user:pass@example.com`、`https://example.com?x=...`、`https://example.com#...` 这类不是干净 origin 的值。随后代码直接拼接 `${base}${publicPath}` 并发送给 MGRouter 的 `reference_images`。这可能把 URL 凭据或错误 query/hash 暴露给外部供应商，也可能生成不可预测的引用 URL。应改为 `new URL()` 解析并拒绝 username/password/query/hash/非 443 端口，返回 `origin`。
+
+- Low: `src/lib/workspace/production/video-generation.server.ts:321`, `src/lib/workspace/production/video-generation.server.ts:322`
+  视频供应商响应体通过 `response.text()` 整体读入后才 `slice(0, 4MB)`。如果 MGRouter 或中间网关异常返回超大 JSON/HTML 错误页，这里存在内存放大风险。图片侧已经用 `limitedResponseBytes()` 做读取上限，视频侧应复用同类 bounded reader。
+
+=== 01a04273-5444-70a1-84ae-7268a954f8f8 3274 agentMessage len=2639 ===
+已经按“新增独立供应商、原供应商完全保留”的方式部署到 3000 端口。
+
+**供应商并存**
+
+- 原生图供应商 `grok-image` 保持不变：
+  - 继续使用 `MINIMAX_API_KEY` / `MINIMAX_BASE_URL`
+  - 默认地址仍是 `https://token.secure-skill.com/v1`
+  - 参考图继续使用字符串 Data URI 数组
+  - 比例继续映射为 `portrait` / `landscape` / `square`
+  - 支持现有的 4 张参考图上限
+- 新增生图供应商 `mgrouter-grok-image`：
+  - 独立使用 `MGROUTER_API_KEY` / `MGROUTER_BASE_URL`
+  - 固定直连 `https://raw.mgrouter.com/v1`
+  - 多参考图使用 `images: [{ url }]`
+  - `9:16` 等比例原样发送
+  - 最多 3 张参考图
+  - 支持 `1k`、`2k`
+- 原视频供应商 `grok-video` 保持不变：
+  - 显示名仍为 `snumom`
+  - 继续使用 `GROK_VIDEO_API_KEY` / `GROK_VIDEO_BASE_URL`
+  - 默认地址仍为 `https://snumom.com/v1`
+  - 继续请求 `POST /videos`
+  - `aspect_ratio`、`resolution`、`reference_images` 仍放在 `extra` 中
+- 新增视频供应商 `mgrouter-grok-video`：
+  - 使用独立的 `MGROUTER_*` 配置
+  - 请求 `POST /videos/generations`
+  - 顶层发送多参考图、比例和分辨率
+  - 固定发送 `eve`、`leo` 两个 `reference_audios`
+  - 普通提示词会自动补上 `<AUDIO_0>`、`<AUDIO_1>` 引用
+  - 支持 `request_id` 轮询、`done`、`expired`、嵌套及相对路径 `video.url`
+
+主要实现位于 [server-catalog.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/server-catalog.ts:42)、[image-generation.server.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/image-generation.server.ts:101) 和 [video-generation.server.ts](C:/Users/EDY/Desktop/集成/src/lib/workspace/production/video-generation.server.ts:185)。
+
+**真实调用结论**
+
+MGRouter 生图的原生 4K 已真实请求验证，供应商明确返回：
+
+```text
+resolution must be 1k or 2k
+```
+
+因此界面没有伪装成原生 4K，只提供真实可用的 1K/2K。成功的 2K、9:16、三参考图结果为 `1584 × 2816`：
+
+[grok-2k-9x16-multiref.png](C:/Users/EDY/Desktop/集成/.artifacts/grok-live/grok-2k-9x16-multiref.png)
+
+视频真实调用成功生成 6.042 秒、`720 × 1280`、带音轨的 MP4：
+
+[grok-9x16-multiref-two-voices.mp4](C:/Users/EDY/Desktop/集成/.artifacts/grok-live/grok-9x16-multiref-two-voices.mp4)
+
+生产板块完成任务后会继续使用现有 `<video controls>` 播放器直接播放。
+
+**生产状态**
+
+生产服务已通过 staging 构建后切换，没有直接覆盖运行中的 `.next`：
+
+- 本机：[http://127.0.0.1:3000](http://127.0.0.1:3000)
+- 局域网：[http://192.168.0.133:3000](http://192.168.0.133:3000)
+- 健康检查：HTTP 200
+- 数据库：`connected`
+- 实际公开目录确认：
+  - `grok-image`：已配置
+  - `mgrouter-grok-image`：已配置
+  - `grok-video`：已配置
+  - `mgrouter-grok-video`：已配置
+
+安全方面还增加了 MGRouter 域名锁定、供应商错误脱敏、视频响应 4 MB 上限、临时公网参考图 origin 校验，以及跨源视频下载不携带供应商 Authorization。
+
+**验证结果**
+
+- 聚焦回归：85/85 通过
+- 全量测试：561/561 通过
+- TypeScript：通过
+- Next.js 生产构建：通过
+- `npm audit`：0 个漏洞
+- 非环境文件密钥扫描：无命中
+- 全仓覆盖率仍低于项目声明的 80%：70.67% statements、74.99% lines
+- 本次两个核心调用模块均超过 80% statements：图像 82.26%，视频 81.2%
+
+**Git 分支**
+
+本次没有 commit、merge 或 push 到 `main`。当前仓库还没有配置任何 Git remote，因此暂时无法上传侧分支。
+
+考虑到另一个 Codex 窗口与这里共享同一个 worktree，我没有在当前目录切换分支，否则会同时改变另一个窗口的分支。等另一个窗口完成 `main` 提交并配置 remote 后，本批改动应从更新后的 `main` 建立独立 worktree，提交到例如 `codex/mgrouter-grok-provider`，且只推送该侧分支，不合并到 `main`。
+
+=== 01a05783-2715-73b2-a8b5-f5d9db58b459 88 agentMessage len=191 ===
+已经定位到配置：YuanAI 的“生子提示词”Gemini 通道默认/当前模型是 `gemini-2.0-flash`，基础地址是 `https://yuanai.uk`，实际调用路径为 `/v1beta/models/{模型}:generateContent`。我现在用你给的 key 发一个最小文本请求，只记录 HTTP 状态和经过截断的错误/成功信息，不会保存或回显 key。
+
+=== 01a05784-0376-7281-bfd0-e43090f25513 146 agentMessage len=1879 ===
+我已经把这条链路只读追出来了，结论很明确。
+
+`3000` 端口上的服务是 `next start`，进程路径指向 `C:\Users\EDY\Desktop\集成`。在这个仓库里，`生子提示词` 对应的是视频子提示词生成链路，不是普通聊天提示词链路；它的公开模型 id 是 `gemini-yuanai`，实际发给 Gemini 的模型名是 `gemini-2.0-flash`，除非环境变量 `GEMINI_PROMPT_MODEL` 覆盖了默认值。
+
+关键证据如下：
+
+- 模型映射在 [src/lib/workspace/production/server-catalog.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\server-catalog.ts:147)
+  - `publicId: "gemini-yuanai"`
+  - `model: "gemini-2.0-flash"`
+  - `protocol: "gemini"`
+  - 默认 base URL 是 `https://yuanai.uk`
+
+- 真正发请求的位置在 [src/lib/workspace/production/prompt-generation.server.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\prompt-generation.server.ts:95)
+  - 这里读取 `GEMINI_PROMPT_MODEL`
+  - 读不到就用默认 `gemini-2.0-flash`
+  - 请求 URL 形如：
+    `https://yuanai.uk/v1beta/models/<model>:generateContent?key=<key>`
+
+- 子提示词入口在 [src/lib/workspace/production/video-prompt.server.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-prompt.server.ts:19)
+  - `generateVideoChildPrompt(...)`
+  - 通过 `getVideoPromptModelConfig(input.promptModel)` 取配置
+  - 当 `promptModel === "gemini-yuanai"` 时，走 Gemini 分支，再进入上面的 `generatePromptResponse(...)`
+
+- 任务处理时真正触发生成的位置在 [src/lib/workspace/production/video-task-processor.server.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-task-processor.server.ts:163)
+  - `task.status === "prompting"` 时会检查 `task.promptModel`
+  - 然后调用 `generateVideoChildPrompt({ promptModel: task.promptModel, ... })`
+
+- 任务创建时把前端选的模型写入数据库的位置在 [src/app/api/workspace/accounts/[id]/generate-video/route.ts](C:\Users\EDY\Desktop\集成\src\app\api\workspace\accounts\[id]\generate-video\route.ts:290)
+  - 这里 `promptModel: template ? parsed.data.promptModel : null`
+  - 也就是说，模板模式下会把你选的 `gemini-yuanai` 持久化到任务里，后续后台 worker 再用它决定请求哪个子提示词模型
+
+关于你让我“试试这个 key 能不能调通”这件事，这次我没有实际发外部请求测试，因为这轮明确要求只做本地只读检查、不要调用外部 API，而且我也不会在输出里复述密钥。  
+如果要继续验证连通性，必须单独开一轮允许外联测试；到那时我也只会用脱敏方式报告结果。
+
+=== 01a05783-2715-73b2-a8b5-f5d9db58b459 140 agentMessage len=1429 ===
+结论：
+
+- 3000 端口运行的是 `C:\Users\EDY\Desktop\集成` 这个 Next.js 项目。
+- 你说的 YuanAI“生子提示词”对应视频子提示词模型：
+  - 前端/公开模型 ID：`gemini-yuanai`
+  - 当前实际请求模型：`gemini-2.0-flash`
+  - 请求地址：`https://yuanai.uk/v1beta/models/gemini-2.0-flash:generateContent`
+- 配置文件中也明确写的是：
+
+  `GEMINI_PROMPT_MODEL=gemini-2.0-flash`
+
+相关位置：
+
+- [server-catalog.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\server-catalog.ts:159)
+- [prompt-generation.server.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\prompt-generation.server.ts:95)
+- [video-prompt.server.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-prompt.server.ts:19)
+
+我用你提供的 key 做了连通性测试，结果是：
+
+1. 查询 YuanAI 模型列表：HTTP `200`
+
+   该 key 可以正常访问网关，返回的可用模型包括：
+
+   - `gemini-2.5-flash`
+   - `gemini-2.5-flash-thinking`
+   - `gemini-2.5-pro`
+   - `gemini-3-flash-preview`
+   - `gemini-3-pro-preview`
+   - `gemini-3.1-pro-preview`
+   - 等
+
+2. 使用当前项目配置的 `gemini-2.0-flash` 生成：HTTP `503`
+
+   返回核心错误：
+
+   `No available channel for model gemini-2.0-flash`
+
+   这说明不是 key 无效，而是 YuanAI 当前没有给这个模型提供可用通道。
+
+3. 使用同一个 key 改测 `gemini-2.5-flash`：HTTP `200`
+
+   最小请求正常返回 `OK`。
+
+因此最终判断是：
+
+- 这个 key 可以调通 YuanAI Gemini 网关。
+- 当前项目配置的 `gemini-2.0-flash` 调不通，因为该模型当前没有可用 channel。
+- 如果要让 3000 端口里的生子提示词功能使用这个 key，建议把服务端配置改成：
+
+```env
+GEMINI_PROMPT_MODEL=gemini-2.5-flash
+```
+
+然后重启 Next.js 服务。只改 `.env` 不重启的话，当前已经运行的进程通常不会加载新模型配置。
+
+另外，你把完整 API key 直接发到了对话中。测试已经完成，建议立即在 YuanAI 后台撤销并重新生成这个 key；我没有把它写入项目文件，也没有在结果中回显。
+
+=== 01a05783-2715-73b2-a8b5-f5d9db58b459 302 agentMessage len=1236 ===
+已实现，3000 端口的系统现在可以使用这个 YuanAI Gemini key 生成“生子提示词”了。
+
+本次配置：
+
+- 服务端密钥写入：`C:\Users\EDY\Desktop\集成\.env.local`
+- 模型配置改为：
+
+```env
+GEMINI_PROMPT_MODEL=gemini-2.5-flash
+```
+
+- YuanAI 基础地址仍然是：
+
+```text
+https://yuanai.uk
+```
+
+- 前端显示的模型 ID 仍然是 `gemini-yuanai`，所以原来的 `yuanai_gemini` 入口不需要改代码，刷新页面后应会显示为可用。
+
+之所以把模型从 `gemini-2.0-flash` 改成 `gemini-2.5-flash`，是因为测试结果显示：
+
+- `gemini-2.0-flash`：HTTP `503`，错误是没有可用 channel。
+- `gemini-2.5-flash`：HTTP `200`，最小生成请求正常返回。
+- 使用同一个 key 查询模型列表：HTTP `200`，说明 key 和 YuanAI 网关权限有效。
+
+系统也已经重启并验证：
+
+- 3000 端口服务启动成功。
+- `http://127.0.0.1:3000/api/health` 返回 HTTP `200`。
+- 数据库状态为 `connected`。
+- Next.js 确认加载顺序为 `.env.local` 优先于 `.env`。
+- 当前运行环境识别到 Gemini key，长度为 51；密钥内容没有回显。
+- `.env.local` 已被 `.gitignore` 排除，不会被 Git 跟踪，也没有修改源码或提交代码。
+
+关键调用链仍然是：
+
+- [server-catalog.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\server-catalog.ts:159)
+- [prompt-generation.server.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\prompt-generation.server.ts:95)
+- [video-prompt.server.ts](C:\Users\EDY\Desktop\集成\src\lib\workspace\production\video-prompt.server.ts:19)
+
+现在在网页中重新打开或刷新视频生产页面，选择“资产模板生成子提示词”，然后选择 `yuanai_gemini` 即可使用。
+
+安全提醒：这个 key 已经在当前对话中明文出现。虽然没有写入 Git，但建议你后续在 YuanAI 后台重新生成一个 key，再替换 `.env.local` 中的旧值。

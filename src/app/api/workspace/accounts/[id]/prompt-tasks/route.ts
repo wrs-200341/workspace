@@ -1,0 +1,18 @@
+import { NextRequest, NextResponse } from 'next/server';
+import { requireApiRole } from '@/lib/auth/server';
+import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount, workspaceOwnerIdForUser } from '@/lib/workspace/access';
+import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
+import { businessDate } from '@/lib/workspace/tasks';
+
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const auth = await requireApiRole(['admin', 'workspace', 'operator']);
+  if (auth instanceof Response) return auth;
+  const { id } = await params;
+  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  const date = request.nextUrl.searchParams.get('date');
+  const ownerScope = request.nextUrl.searchParams.get('scope') === 'owner';
+  const ownerId = ownerScope ? workspaceOwnerIdForUser(auth) ?? workspaceOwnerIdForAccount(id) : undefined;
+  if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
+  const tasks = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'prompt' } : { accountId: id, mode: 'prompt' }).filter((task) => !date || businessDate(task.createdAt) === date);
+  return NextResponse.json({ success: true, data: tasks, tasks });
+}

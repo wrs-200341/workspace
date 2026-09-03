@@ -1,0 +1,10 @@
+
+ RUN  v4.1.9 C:/Users/EDY/Desktop/集成
+
+··········
+
+ Test Files  2 passed (2)
+      Tests  10 passed (10)
+   Start at  15:40:39
+   Duration  186ms (transform 40ms, setup 0ms, import 66ms, tests 8ms, environment 0ms)
+

@@ -1,0 +1,29 @@
+export type ProductionQueueTab = "all" | "active" | "completed" | "failed";
+
+export interface ProductionQueueTask {
+  status: string;
+}
+
+export function productionQueueGroup(status: string): Exclude<ProductionQueueTab, "all"> {
+  if (status === "completed") return "completed";
+  if (status === "failed") return "failed";
+  return "active";
+}
+
+export function filterProductionQueue<T extends ProductionQueueTask>(
+  tasks: readonly T[],
+  tab: ProductionQueueTab,
+): T[] {
+  if (tab === "all") return [...tasks];
+  return tasks.filter((task) => productionQueueGroup(task.status) === tab);
+}
+
+export function preserveTaskAccountName<T extends { accountName?: string }>(
+  task: T,
+  fallbackAccountName: string,
+): T & { accountName: string } {
+  return {
+    ...task,
+    accountName: task.accountName?.trim() || fallbackAccountName,
+  };
+}

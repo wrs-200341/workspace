@@ -1,0 +1,81 @@
+// 业务模型对齐历史 3000 项目；当前 clean-room 默认使用 mock 数据。
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "sqlite" url = env("DATABASE_URL") }
+
+model Account {
+  id         String   @id
+  handle     String   @unique
+  operator   String
+  category   String
+  status     String   @default("healthy")
+  videos     Video[]
+  tasks      ProductionTask[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Product {
+  pid        String   @id
+  title      String
+  mode       String
+  commission Float?
+  videos     Video[]
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+model Video {
+  id          String   @id
+  pid         String
+  accountId   String
+  publishedAt DateTime
+  views       Int      @default(0)
+  likes       Int      @default(0)
+  comments    Int      @default(0)
+  shares      Int      @default(0)
+  clicks      Int      @default(0)
+  orders      Int      @default(0)
+  gmv         Float    @default(0)
+  refund      Float    @default(0)
+  cover       String?
+  account     Account  @relation(fields: [accountId], references: [id])
+  product     Product  @relation(fields: [pid], references: [pid])
+  createdAt   DateTime @default(now())
+  @@index([accountId, publishedAt])
+  @@index([pid])
+}
+
+model ProductionTask {
+  id               String   @id
+  accountId        String
+  pid              String?
+  provider         String
+  model            String
+  prompt           String
+  status           String   @default("queued")
+  providerTaskId   String?
+  inventorySavedAt DateTime?
+  account         Account  @relation(fields: [accountId], references: [id])
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  @@index([accountId, status])
+}
+
+model SyncEvent {
+  id           String   @id
+  type         String
+  status       String
+  lastSyncedAt DateTime?
+  detail       String?
+  createdAt    DateTime @default(now())
+}
+
+model EarningsDaily {
+  date     String @id
+  orders   Int    @default(0)
+  gmv      Float  @default(0)
+  views    Int    @default(0)
+  clicks   Int    @default(0)
+  refunds  Float  @default(0)
+  updatedAt DateTime @updatedAt
+}

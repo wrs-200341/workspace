@@ -1,0 +1,164 @@
+import { prisma } from "@/lib/prisma";
+import {
+  findVisibleWorkspaceAccount,
+  requireWorkspaceViewer,
+  workspaceError,
+} from "@/lib/workspace/api";
+import { publicVideoTask, refreshWorkspaceVideoTask } from "@/lib/workspace/production/video-tasks.server";
+import { queueWorkspaceVideoTaskProcessing } from "@/lib/workspace/production/video-task-processor.server";
+import { shanghaiDate, shanghaiDayRange } from "@/lib/workspace/production/video-inventory";
+
+export const runtime = "nodejs";
+export const maxDuration = 600;
+
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
+  const me = await requireWorkspaceViewer();
+  if (me instanceof Response) return me;
+  const { id } = await params;
+  const account = await findVisibleWorkspaceAccount(id);
+  if (!account) return workspaceError(404, "璐﹀彿涓嶅瓨鍦?);
+  const date = new URL(req.url).searchParams.get("date")?.trim() || shanghaiDate();
+  const dayRange = shanghaiDayRange(date);
+  if (!dayRange) return workspaceError(400, "浠诲姟鏃ユ湡鏃犳晥");
+  const tasks = await prisma.workspaceVideoTask.findMany({
+    where: {
+      ownerId: account.ownerId,
+      account: { is: { ownerId: account.ownerId } },
+      createdAt: dayRange,
+    },
+    include: { account: { select: { name: true } } },
+    orderBy: { createdAt: "desc" },
+  });
+  tasks
+    .filter((task) => ["queued", "prompting", "submitting"].includes(task.status))
+    .forEach((task) => queueWorkspaceVideoTaskProcessing(task.id));
+  tasks
+    .filter((task) => ["submitted", "processing"].includes(task.status) && task.providerTaskId)
+    .forEach((task) => { void refreshWorkspaceVideoTask(task); });
+  return Response.json({
+    success: true,
+    data: {
+      tasks: tasks.map((task) => ({
+        ...publicVideoTask(task, { includeReferences: true }),
+        accountName: task.account.name,
+      })),
+    },
+    error: null,
+  }, { headers: { "Cache-Control": "private, no-store" } });
+}
+import { describe, expect, it } from "vitest";
+import { filterProductionQueue, preserveTaskAccountName, productionQueueGroup } from "./production-queue";
+
+const tasks = [
+  { id: "queued", status: "queued" },
+  { id: "processing", status: "processing" },
+  { id: "done", status: "completed" },
+  { id: "error", status: "failed" },
+];
+
+describe("production queue filters", () => {
+  it("classifies every non-terminal phase as active", () => {
+    expect(productionQueueGroup("prompting")).toBe("active");
+    expect(productionQueueGroup("submitted")).toBe("active");
+  });
+
+  it("supports an all tab and returns a new array", () => {
+    const result = filterProductionQueue(tasks, "all");
+    expect(result.map((task) => task.id)).toEqual(["queued", "processing", "done", "error"]);
+    expect(result).not.toBe(tasks);
+  });
+
+  it("filters terminal and active groups", () => {
+    expect(filterProductionQueue(tasks, "active").map((task) => task.id)).toEqual(["queued", "processing"]);
+    expect(filterProductionQueue(tasks, "completed").map((task) => task.id)).toEqual(["done"]);
+    expect(filterProductionQueue(tasks, "failed").map((task) => task.id)).toEqual(["error"]);
+  });
+
+  it("preserves a source account label when an action response omits it", () => {
+    const responseTask = { id: "task-1", accountName: "" };
+    expect(preserveTaskAccountName(responseTask, "鏉ユ簮璐﹀彿")).toEqual({
+      id: "task-1",
+      accountName: "鏉ユ簮璐﹀彿",
+    });
+    expect(responseTask.accountName).toBe("");
+  });
+});
+import { readFileSync } from "node:fs";
+import { describe, expect, it } from "vitest";
+
+function sourceOf(relativePath: string): string {
+  return readFileSync(new URL(relativePath, import.meta.url), "utf8");
+}
+
+describe("video task read-only review page", () => {
+  it("loads only a visible task that belongs to the account in the route", () => {
+    const pageSource = sourceOf("./video-tasks/[taskId]/page.tsx");
+
+    expect(pageSource).toContain("getAuthenticatedUser()");
+    expect(pageSource).toContain("canAccessWorkspace(currentUser.role)");
+    expect(pageSource).toContain('currentUser.role === "workspace" ? { ownerId: currentUser.id } : {}');
+    expect(pageSource).toContain("id: taskId, accountId: account.id");
+    expect(pageSource).toContain("publicVideoTask(task, { includePrompt: true })");
+  });
+
+  it("sizes the video by its media ratio and gives the remaining width to reference images", () => {
+    const clientSource = sourceOf("./video-tasks/[taskId]/VideoTaskReviewClient.tsx");
+    const styleSource = sourceOf("./video-tasks/[taskId]/review.module.css");
+
+    expect(clientSource).toContain("<video");
+    expect(clientSource).toContain("video-tasks/${encodeURIComponent(taskId)}/references/${index}");
+    expect(clientSource).toContain("onWheel={handleWheel}");
+    expect(clientSource).toContain("onPointerMove={handlePointerMove}");
+    expect(clientSource).toContain("<ZoomIn");
+    expect(clientSource).toContain("<ZoomOut");
+    expect(clientSource).toContain("<RotateCcw");
+    expect(clientSource).toContain("imageRef.current?.offsetWidth");
+    expect(styleSource).toContain("height: 100dvh;");
+    expect(styleSource).not.toContain("min-height: 620px;");
+    expect(styleSource).not.toContain("grid-template-columns: minmax(0, 1.55fr) minmax(360px, 0.75fr);");
+    expect(styleSource).toMatch(/\.workspace\s*\{[^}]*display:\s*flex;/s);
+    expect(styleSource).toMatch(/\.videoPanel\s*\{[^}]*height:\s*100%;[^}]*flex-shrink:\s*0;/s);
+    expect(styleSource).toMatch(/\.videoViewport video\s*\{[^}]*width:\s*auto;[^}]*height:\s*100%;/s);
+    expect(styleSource).toMatch(/\.referencesPanel\s*\{[^}]*min-width:\s*0;[^}]*flex:\s*1;/s);
+  });
+
+  it("keeps audit decisions out while allowing inventory and recovery actions", () => {
+    const clientSource = sourceOf("./video-tasks/[taskId]/VideoTaskReviewClient.tsx");
+
+    expect(clientSource).not.toContain("瀹℃牳閫氳繃");
+    expect(clientSource).not.toContain("椹冲洖");
+    expect(clientSource).toContain('action: "save-inventory"');
+    expect(clientSource).toContain("productionVideoQueueHref(account.id, shanghaiDate(task.createdAt), task.id)");
+    expect(clientSource).toContain("productionRestoreHref");
+  });
+
+  it("returns to the selected queue date and exposes the current task anchor", () => {
+    const panelSource = sourceOf("./VideoProductionPanel.tsx");
+    const reviewClientSource = sourceOf("./video-tasks/[taskId]/VideoTaskReviewClient.tsx");
+    const navigationSource = sourceOf("./production-workspace-navigation.ts");
+
+    expect(reviewClientSource).toContain("window.location.assign(productionVideoQueueHref(account.id, shanghaiDate(task.createdAt), task.id))");
+    expect(navigationSource).toContain("date=${encodeURIComponent(date)}&focusTask=${encodeURIComponent(taskId)}");
+    expect(panelSource).toContain("requestAnimationFrame");
+    expect(panelSource).toContain("queueAnchorAttempts");
+    expect(panelSource).toContain("taskList.scrollTo");
+  });
+
+  it("stacks media without horizontal overflow on narrow screens", () => {
+    const styleSource = sourceOf("./video-tasks/[taskId]/review.module.css");
+
+    expect(styleSource).toMatch(/\.page\s*\{[^}]*width:\s*100%;[^}]*min-width:\s*0;[^}]*max-width:\s*100vw;/s);
+    expect(styleSource).toMatch(/\.taskFacts\s*\{[^}]*min-width:\s*0;[^}]*max-width:\s*100%;/s);
+    expect(styleSource).toMatch(/@media \(max-width:\s*780px\)[\s\S]*\.workspace\s*\{[^}]*flex-direction:\s*column;/s);
+    expect(styleSource).toMatch(/@media \(max-width:\s*780px\)[\s\S]*\.videoViewport video\s*\{[^}]*width:\s*auto;[^}]*height:\s*auto;[^}]*max-width:\s*100%;/s);
+  });
+
+  it("keeps unzoomed references scrollable and labels thumbnail actions", () => {
+    const clientSource = sourceOf("./video-tasks/[taskId]/VideoTaskReviewClient.tsx");
+    const styleSource = sourceOf("./video-tasks/[taskId]/review.module.css");
+
+    expect(clientSource).toContain('aria-label={`鏌ョ湅鍙傝€冨浘 ${index + 1}`}');
+    expect(styleSource).toMatch(/\.referenceCanvas\s*\{[^}]*touch-action:\s*pan-y;/s);
+    expect(styleSource).toMatch(/\.referenceCanvasZoomed\s*\{[^}]*touch-action:\s*none;/s);
+  });
+});

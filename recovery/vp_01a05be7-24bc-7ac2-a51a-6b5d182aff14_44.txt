@@ -1,0 +1,318 @@
+
+import {
+  AudioLines,
+  CalendarDays,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  FileAudio2,
+  FileText,
+  Images,
+  Info,
+  Play,
+  RefreshCw,
+  Save,
+  Search,
+  Trash2,
+  UploadCloud,
+  X,
+} from "lucide-react";
+import {
+  VIDEO_MODELS,
+  filterVideoSuppliersByModel,
+  type PublicVideoPromptModel,
+  type PublicVideoSupplier,
+  type VideoModelId,
+} from "@/lib/workspace/production/catalog";
+import {
+  DEFAULT_VIDEO_ASPECT_RATIO,
+  formatVideoReferenceCapacity,
+  getDefaultVideoAspectRatio,
+  getDefaultVideoDuration,
+  getDefaultVideoResolution,
+  getVideoDurationOptions,
+  getVideoReferenceLimits,
+  type VideoCapability,
+} from "@/lib/workspace/production/video-capabilities";
+import { filterRecordsByShanghaiDate, shanghaiDate } from "@/lib/workspace/production/video-inventory";
+import { filesFromDataTransfer, filterFilesByExtensions } from "@/lib/file-drop";
+import {
+  filterReferenceAudioAssets,
+  getReferenceAudioInputAccept,
+  isReferenceAudioMimeTypeSupported,
+  referenceAudioMimeTypeForFile,
+  validateReferenceAudioFileSelection,
+  type ProductionAudioAsset,
+  type ProductionImageAsset,
+  type ProductionPromptAsset,
+  type ProductionVideoAsset,
+} from "./types";
+import {
+  type VideoReferenceRow,
+} from "@/lib/workspace/production/video-reference";
+import { matchVideoReferenceRow, videoReferencePid } from "@/lib/workspace/production/video-reference-pid";
+import type { VideoTaskErrorDetail } from "@/lib/workspace/production/video-task-error";
+import { displayVideoTaskPrompt } from "@/lib/workspace/production/video-task-prompt";
+import { AssetImagePickerDialog } from "./AssetImagePickerDialog";
+import { mergeCreatedPromptTemplate, saveManualVideoPrompt } from "./manual-prompt-template";
+import { reconcileSavedPrompt } from "./prompt-draft-state";
+import { filterProductionQueue, preserveTaskAccountName, type ProductionQueueTab } from "./production-queue";
+import { productionRestoreHref, productionTaskApiHref, productionVideoReviewHref } from "./production-workspace-navigation";
+import { promptForVideoSubmission } from "./video-prompt-input";
+import { confirmUnmatchedVideoReference, templateVideoReferenceIssue } from "./video-reference-submission";
+import { restoreVideoTaskState } from "./video-task-restore";
+import styles from "./panels.module.css";
+
+interface VideoProductionPanelProps {
+  accountId: string;
+  accountName: string;
+  prompts: ProductionPromptAsset[];
+  images: ProductionImageAsset[];
+  videos: ProductionVideoAsset[];
+  audios: ProductionAudioAsset[];
+  suppliers: PublicVideoSupplier[];
+  promptModels: PublicVideoPromptModel[];
+  canEdit: boolean;
+  savedPromptDraft: string;
+  initialQueueDate?: string;
+  initialFocusTaskId?: string;
+  restoreTaskId?: string;
+}
+
+interface VideoTask {
+  id: string;
+  accountId: string;
+  accountName: string;
+  name: string;
+  supplierId: string;
+  modelId: string;
+  promptMode: string;
+  promptModel: string | null;
+  templateId: string | null;
+  promptPreview: string;
+  suffixEnabled: boolean;
+  duration: number;
+  aspectRatio: string;
+  resolution: string;
+  status: VideoTaskStatus;
+  progress: number;
+  providerTaskId: string | null;
+  videoUrl: string | null;
+  childPrompt?: string | null;
+  finalPrompt?: string | null;
+  originalPrompt?: string | null;
+  suffix?: string | null;
+  referenceAssetId?: string | null;
+  referenceAssetIds?: string[];
+  referenceVideoAssetId?: string | null;
+  referenceWorkbookId?: string | null;
+  referenceRow?: VideoReferenceRow | null;
+  audioAssetId?: string | null;
+  audioAssetIds?: string[];
+  childPromptAvailable: boolean;
+  audioAttached: boolean;
+  audioAttachedCount: number;
+  inventorySaved: boolean;
+  error: string | null;
+  errorDetail: VideoTaskErrorDetail | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface VideoSuffixResponse {
+  suffix?: string;
+  source?: "saved" | "10000";
+  updatedAt?: string | null;
+}
+
+interface ReferenceWorkbookSummary {
+  id: string;
+  name: string;
+  originalName: string;
+  rowCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+type VideoTaskStatus = "queued" | "prompting" | "submitting" | "submitted" | "processing" | "completed" | "failed";
+
+async function responseData<T>(response: Response): Promise<T> {
+  const payload = await response.json().catch(() => null) as { success?: boolean; data?: T; error?: string } | null;
+  if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.error ?? "璇锋眰澶辫触");
+  return payload.data;
+}
+
+const ACTIVE_STATUSES = new Set<VideoTaskStatus>(["queued", "prompting", "submitting", "submitted", "processing"]);
+const STATUS_LABELS: Readonly<Record<VideoTaskStatus, string>> = {
+  queued: "鎺掗槦涓?,
+  prompting: "鎻愮ず璇?,
+  submitting: "鎻愪氦涓?,
+  submitted: "宸叉彁浜?,
+  processing: "鐢熸垚涓?,
+  completed: "宸插畬鎴?,
+  failed: "澶辫触",
+};
+
+function taskPhase(task: VideoTask): string {
+  if (task.status === "queued") return "绛夊緟鍚庡彴澶勭悊";
+  if (task.status === "prompting") return "鐢熸垚鎻愮ず璇嶄腑";
+  if (task.status === "submitting") return "鎻愮ず璇嶅凡瀹屾垚锛屾鍦ㄦ彁浜よ棰?;
+  if (task.status === "submitted") return "瑙嗛鐢熸垚涓?;
+  if (task.status === "processing") return `瑙嗛鐢熸垚涓?路 ${Math.max(0, Math.min(100, task.progress))}%`;
+  if (task.status === "completed") return "宸插畬鎴?;
+  return "浠诲姟澶辫触";
+}
+
+export function VideoProductionPanel({ accountId, accountName, prompts, images, videos, audios, suppliers, promptModels, canEdit, savedPromptDraft, initialQueueDate, initialFocusTaskId, restoreTaskId }: VideoProductionPanelProps) {
+  const [modelId, setModelId] = useState<VideoModelId>("omni");
+  const [supplierId, setSupplierId] = useState("");
+  const [promptMode, setPromptMode] = useState<"manual" | "asset-template-child-prompt">("manual");
+  const [promptTemplates, setPromptTemplates] = useState<ProductionPromptAsset[]>(() => [...prompts]);
+  const [templateId, setTemplateId] = useState("");
+  const [restoredChildPromptReady, setRestoredChildPromptReady] = useState(false);
+  const [manualTemplateId, setManualTemplateId] = useState("");
+  const [saveAsTemplate, setSaveAsTemplate] = useState(false);
+  const [templateName, setTemplateName] = useState("");
+  const [promptModel, setPromptModel] = useState("gpt-2999");
+  const [savedPrompt, setSavedPrompt] = useState(savedPromptDraft);
+  const [prompt, setPrompt] = useState(savedPromptDraft);
+  const [promptSaving, setPromptSaving] = useState(false);
+  const [promptUpdatedAt, setPromptUpdatedAt] = useState<string | null>(null);
+  const [assetImages, setAssetImages] = useState<ProductionImageAsset[]>(() => [...images]);
+  const [assetImageIds, setAssetImageIds] = useState<string[]>([]);
+  const [assetVideos] = useState<ProductionVideoAsset[]>(() => [...videos]);
+  const [referenceVideoAssetId, setReferenceVideoAssetId] = useState("");
+  const [assetSearch, setAssetSearch] = useState("");
+  const [assetPickerOpen, setAssetPickerOpen] = useState(false);
+  const [audioAssets, setAudioAssets] = useState<ProductionAudioAsset[]>(() => [...audios]);
+  const [selectedAudioAssetIds, setSelectedAudioAssetIds] = useState<string[]>([]);
+  const [audioSearch, setAudioSearch] = useState("");
+  const [audioUploading, setAudioUploading] = useState(false);
+  const [audioDragActive, setAudioDragActive] = useState(false);
+  const [audioError, setAudioError] = useState("");
+  const [referenceRows, setReferenceRows] = useState<VideoReferenceRow[]>([]);
+  const [referenceExcelName, setReferenceExcelName] = useState("");
+  const [referenceExcelError, setReferenceExcelError] = useState("");
+  const [referenceExcelDragActive, setReferenceExcelDragActive] = useState(false);
+  const [savedReferenceWorkbooks, setSavedReferenceWorkbooks] = useState<ReferenceWorkbookSummary[]>([]);
+  const [referenceWorkbookId, setReferenceWorkbookId] = useState("");
+  const [referenceWorkbookLoading, setReferenceWorkbookLoading] = useState(false);
+  const [duration, setDuration] = useState("10");
+  const [aspectRatio, setAspectRatio] = useState<string>(DEFAULT_VIDEO_ASPECT_RATIO);
+  const [resolution, setResolution] = useState("720p");
+  const [count, setCount] = useState("1");
+  const [suffixEnabled, setSuffixEnabled] = useState(false);
+  const [savedSuffix, setSavedSuffix] = useState("");
+  const [suffixDraft, setSuffixDraft] = useState("");
+  const [suffixSource, setSuffixSource] = useState<"saved" | "10000">("10000");
+  const [suffixUpdatedAt, setSuffixUpdatedAt] = useState<string | null>(null);
+  const [suffixLoading, setSuffixLoading] = useState(true);
+  const [suffixSaving, setSuffixSaving] = useState(false);
+  const [tasks, setTasks] = useState<VideoTask[]>([]);
+  const [queueTab, setQueueTab] = useState<ProductionQueueTab>("all");
+  const [queueDate, setQueueDate] = useState(() => initialQueueDate ?? shanghaiDate());
+  const [taskActionBusy, setTaskActionBusy] = useState("");
+  const [dialogTask, setDialogTask] = useState<VideoTask | null>(null);
+  const [dialogPrompt, setDialogPrompt] = useState("");
+  const [dialogLoading, setDialogLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const previousCapabilityKey = useRef("");
+  const restoreApplied = useRef(false);
+  const taskLoadSequence = useRef(0);
+  const referenceWorkbookLoadSequence = useRef(0);
+  const queueAnchorApplied = useRef("");
+  const queueAnchorAttempts = useRef(0);
+  const taskListRef = useRef<HTMLDivElement | null>(null);
+  const submissionLock = useRef(false);
+  const pendingSubmission = useRef<{ id: string; payload: string } | null>(null);
+
+  const availableSuppliers = useMemo(() => filterVideoSuppliersByModel(suppliers, modelId), [modelId, suppliers]);
+  const selectedSupplier = availableSuppliers.find((supplier) => supplier.id === supplierId) ?? null;
+  const selectedCapability: VideoCapability | null = selectedSupplier?.capabilities?.[modelId] ?? null;
+  const referenceFileLimits = useMemo(
+    () => selectedCapability ? getVideoReferenceLimits(selectedCapability, resolution, Number(duration)) : null,
+    [duration, resolution, selectedCapability],
+  );
+  const referenceAudioMax = referenceFileLimits?.audios.max ?? 0;
+  const supportsReferenceAudio = referenceAudioMax > 0;
+  const selectedAudioMimeTypes = selectedCapability?.referenceAudios?.mimeTypes ?? [];
+  const referenceAudioAccept = getReferenceAudioInputAccept(selectedAudioMimeTypes);
+  const referenceAudioFormatLabel = selectedAudioMimeTypes.some((mimeType) => mimeType.includes("wav"))
+    ? selectedAudioMimeTypes.some((mimeType) => mimeType.includes("mp4") || mimeType.includes("m4a")) ? "MP3 / M4A / WAV" : "MP3 / WAV"
+    : selectedAudioMimeTypes.some((mimeType) => mimeType.includes("mp4") || mimeType.includes("m4a")) ? "MP3 / M4A" : "MP3";
+  const capabilityKey = selectedSupplier ? `${selectedSupplier.id}:${modelId}` : "";
+  const durationOptions = useMemo(
+    () => selectedCapability ? getVideoDurationOptions(selectedCapability, resolution) : [],
+    [resolution, selectedCapability],
+  );
+  const selectedImages = useMemo(
+    () => assetImageIds.map((id) => assetImages.find((image) => image.id === id)).filter((image): image is ProductionImageAsset => Boolean(image)),
+    [assetImageIds, assetImages],
+  );
+  const filteredAudioAssets = useMemo(
+    () => filterReferenceAudioAssets(audioAssets, audioSearch),
+    [audioAssets, audioSearch],
+  );
+  const selectedAudioAssets = useMemo(
+    () => selectedAudioAssetIds
+      .map((id) => audioAssets.find((asset) => asset.id === id))
+      .filter((asset): asset is ProductionAudioAsset => Boolean(asset)),
+    [audioAssets, selectedAudioAssetIds],
+  );
+  const selectedImage = selectedImages[0] ?? null;
+  const selectedReferenceVideo = assetVideos.find((video) => video.id === referenceVideoAssetId) ?? null;
+  const selectedImagePid = selectedImage ? videoReferencePid(selectedImage.originalName) : "";
+  const selectedReferenceRow = selectedImage ? matchVideoReferenceRow(referenceRows, selectedImage.originalName) : null;
+  const templateReferenceIssue = templateVideoReferenceIssue({
+    promptMode,
+    selectedImageCount: selectedImages.length,
+    referenceRow: selectedReferenceRow,
+  });
+  const unmatchedTemplateReference = promptMode === "asset-template-child-prompt"
+    && selectedImages.length > 0
+    && !selectedReferenceRow;
+  const selectedTemplate = promptTemplates.find((item) => item.id === templateId) ?? null;
+  const selectedPromptModel = promptModels.find((item) => item.id === promptModel) ?? null;
+  const visibleDateTasks = useMemo(() => filterRecordsByShanghaiDate(tasks, queueDate), [queueDate, tasks]);
+  const activeTasks = visibleDateTasks.filter((task) => ACTIVE_STATUSES.has(task.status));
+  const completedTasks = visibleDateTasks.filter((task) => task.status === "completed");
+  const failedTasks = visibleDateTasks.filter((task) => task.status === "failed");
+  const visibleTasks = filterProductionQueue(visibleDateTasks, queueTab);
+  const suffixDirty = suffixDraft !== savedSuffix;
+  const promptDirty = prompt !== savedPrompt;
+
+  useEffect(() => {
+    if (!availableSuppliers.some((supplier) => supplier.id === supplierId)) setSupplierId(availableSuppliers[0]?.id ?? "");
+  }, [availableSuppliers, supplierId]);
+
+  useEffect(() => {
+    if (!selectedCapability) return;
+    const capabilityChanged = previousCapabilityKey.current !== capabilityKey;
+    previousCapabilityKey.current = capabilityKey;
+    if (capabilityChanged) {
+      setDuration(String(getDefaultVideoDuration(selectedCapability)));
+      setAspectRatio(getDefaultVideoAspectRatio(selectedCapability.aspectRatios, selectedCapability.defaultAspectRatio));
+      setResolution(getDefaultVideoResolution(selectedCapability));
+    }
+    if (!durationOptions.includes(Number(duration))) {
+      setDuration(String(getDefaultVideoDuration(selectedCapability)));
+    }
+    if (!selectedCapability.aspectRatios.includes(aspectRatio as never)) setAspectRatio(getDefaultVideoAspectRatio(selectedCapability.aspectRatios, selectedCapability.defaultAspectRatio));
+    if (!selectedCapability.resolutions.includes(resolution as never)) setResolution(getDefaultVideoResolution(selectedCapability));
+    if (selectedCapability.referenceImages.max === 0 && assetImageIds.length > 0) setAssetImageIds([]);
+    if (selectedCapability.referenceImages.max > 0 && assetImageIds.length > selectedCapability.referenceImages.max) {
+      setAssetImageIds((current) => current.slice(0, selectedCapability.referenceImages.max));
+    }
+    const videoMax = getVideoReferenceLimits(selectedCapability, resolution, Number(duration)).videos.max;
+    if (videoMax === 0 && referenceVideoAssetId) setReferenceVideoAssetId("");
+  }, [assetImageIds, aspectRatio, capabilityKey, duration, durationOptions, referenceFileLimits, referenceVideoAssetId, resolution, selectedCapability]);
+
+  useEffect(() => {
+    if (!supportsReferenceAudio) {
+      if (selectedAudioAssetIds.length > 0) setSelectedAudioAssetIds([]);
+      return;
+    }
+    const validIds = selectedAudioAssetIds
+      .filter((id) => audioAssets.some((asset) => asset.id === id && isReferenceAudioMimeTypeSupported(asset.mimeType, selectedAudioMimeTypes)))
+      .slice(0, referenceAudioMax);

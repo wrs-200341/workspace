@@ -1,0 +1,12 @@
+node_modules/
+.next/
+*.log
+*.pid
+tsconfig.tsbuildinfo
+.env*
+!.env.example
+# Runtime state, generated media, credentials and local caches stay on D:\
+# and are intentionally excluded from source control.
+data/
+logs/
+recovery/runtime/
