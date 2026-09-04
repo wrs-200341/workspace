@@ -55,6 +55,37 @@ describe('production concurrency scheduler', () => {
     expect(ids.every((task) => getProviderTask(task.id)?.status === 'completed')).toBe(true);
   });
 
+  it('preserves prompting while an automatic child prompt job is dispatched', async () => {
+    const task = createProviderTask({
+      id: 'prompting-dispatch',
+      accountId: 'operator-a-account',
+      mode: 'video',
+      provider: 'grok-video',
+      model: 'grok-model',
+      status: 'prompting',
+      progress: 2,
+      metadata: { ownerId: 'operator-a', schedulerState: 'waiting', promptGenerationPending: true },
+    });
+    let finish!: () => void;
+    enqueueProviderTask({
+      taskId: task.id,
+      ownerId: 'operator-a',
+      mode: 'video',
+      model: 'grok-model',
+      run: () => new Promise<void>((resolve) => {
+        finish = () => {
+          updateProviderTask(task.id, { status: 'completed', progress: 100 });
+          resolve();
+        };
+      }),
+    });
+    await tick();
+    expect(getProviderTask(task.id)).toMatchObject({ status: 'prompting', progress: 2, metadata: { schedulerState: 'dispatching' } });
+    finish();
+    await tick();
+    expect(getProviderTask(task.id)?.status).toBe('completed');
+  });
+
   it('allocates five model slots independently for each operator', async () => {
     const operatorA = Array.from({ length: 5 }, (_, index) => seed(`operator-a-omni-${index}`, 'video', 'omni-fast-no-water', 'operator-a'));
     const operatorB = Array.from({ length: 5 }, (_, index) => seed(`operator-b-omni-${index}`, 'video', 'omni-fast-no-water', 'operator-b'));

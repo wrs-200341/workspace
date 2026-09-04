@@ -130,9 +130,14 @@ function canStart(job: SchedulerJob, counts: { total: number; byModel: Map<strin
 function markDispatching(job: SchedulerJob): void {
   const current = getProviderTask(job.taskId);
   if (!current) return;
+  // Automatic child-prompt jobs are already in a user-visible `prompting`
+  // phase when they enter the scheduler. Keep that phase while reserving a
+  // slot; the job itself advances to `submitting` only after prompt
+  // generation has completed.
+  const promptGenerationPending = current.status === 'prompting' || current.metadata?.promptGenerationPending === true;
   updateProviderTask(job.taskId, {
-    status: 'submitting',
-    progress: Math.max(current.progress, 5),
+    status: promptGenerationPending ? 'prompting' : 'submitting',
+    progress: promptGenerationPending ? Math.max(current.progress, 2) : Math.max(current.progress, 5),
     metadata: {
       ...(current.metadata ?? {}),
       schedulerState: DISPATCHING_STATE,
@@ -297,7 +302,7 @@ export function enqueueProviderTask(job: SchedulerJob): boolean {
     // Route handlers create tasks with the waiting scheduler metadata already
     // attached. Once this process has stamped its runtime id, avoid rewriting
     // the entire (potentially multi-megabyte) tasks.json file on re-enqueue.
-    const alreadyWaiting = current.status === 'queued'
+    const alreadyWaiting = (current.status === 'queued' || current.status === 'prompting' || current.status === 'retrying')
       && metadata.schedulerState === WAITING_STATE
       && metadata.schedulerOwnerId === normalized.ownerId
       && metadata.schedulerMode === normalized.mode
@@ -305,7 +310,9 @@ export function enqueueProviderTask(job: SchedulerJob): boolean {
       && metadata.schedulerRuntimeId === SCHEDULER_RUNTIME_ID;
     if (!alreadyWaiting) {
       updateProviderTask(normalized.taskId, {
-        status: 'queued',
+        // Preserve the prompt-generation phase for automatic child-prompt
+        // tasks. Regular jobs are normalized to the local queued state.
+        status: current.status === 'prompting' ? 'prompting' : 'queued',
         metadata: {
           ...metadata,
           schedulerState: WAITING_STATE,

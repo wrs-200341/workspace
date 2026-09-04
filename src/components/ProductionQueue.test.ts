@@ -19,4 +19,8 @@ describe('production queue status labels', () => {
     expect(queueStatusLabel({ status: 'queued', schedulerState: 'provider-active', providerTaskId: 'upstream-1' })).toBe('供应商排队中');
     expect(queueStatusLabel({ status: 'queued', providerTaskId: 'upstream-2' })).toBe('供应商排队中');
   });
+
+  it('makes the automatic prompt phase explicit', () => {
+    expect(queueStatusLabel({ status: 'prompting' })).toBe('提示词生成中');
+  });
 });

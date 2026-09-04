@@ -518,23 +518,12 @@ export function ProductionForm({ accountId, mode }: Props) {
       const uploadedReferenceAssetIds = uploadedSelections.filter((selection) => selection.kind === 'image').map((selection) => selection.id);
       const uploadedReferenceVideoAssetIds = uploadedSelections.filter((selection) => selection.kind === 'inventory-video').map((selection) => selection.id);
       const uploadedReferenceAudioAssetIds = uploadedSelections.filter((selection) => selection.kind === 'audio').map((selection) => selection.id);
+      // Automatic child-prompt generation is now a scheduler phase. The
+      // video task is created immediately with `prompting` status; the worker
+      // generates the child prompt before submitting the video upstream.
       if (mode === 'video' && promptMode === 'asset-template-child-prompt') {
-        const template = promptTemplates.find((item) => item.id === templateId);
-        const referenceAssetIds = [...selectedMedia.filter((asset) => asset.kind === 'image').map((asset) => asset.id), ...uploadedReferenceAssetIds];
-        const productImageAssetIds = selectedMedia.filter((asset) => asset.kind === 'product-image').map((asset) => asset.id);
-        const generatedResponse = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/generate-prompt`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ title: prompt, description: template?.content ?? '', promptModel, referenceAssetIds, productImageAssetIds }),
-        });
-        const generatedPayload = await generatedResponse.json().catch(() => null) as { success?: boolean; data?: { prompt?: string }; error?: string } | null;
-        if (!generatedResponse.ok || !generatedPayload?.success || !generatedPayload.data?.prompt?.trim()) {
-          throw new Error(generatedPayload?.error || '子提示词生成失败');
-        }
-        effectiveChildPrompt = generatedPayload.data.prompt.trim();
-        effectiveFinalPrompt = effectiveChildPrompt;
-        setChildPrompt(effectiveChildPrompt);
-        setFinalPrompt(effectiveFinalPrompt);
+        effectiveChildPrompt = '';
+        effectiveFinalPrompt = '';
       }
       const referenceAssetOrder: ProductionAssetSelection[] = [...selectedMedia, ...uploadedSelections];
       const body = buildGenerationPayload(mode, {

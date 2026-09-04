@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError, submitVideo } from '@/lib/providers/client';
+import { generateBigSnakePrompt, generateGeminiPrompt, generateGPTPrompt, normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError, submitVideo } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { createProviderTasks, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
@@ -11,13 +11,14 @@ import { getVideoCapability, validateVideoCapability } from '@/lib/workspace/pro
 import { getDefaultProductionAspectRatio, getDefaultProductionDuration, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { publishProductImageReferences } from '@/lib/workspace/productImages';
 import { getProductImageAbsolutePath, listProductImageAssets } from '@/lib/workspace/productImages';
-import { readAssetFile } from '@/lib/workspace/assetStore';
+import { listAssets, readAssetFile } from '@/lib/workspace/assetStore';
 import fs from 'node:fs';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { appendProductSummary, lookupProductSummary } from '@/lib/workspace/productSummary';
 import * as productSummaryModule from '@/lib/workspace/productSummary';
 import { enqueueProviderTask, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
+import type { GPTPromptAttachment } from '@/lib/providers/payloads';
 
 type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'quality-v4' | 'oairegbox-omni';
 const VIDEO_PROVIDERS: readonly VideoProvider[] = ['grok-video', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'quality-v4', 'oairegbox-omni'];
@@ -88,6 +89,25 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const accountLookup = (productSummaryModule as typeof productSummaryModule & { lookupProductSummaryForAccount?: typeof lookupProductSummary }).lookupProductSummaryForAccount;
     const productSummary = typeof accountLookup === 'function' ? accountLookup(id, referenceImageName) : lookupProductSummary(referenceImageName);
     const promptWithSummary = appendProductSummary(input.prompt, productSummary);
+    const automaticPrompt = input.promptMode === 'asset-template-child-prompt';
+    const requestedPromptModel = typeof input.promptModel === 'string' && input.promptModel.trim() ? input.promptModel.trim() : 'gemini-2.5-flash';
+    const promptTemplateContent = automaticPrompt && typeof input.templateId === 'string'
+      ? listAssets(id, 'prompt').find((asset) => asset.id === input.templateId)?.content?.trim().slice(0, 32_000) ?? ''
+      : '';
+    // Share one prompt-generation request across all outputs in a batch. The
+    // promise is reset after a rejection so scheduler retries can try again.
+    let childPromptPromise: Promise<GeneratedChildPrompt> | null = null;
+    const resolveChildPrompt = automaticPrompt
+      ? () => {
+        if (!childPromptPromise) {
+          childPromptPromise = generateChildPrompt({ accountId: id, title: input.prompt, templateContent: promptTemplateContent, productSummary, promptModel: requestedPromptModel, referenceAssetIds: orderedReferenceAssetIds, productImageAssetIds: orderedProductImageAssetIds }).catch((error) => {
+            childPromptPromise = null;
+            throw error;
+          });
+        }
+        return childPromptPromise;
+      }
+      : null;
     // Publish/validate reference media once per request. Previously this work
     // ran inside the count loop, duplicating filesystem copies and registry
     // writes for every output in a batch and making queue submission appear
@@ -148,9 +168,28 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           referenceAudioCount: referenceAudios.length,
         });
     }
-    const tasks = createProviderTasks(Array.from({ length: count }, (_, index) => ({ accountId: id, mode: 'video' as const, provider, model, prompt: promptWithSummary, status: 'queued' as const, progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'video', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: promptWithSummary, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } })));
+    const taskStatus = automaticPrompt ? 'prompting' as const : 'queued' as const;
+    const taskPrompt = automaticPrompt ? input.prompt.trim() : promptWithSummary;
+    const tasks = createProviderTasks(Array.from({ length: count }, (_, index) => ({ accountId: id, mode: 'video' as const, provider, model, prompt: taskPrompt, status: taskStatus, progress: automaticPrompt ? 2 : 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'video', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: requestedPromptModel, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: automaticPrompt ? undefined : promptWithSummary, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(automaticPrompt ? { promptGenerationPending: true, promptTemplateContent } : {}), ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } })));
     for (const task of tasks) {
-      enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'video', model, run: () => submitVideoTask({ taskId: task.id, provider, model, prompt: promptWithSummary, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos }) });
+      enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'video', model, run: async () => {
+        let finalPrompt = promptWithSummary;
+        if (resolveChildPrompt) {
+          const current = getProviderTask(task.id);
+          updateProviderTask(task.id, { status: 'prompting', progress: Math.max(2, current?.progress ?? 0), metadata: { ...(current?.metadata ?? {}), promptGenerationPending: true } });
+          try {
+            const generated = await resolveChildPrompt();
+            finalPrompt = generated.text;
+            const generatedTask = getProviderTask(task.id);
+            updateProviderTask(task.id, { prompt: finalPrompt, status: 'submitting', progress: Math.max(5, generatedTask?.progress ?? 0), metadata: { ...(generatedTask?.metadata ?? {}), childPrompt: finalPrompt, finalPrompt, promptGenerationPending: false, promptProvider: generated.provider, promptModel: generated.model, promptGenerationSource: generated.mode } });
+          } catch (error) {
+            const failedTask = getProviderTask(task.id);
+            updateProviderTask(task.id, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : 'prompt_provider_failed'), providerResponse: providerResponseSnapshot(error), metadata: { ...(failedTask?.metadata ?? {}), promptGenerationPending: false, promptGenerationFailed: true } });
+            throw error;
+          }
+        }
+        return submitVideoTask({ taskId: task.id, provider, model, prompt: finalPrompt, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos });
+      } });
     }
     const persistedTasks = tasks.map((task) => getProviderTask(task.id) ?? task);
     const first = persistedTasks[0];
@@ -184,6 +223,75 @@ async function submitVideoTask(input: { taskId: string; provider: VideoProvider;
   } catch (error) {
     updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }), metadata: { ...(getProviderTask(input.taskId)?.metadata ?? {}), execution: 'failed' } });
   }
+}
+
+type GeneratedChildPrompt = { provider: ProviderId; model: string; mode: 'live' | 'mock'; text: string; response: unknown };
+
+const MAX_PROMPT_REFERENCE_BYTES = 40 * 1024 * 1024;
+
+/** Generate a child prompt inside the scheduler instead of blocking task creation. */
+async function generateChildPrompt(input: {
+  accountId: string;
+  title: string;
+  templateContent: string;
+  productSummary: ReturnType<typeof lookupProductSummary>;
+  promptModel: string;
+  referenceAssetIds: readonly string[];
+  productImageAssetIds: readonly string[];
+}): Promise<GeneratedChildPrompt> {
+  const references = readPromptReferences(input.accountId, input.referenceAssetIds, input.productImageAssetIds);
+  const generationPrompt = appendProductSummary(
+    `请为商品“${input.title.trim()}”生成适合 TikTok 带货视频的子提示词。${input.templateContent.trim()}`.trim(),
+    input.productSummary,
+  );
+  const requested = input.promptModel.trim() || 'gemini-2.5-flash';
+  const isBigSnake = requested === 'bigsnake' || requested.startsWith('bigsnake:');
+  const isGpt = requested === 'gpt-2999' || /^gpt[-_]/i.test(requested);
+  const isGemini = /^gemini[-_]/i.test(requested);
+  if (!isBigSnake && !isGpt && !isGemini) throw new Error('prompt_model_invalid');
+
+  if (isBigSnake) {
+    const provider: ProviderId = 'bigsnake-prompt';
+    const config = getProviderConfig(provider);
+    const model = requested.startsWith('bigsnake:') ? requested.slice('bigsnake:'.length).trim() || config.model : config.model;
+    const result = await generateBigSnakePrompt({ model, prompt: generationPrompt, attachments: references });
+    return { provider, model, mode: result.mode, text: result.text.trim() || generationPrompt, response: result.response };
+  }
+  if (isGpt) {
+    const provider: ProviderId = 'gpt-2999-prompt';
+    const config = getProviderConfig(provider);
+    const model = /^gpt[-_]/i.test(requested) && requested !== 'gpt-2999' ? requested : config.model;
+    const result = await generateGPTPrompt({ model, messages: [{ role: 'user', content: generationPrompt }], attachments: references });
+    return { provider, model, mode: result.mode, text: result.text.trim() || generationPrompt, response: result.response };
+  }
+  const provider: ProviderId = 'yuanai-gemini-prompt';
+  const config = getProviderConfig(provider);
+  const model = isGemini ? requested : config.model;
+  const result = await generateGeminiPrompt({ model, prompt: generationPrompt, references });
+  return { provider, model, mode: result.mode, text: result.text.trim() || generationPrompt, response: result.response };
+}
+
+function readPromptReferences(accountId: string, referenceAssetIds: readonly string[], productImageAssetIds: readonly string[]): GPTPromptAttachment[] {
+  const references: GPTPromptAttachment[] = [];
+  let totalBytes = 0;
+  for (const assetId of referenceAssetIds) {
+    const stored = readAssetFile(accountId, assetId);
+    if (!stored || stored.asset.kind !== 'image') throw new Error('reference_asset_not_found');
+    totalBytes += stored.bytes.byteLength;
+    if (totalBytes > MAX_PROMPT_REFERENCE_BYTES) throw new Error('reference_images_too_large');
+    references.push({ name: stored.asset.name, mimeType: stored.asset.mimeType || 'image/png', dataBase64: Buffer.from(stored.bytes).toString('base64') });
+  }
+  const products = listProductImageAssets();
+  for (const assetId of productImageAssetIds) {
+    const product = products.find((candidate) => candidate.id === assetId);
+    if (!product) throw new Error('reference_asset_not_found');
+    let bytes: Buffer;
+    try { bytes = fs.readFileSync(getProductImageAbsolutePath(assetId)); } catch { throw new Error('reference_asset_not_found'); }
+    totalBytes += bytes.byteLength;
+    if (totalBytes > MAX_PROMPT_REFERENCE_BYTES) throw new Error('reference_images_too_large');
+    references.push({ name: product.name, mimeType: product.mimeType || 'image/png', dataBase64: bytes.toString('base64') });
+  }
+  return references;
 }
 
 function parseAssetOrder(value: unknown): Array<{ id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' }> {
