@@ -15,7 +15,10 @@ describe('provider output store', () => {
     // run in the same workspace process as the app and used to delete every
     // generated image under data/generated before each case.
     process.env.WORKSPACE_DATA_ROOT = testRoot;
-    fs.rmSync(getWorkspacePath('generated'), { recursive: true, force: true });
+    // Use the already fixed testRoot directly for cleanup. Do not resolve the
+    // deletion target through mutable process.env state, otherwise another
+    // parallel test could theoretically redirect it to production data.
+    fs.rmSync(path.join(testRoot, 'generated'), { recursive: true, force: true });
   });
 
   it('keeps test cleanup inside the process-specific test root', () => {
