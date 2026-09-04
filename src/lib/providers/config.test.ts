@@ -3,11 +3,12 @@ import { getProviderCatalog, getProviderConfig, isLiveProviderEnabled, isLivePro
 
 describe('provider configuration safety', () => {
   it('exposes catalog without requiring secrets', () => {
-    expect(getProviderCatalog().map((provider) => provider.id)).toEqual(expect.arrayContaining(['grok-video', 'mgrouter-grok-image', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'yuanai-gemini-prompt', 'yuanai-image', 'pomoai-gemini-image', 'gpt-2999-prompt', 'oairegbox-omni']));
+    expect(getProviderCatalog().map((provider) => provider.id)).toEqual(expect.arrayContaining(['grok-video', 'mgrouter-grok-image', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'pro666-video', 'yuanai-gemini-prompt', 'yuanai-image', 'pomoai-gemini-image', 'gpt-2999-prompt', 'oairegbox-omni']));
     expect(isLiveProviderEnabled()).toBe(false);
     expect(isLiveProvidersAllowed()).toBe(false);
     expect(isProviderLiveEnabled('grok-video')).toBe(false);
     expect(isProviderLiveEnabled('minimax-h3')).toBe(false);
+    expect(isProviderLiveEnabled('pro666-video')).toBe(false);
   });
 
   it('allows only exact provider origins', () => {
@@ -18,6 +19,7 @@ describe('provider configuration safety', () => {
     expect(validateProviderUrl('wan3-video', 'http://api.manjuai.top/v1/videos/generations')).toBe(false);
     expect(validateProviderUrl('minimax-h3', 'https://token.secure-skill.com/v1/videos')).toBe(true);
     expect(validateProviderUrl('minimax-h3', 'https://api.manjuai.top/v1/videos/generations')).toBe(false);
+    expect(validateProviderUrl('pro666-video', 'https://api.pro666.top/v1/videos')).toBe(true);
   });
 
   it('returns safe defaults and never exposes keys', () => {
@@ -28,5 +30,7 @@ describe('provider configuration safety', () => {
     expect(getProviderConfig('mgrouter-grok-video').model).toBe('grok-imagine-video-1.5');
     expect(getProviderConfig('minimax-h3').baseUrl).toBe('https://token.secure-skill.com');
     expect(getProviderConfig('minimax-h3').model).toBe('minimax-h3');
+    expect(getProviderConfig('pro666-video').baseUrl).toBe('https://api.pro666.top');
+    expect(getProviderConfig('pro666-video').model).toBe('sd2-933-mini');
   });
 });

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
 
 describe('provider payload contracts', () => {
   it('uses documented Origin/Junze image contracts and preserves portrait ratios', () => {
@@ -63,6 +63,13 @@ describe('provider payload contracts', () => {
     expect(normalizeAudioPlaceholders('show product')).toBe('show product');
     expect(normalizeAudioPlaceholders('show product', 1)).toBe('show product <AUDIO_0>');
     expect(normalizeAudioPlaceholders('show <AUDIO_0>', 2)).toBe('show <AUDIO_0> <AUDIO_1>');
+  });
+
+  it('builds the Pro666 sd2-933-mini payload', () => {
+    expect(buildPro666VideoPayload({ prompt: ' demo ', images: ['https://assets.example/a.jpg'], audios: ['https://assets.example/a.mp3'] })).toEqual({
+      model: 'sd2-933-mini', prompt: 'demo', duration: 12, resolution: '720p', aspect_ratio: '9:16', generateAudio: true,
+      images: ['https://assets.example/a.jpg'], audios: ['https://assets.example/a.mp3'],
+    });
   });
 
   it('builds MGRouter and Wan multi-media payloads', () => {

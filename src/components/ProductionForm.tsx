@@ -1,7 +1,7 @@
 'use client';
 
-import { Film, Image as ImageIcon, LoaderCircle, Save, Search, WandSparkles, X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Download, Film, Image as ImageIcon, LoaderCircle, Save, Search, WandSparkles, X } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { getProviderCatalog, type ProviderCatalogEntry, type ProviderId } from '@/lib/providers/config';
 import {
@@ -21,6 +21,8 @@ import {
 import type { ProductionRestoreConfig } from '@/lib/workspace/productionRestore';
 import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
 import { formatProviderError } from '@/lib/providers/errorMessages';
+import * as XLSX from 'xlsx';
+import { parsePidListText, parsePidRows } from './productImageAssetsModel';
 
 type Props = { accountId: string; mode: 'image' | 'prompt' | 'video' };
 type PromptAsset = { id: string; name: string; content: string; category?: 'image' | 'video'; accountName?: string };
@@ -32,6 +34,7 @@ const VIDEO_CAPABILITY_KEYS: Partial<Record<ProviderId, string>> = {
   'wan3-video': 'wan3-video:wan3.0-prime-r2v',
   'oairegbox-omni': 'oairegbox:omni',
   'minimax-h3': 'minimax-h3:minimax-h3',
+  'pro666-video': 'pro666-video:sd2-933-mini',
   'quality-v4': 'quality-v4:quality-v4',
 };
 
@@ -55,6 +58,7 @@ export function modelIdForVideoProvider(provider: ProviderId, currentModelId?: s
     // state and submission uses the documented canonical id.
     return 'minimax-h3';
   }
+  if (provider === 'pro666-video') return 'sd2-933-mini';
   if (provider === 'mgrouter-grok-video') return currentModelId === 'grok-imagine-video-1.5-preview' ? currentModelId : 'grok-imagine-video-1.5';
   if (provider === 'grok-video') {
     if (currentModelId === 'sd-mini') return currentModelId;
@@ -80,6 +84,7 @@ export const VIDEO_MODELS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'wan3.0-prime-i2v', label: 'Wan 3.0 Prime I2V' },
   { id: 'wan3.0-prime-r2v', label: 'Wan 3.0 Prime R2V' },
   { id: 'minimax-h3', label: 'MiniMax H3' },
+  { id: 'sd2-933-mini', label: 'sd2-933-mini / Pro666' },
   // Legacy ids remain exported for restore compatibility but are hidden from
   // the live supplier selector below.
   { id: 'minimax-h3-r2v', label: 'MiniMax H3 R2V (legacy)' },
@@ -89,6 +94,7 @@ const VIDEO_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers:
   { id: 'grok', label: 'Grok', providers: ['grok-video', 'mgrouter-grok-video'] },
   { id: 'omni-fast-no-water', label: 'Omni', providers: ['oairegbox-omni'] },
   { id: 'minimax-h3', label: 'MiniMax H3', providers: ['minimax-h3'] },
+  { id: 'sd2-933-mini', label: 'sd2-933-mini', providers: ['pro666-video'] },
   { id: 'wan3.0-prime-r2v', label: 'Wan 3.0 Prime', providers: ['wan3-video'] },
   { id: 'quality-v4', label: 'Quality V4', providers: ['quality-v4'] },
   { id: 'seedance', label: 'Seedance', providers: [] },
@@ -150,9 +156,10 @@ export function ProductionForm({ accountId, mode }: Props) {
   const [assetPickerKind, setAssetPickerKind] = useState<'image' | 'inventory-video' | 'audio'>('image');
   const [assetPickerTab, setAssetPickerTab] = useState<'material' | 'product'>('material');
   const [assetPickerQuery, setAssetPickerQuery] = useState('');
+  const [activeProductPid, setActiveProductPid] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!assetPickerOpen) setAssetPickerQuery('');
+    if (!assetPickerOpen) { setAssetPickerQuery(''); setActiveProductPid(null); }
   }, [assetPickerOpen]);
 
   useEffect(() => {
@@ -179,6 +186,8 @@ export function ProductionForm({ accountId, mode }: Props) {
       ? `grok-video:${videoModelId}`
       : mode === 'video' && provider === 'minimax-h3'
         ? `minimax-h3:${videoModelId.startsWith('minimax-h3-') ? videoModelId : 'minimax-h3'}`
+      : mode === 'video' && provider === 'pro666-video'
+        ? 'pro666-video:sd2-933-mini'
       : mode === 'video' && provider === 'quality-v4'
         ? 'quality-v4:quality-v4'
       : VIDEO_CAPABILITY_KEYS[provider];
@@ -251,6 +260,16 @@ export function ProductionForm({ accountId, mode }: Props) {
     return () => { cancelled = true; };
   }, [accountId, mode]);
 
+  const refreshProductAssets = useCallback(async () => {
+    try {
+      const response = await fetch(`/api/workspace/product-images?accountId=${encodeURIComponent(accountId)}`, { cache: 'no-store' });
+      const payload = await response.json() as { success?: boolean; data?: { assets?: MediaAsset[] } };
+      if (!response.ok || !payload.success) return;
+      const shared = (payload.data?.assets ?? []).map((asset) => ({ ...asset, kind: 'product-image' as const, shared: asset.shared !== false }));
+      setMediaAssets((current) => [...current.filter((asset) => asset.kind !== 'product-image'), ...shared]);
+    } catch { /* product gallery is optional until 8765 is available */ }
+  }, [accountId]);
+
   useEffect(() => {
     if (mode === 'prompt') return;
     let cancelled = false;
@@ -258,9 +277,9 @@ export function ProductionForm({ accountId, mode }: Props) {
       .then(async (groups) => {
         let shared: MediaAsset[] = [];
         try {
-          const response = await fetch('/api/workspace/product-images', { cache: 'no-store' });
+          const response = await fetch(`/api/workspace/product-images?accountId=${encodeURIComponent(accountId)}`, { cache: 'no-store' });
           const payload = await response.json() as { success?: boolean; data?: { assets?: MediaAsset[] } };
-          if (response.ok && payload.success) shared = (payload.data?.assets ?? []).map((asset) => ({ ...asset, kind: 'product-image', shared: true }));
+          if (response.ok && payload.success) shared = (payload.data?.assets ?? []).map((asset) => ({ ...asset, kind: 'product-image', shared: asset.shared !== false }));
         } catch { /* shared product gallery is optional when 8765 data is unavailable */ }
         if (!cancelled) setMediaAssets([...groups.flat(), ...shared]);
       });
@@ -288,15 +307,28 @@ export function ProductionForm({ accountId, mode }: Props) {
   const availableMediaAssets = mediaAssets.filter((asset) => mode === 'image'
     ? (asset.kind === 'image' || asset.kind === 'product-image')
     : asset.kind === 'image' || asset.kind === 'product-image' ? maxImages > 0 : asset.kind === 'inventory-video' ? maxVideos > 0 : maxAudios > 0);
+  const productAssetKey = (asset: MediaAsset) => `${asset.shared ? 'shared' : accountId}:${asset.pid ?? ''}`;
   const pickerAssets = useMemo(() => {
     const query = assetPickerQuery.trim().toLowerCase();
     return availableMediaAssets
       .filter((asset) => (assetPickerKind === 'image'
         ? (asset.kind === 'image' || asset.kind === 'product-image')
         : asset.kind === assetPickerKind))
-      .filter((asset) => assetPickerKind !== 'image' || (assetPickerTab === 'product' ? asset.shared : !asset.shared))
+      .filter((asset) => assetPickerKind !== 'image' || (assetPickerTab === 'product' ? asset.kind === 'product-image' : asset.kind === 'image'))
+      .filter((asset) => assetPickerKind !== 'image' || assetPickerTab !== 'product' || !activeProductPid || productAssetKey(asset) === activeProductPid)
       .filter((asset) => !query || `${asset.name} ${asset.pid ?? ''}`.toLowerCase().includes(query));
-  }, [assetPickerKind, assetPickerQuery, assetPickerTab, availableMediaAssets]);
+  }, [accountId, activeProductPid, assetPickerKind, assetPickerQuery, assetPickerTab, availableMediaAssets]);
+  const productFolders = useMemo(() => {
+    const grouped = new Map<string, MediaAsset[]>();
+    for (const asset of availableMediaAssets) {
+      if (asset.kind !== 'product-image' || !asset.pid) continue;
+      const key = productAssetKey(asset);
+      const list = grouped.get(key) ?? [];
+      list.push(asset);
+      grouped.set(key, list);
+    }
+    return [...grouped.entries()].map(([key, images]) => ({ key, pid: images[0].pid as string, images, cover: images[0] }));
+  }, [accountId, availableMediaAssets]);
   const selectedMediaForDisplay = selectedAssetIds
     .map((id) => mediaAssets.find((asset) => asset.id === id))
     .filter((asset): asset is MediaAsset => Boolean(asset));
@@ -408,6 +440,8 @@ export function ProductionForm({ accountId, mode }: Props) {
         ? 'oairegbox-omni'
       : nextModelId === 'minimax-h3' || nextModelId.startsWith('minimax-h3-')
           ? 'minimax-h3'
+        : nextModelId === 'sd2-933-mini'
+          ? 'pro666-video'
         : nextModelId === 'quality-v4'
           ? 'quality-v4'
         : nextModelId === 'sd-mini'
@@ -499,7 +533,7 @@ export function ProductionForm({ accountId, mode }: Props) {
     try {
       let effectiveChildPrompt = childPrompt;
       let effectiveFinalPrompt = finalPrompt;
-      const selectedAssetIds = selectedMedia.filter((asset) => !asset.shared).map((asset) => asset.id);
+      const selectedAssetIds = selectedMedia.filter((asset) => asset.kind !== 'product-image').map((asset) => asset.id);
       // Upload all dropped references concurrently so queue submission is not
       // delayed by one network round-trip per file.
       const pendingUploads = droppedFiles.map(async (file): Promise<ProductionAssetSelection> => {
@@ -532,7 +566,7 @@ export function ProductionForm({ accountId, mode }: Props) {
         finalPrompt: effectiveFinalPrompt || effectiveChildPrompt || prompt,
         childPrompt: effectiveChildPrompt,
         provider,
-        model: mode === 'video' && (provider === 'wan3-video' || provider === 'grok-video' || provider === 'mgrouter-grok-video' || provider === 'quality-v4' || provider === 'minimax-h3') ? videoModelId : selectedProvider?.model,
+        model: mode === 'video' && (provider === 'wan3-video' || provider === 'grok-video' || provider === 'mgrouter-grok-video' || provider === 'quality-v4' || provider === 'minimax-h3' || provider === 'pro666-video') ? videoModelId : selectedProvider?.model,
         modelId: mode === 'video' ? videoModelId : undefined,
         supplierId: mode === 'video' ? provider : undefined,
         promptMode,
@@ -575,6 +609,7 @@ export function ProductionForm({ accountId, mode }: Props) {
     {mode === 'video' && <div className="prompt-mode-bar" role="group" aria-label="提示词模式"><button type="button" className={`prompt-mode-button ${promptMode === 'manual' ? 'active' : ''}`} onClick={() => { setPromptMode('manual'); setChildPrompt(''); setFinalPrompt(''); }}>手写提示词</button><button type="button" className={`prompt-mode-button ${promptMode === 'asset-template-child-prompt' ? 'active' : ''}`} onClick={() => { setPromptMode('asset-template-child-prompt'); setChildPrompt(''); setFinalPrompt(''); }}>自动生成子提示词</button></div>}
      <label>{mode === 'prompt' ? '商品 / 提示词上下文' : mode === 'image' ? '图片生成提示词' : promptMode === 'manual' ? '视频提示词' : '商品 / 场景上下文'}<textarea className="select production-prompt-textarea" rows={8} value={prompt} onChange={(event) => { setPrompt(event.target.value); if (!originalPrompt) setOriginalPrompt(event.target.value); }} placeholder={mode === 'prompt' ? '输入商品标题、卖点和目标人群，生成子提示词' : promptMode === 'manual' ? '直接写入可提交给视频模型的完整提示词' : '输入商品卖点、场景和目标人群，自动生成视频子提示词'} /></label>
      {promptTemplateTools}
+    {mode === 'video' && <ProductSummaryUploader accountId={accountId} />}
     {mode === 'video' && promptMode === 'manual' && <div className="form-row"><label>账号资产提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">不使用模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}{item.accountName ? ` · ${item.accountName}` : ''}</option>)}</select><small className="field-help">仅显示当前工作区账号的提示词模板，载入后仍可继续手写修改。</small></label></div>}
     {mode === 'video' && promptMode === 'asset-template-child-prompt' && <div className="form-row"><label>账号资产提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">请选择模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>子提示词模型<select className="select" value={promptModel} onChange={(event) => setPromptModel(event.target.value)}><option value="bigsnake">BigSnake GPT-5.5</option><option value="gpt-2999">GPT-2999</option><option value="gemini-2.5-flash">Gemini 2.5 Flash</option></select></label></div>}
     {mode === 'video' && promptMode === 'manual' && <div className="prompt-manual-note">手写模式将直接使用上方提示词提交生产；切换到自动模式后，系统会先调用提示词模型生成子提示词，再加入生产队列。</div>}
@@ -587,10 +622,12 @@ export function ProductionForm({ accountId, mode }: Props) {
     {assetPickerOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssetPickerOpen(false); }}>
       <section className="modal-card asset-picker-modal" role="dialog" aria-modal="true" aria-labelledby="asset-picker-title">
         <div className="panel-header"><div><h2 id="asset-picker-title" className="panel-title">选择{assetPickerKind === 'image' ? '参考图' : assetPickerKind === 'inventory-video' ? '参考视频' : '参考音频'}</h2><div className="panel-meta">已选择 {assetPickerKind === 'image' ? selectedImageCountForDisplay : assetPickerKind === 'inventory-video' ? selectedVideoCountForDisplay : selectedAudioCountForDisplay} 项</div></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setAssetPickerOpen(false)}><X size={15} /></button></div>
-        {mode === 'video' && <ProductSummaryUploader accountId={accountId} compact />}
-        {assetPickerKind === 'image' && <div className="asset-picker-tabs"><button type="button" className={assetPickerTab === 'material' ? 'active' : ''} onClick={() => setAssetPickerTab('material')}>素材图片</button><button type="button" className={assetPickerTab === 'product' ? 'active' : ''} onClick={() => setAssetPickerTab('product')}>商品图片</button></div>}
+        {assetPickerKind === 'image' && <div className="asset-picker-tabs"><button type="button" className={assetPickerTab === 'material' ? 'active' : ''} onClick={() => { setAssetPickerTab('material'); setActiveProductPid(null); }}>素材图片</button><button type="button" className={assetPickerTab === 'product' ? 'active' : ''} onClick={() => { setAssetPickerTab('product'); setActiveProductPid(null); }}>商品图片</button></div>}
+        {assetPickerKind === 'image' && assetPickerTab === 'product' && <ProductGalleryImporter accountId={accountId} onImported={refreshProductAssets} />}
+        {assetPickerKind === 'image' && assetPickerTab === 'product' && activeProductPid && <button type="button" className="ghost-button asset-picker-back" onClick={() => setActiveProductPid(null)}>返回商品文件夹</button>}
          <label className="asset-picker-search"><Search size={15} /><span className="sr-only">搜索素材</span><input value={assetPickerQuery} onChange={(event) => setAssetPickerQuery(event.target.value)} placeholder="搜索文件名或 PID" /></label>
-         <div className="asset-reference-grid asset-picker-grid">{pickerAssets.map((asset) => {
+         {assetPickerKind === 'image' && assetPickerTab === 'product' && !activeProductPid && <div className="asset-reference-grid asset-picker-grid product-folder-picker-grid">{productFolders.filter((folder) => !assetPickerQuery.trim() || folder.pid.toLowerCase().includes(assetPickerQuery.trim().toLowerCase())).map((folder) => <button type="button" className="asset-reference-option asset-picker-option product-folder-picker-option" key={folder.key} onClick={() => setActiveProductPid(folder.key)}><div className="asset-picker-image-preview">{folder.cover ? <AssetPickerPreview accountId={accountId} asset={folder.cover} /> : <ImageIcon size={22} />}</div><span className="asset-picker-name">PID {folder.pid}</span><small>{folder.images.length} 张商品图片</small></button>)}{productFolders.length === 0 && <div className="asset-picker-empty">还没有导入商品图片文件夹</div>}</div>}
+         {(assetPickerKind !== 'image' || assetPickerTab !== 'product' || activeProductPid) && <div className="asset-reference-grid asset-picker-grid">{pickerAssets.map((asset) => {
            const selected = selectedAssetIds.includes(asset.id);
            const order = selectedAssetIds.indexOf(asset.id);
            return <label key={asset.id} className={`asset-reference-option asset-picker-option ${selected ? 'is-selected' : ''} ${asset.shared ? 'shared-asset' : ''}`}>
@@ -600,7 +637,7 @@ export function ProductionForm({ accountId, mode }: Props) {
              <span className="asset-picker-name">{asset.name}</span>
              <small>{asset.shared ? `商品图${asset.pid ? ` · ${asset.pid}` : ''} · 全运营共享` : assetPickerKind === 'inventory-video' ? '库存视频 · 当前账号' : assetPickerKind === 'audio' ? '音频 · 当前账号' : '素材图 · 当前账号'}</small>
            </label>;
-         })}{pickerAssets.length === 0 && <div className="asset-picker-empty">没有匹配的素材</div>}</div>
+         })}{pickerAssets.length === 0 && <div className="asset-picker-empty">没有匹配的素材</div>}</div>}
         <div className="modal-actions"><button type="button" className="ghost-button" onClick={() => setAssetPickerOpen(false)}>完成选择</button></div>
       </section>
     </div>}
@@ -622,11 +659,79 @@ function getVideoCapabilityByKey(key: string): VideoCapability | undefined {
 
 function AssetPickerPreview({ accountId, asset }: { accountId: string; asset: MediaAsset }) {
   const [failed, setFailed] = useState(false);
-  const src = asset.shared
+  const src = asset.shared || asset.kind === 'product-image'
     ? asset.coverUrl || asset.url || `/api/workspace/product-images/preview?assetId=${encodeURIComponent(asset.id)}`
     : `/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(asset.id)}`;
   if (failed || !src) return <div className="asset-picker-image-preview asset-picker-image-placeholder"><ImageIcon size={24} /><span>暂无预览</span></div>;
   return <div className="asset-picker-image-preview"><img src={src} alt={`${asset.name} 预览`} loading="lazy" onError={() => setFailed(true)} /></div>;
+}
+
+function ProductGalleryImporter({ accountId, onImported }: { accountId: string; onImported: () => Promise<void> | void }) {
+  const [query, setQuery] = useState('');
+  const [pidFileName, setPidFileName] = useState('');
+  const [pidFilePids, setPidFilePids] = useState<string[]>([]);
+  const [results, setResults] = useState<Array<{ pid: string; title?: string; description?: string; coverUrl?: string }>>([]);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  async function readPidFile(file: File): Promise<string[]> {
+    const extension = file.name.toLowerCase().split('.').pop();
+    if (extension === 'txt') return parsePidListText(await file.text());
+    if (extension !== 'xlsx' && extension !== 'xls') throw new Error('PID 文件仅支持 .xlsx、.xls 或 .txt');
+    const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array', dense: true, raw: false });
+    const sheetName = workbook.SheetNames[0];
+    if (!sheetName) return [];
+    const rows = XLSX.utils.sheet_to_json<unknown[]>(workbook.Sheets[sheetName], { header: 1, defval: '', raw: false }) as unknown[][];
+    return parsePidRows(rows);
+  }
+  async function handlePidFile(file: File | undefined) {
+    if (!file) return;
+    try {
+      const pids = await readPidFile(file);
+      setPidFileName(file.name); setPidFilePids(pids); setQuery(pids.join(', '));
+      setMessage(pids.length ? `已读取 ${pids.length} 个 PID` : '文件中没有找到有效 PID');
+    } catch (error) { setPidFileName(''); setPidFilePids([]); setMessage(error instanceof Error ? error.message : 'PID 文件读取失败'); }
+  }
+  async function search() {
+    const pids = [...new Set((pidFilePids.length ? pidFilePids : parsePidListText(query)))].slice(0, 100);
+    if (!pids.length) { setMessage('请输入 PID 或选择 PID 文件'); return; }
+    setBusy(true); setMessage('');
+    try {
+      const payloads: PromiseSettledResult<typeof results>[] = [];
+      for (let index = 0; index < pids.length; index += 8) {
+        const batch = await Promise.allSettled(pids.slice(index, index + 8).map(async (pid) => {
+          const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/product-images?source=8765&query=${encodeURIComponent(pid)}`, { cache: 'no-store' });
+          const payload = await response.json() as { success?: boolean; data?: { gallery?: typeof results }; error?: string };
+          if (!response.ok || !payload.success) throw new Error(payload.error || '8765 图库查询失败');
+          return payload.data?.gallery ?? [];
+        }));
+        payloads.push(...batch);
+      }
+      const fulfilled = payloads.filter((result): result is PromiseFulfilledResult<NonNullable<typeof results>> => result.status === 'fulfilled');
+      const merged = [...new Map(fulfilled.flatMap((result) => result.value).map((item) => [item.pid, item])).values()];
+      if (!merged.length) throw new Error('8765 图库查询失败');
+      setResults(merged); setSelected([]);
+      if (fulfilled.length < payloads.length) setMessage(`部分 PID 未找到，已展示 ${merged.length} 个结果`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : '8765 图库查询失败'); }
+    finally { setBusy(false); }
+  }
+  async function importSelected() {
+    if (!selected.length) return;
+    setBusy(true); setMessage('');
+    try {
+      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/product-images`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pids: selected }) });
+      const payload = await response.json() as { success?: boolean; error?: string };
+      if (!response.ok || !payload.success) throw new Error(payload.error || '商品图片导入失败');
+      setSelected([]); setMessage(`已导入 ${selected.length} 个 PID 文件夹`); await onImported();
+    } catch (error) { setMessage(error instanceof Error ? error.message : '商品图片导入失败'); }
+    finally { setBusy(false); }
+  }
+  return <div className="product-gallery-importer">
+    <form className="product-image-search" role="search" onSubmit={(event) => { event.preventDefault(); void search(); }}><label className="sr-only" htmlFor="production-product-pid-query">搜索 8765 PID</label><input id="production-product-pid-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索 8765 PID、标题或描述" /><button type="submit" className="ghost-button" disabled={busy}><Search size={14} /> 查询</button><button type="button" className="primary-button" onClick={() => void importSelected()} disabled={busy || !selected.length}><Download size={14} /> 导入选中 ({selected.length})</button></form>
+    <label className="product-pid-file-dropzone compact" onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void handlePidFile(event.dataTransfer.files?.[0]); }}><input type="file" accept=".xlsx,.xls,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/plain" onChange={(event) => { void handlePidFile(event.target.files?.[0]); event.currentTarget.value = ''; }} /><span><Download size={14} />拖入或选择 PID 文件</span><small>Excel 第一列或 TXT 每行一个 PID{pidFileName ? ` · ${pidFileName}（${pidFilePids.length} 个）` : ''}</small></label>
+    {message && <small role="status" className="field-help">{message}</small>}
+    {results.length > 0 && <div className="product-gallery-import-results">{results.map((item) => <label key={item.pid} className="product-gallery-import-card"><input type="checkbox" checked={selected.includes(item.pid)} onChange={(event) => setSelected((current) => event.target.checked ? [...new Set([...current, item.pid])] : current.filter((pid) => pid !== item.pid))} />{item.coverUrl ? <img src={item.coverUrl} alt={`${item.pid} 封面`} /> : <span className="product-cover-placeholder"><ImageIcon size={20} /></span>}<span><strong>{item.pid}</strong><small>{item.title || item.description || '8765 PID 文件夹'}</small></span></label>)}</div>}
+  </div>;
 }
 
 function ProductSummaryUploader({ accountId, compact = false }: { accountId: string; compact?: boolean }) {
@@ -675,6 +780,7 @@ export function providersForVideoModel(providers: ReadonlyArray<ProviderCatalogE
   if (modelId === 'sd-mini') return providers.filter((item) => item.id === 'grok-video');
   if (modelId === 'omni-fast-no-water') return providers.filter((item) => item.id === 'oairegbox-omni');
   if (modelId === 'minimax-h3' || modelId.startsWith('minimax-h3-')) return providers.filter((item) => item.id === 'minimax-h3');
+  if (modelId === 'sd2-933-mini') return providers.filter((item) => item.id === 'pro666-video');
   if (modelId === 'grok-video' || modelId === 'grok-imagine-video-1.5' || modelId === 'grok-imagine-video-1.5-preview') {
     return providers.filter((item) => item.id === 'mgrouter-grok-video');
   }
@@ -709,6 +815,7 @@ export function videoModelsForProvider(provider: ProviderId, currentModelId?: st
       : undefined;
     return [VIDEO_MODELS.find((item) => item.id === 'minimax-h3'), legacy].filter((item): item is { id: string; label: string } => Boolean(item));
   }
+  if (provider === 'pro666-video') return VIDEO_MODELS.filter((item) => item.id === 'sd2-933-mini');
   if (provider === 'wan3-video') return VIDEO_MODELS.filter((item) => item.id.startsWith('wan3.0-prime-'));
   return VIDEO_MODELS.filter((item) => item.id !== 'sd-mini' && item.id !== 'grok-video');
 }

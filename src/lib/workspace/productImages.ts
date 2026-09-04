@@ -24,6 +24,12 @@ export type ProductImageAsset = {
   size: number;
 };
 
+export type ProductImageFolder = ProductImageRecord & {
+  coverAssetId?: string;
+  coverUrl?: string;
+  images: ProductImageAsset[];
+};
+
 export type GalleryItem = { pid: string; title?: string; description?: string; coverUrl?: string; [key: string]: unknown };
 export type ProductImageCleanupResult = {
   cutoffDate: string;
@@ -39,7 +45,29 @@ const DEFAULT_8765_BASE = 'http://127.0.0.1:8765';
 const MAX_PID_COUNT = 100;
 const MAX_ARCHIVE_BYTES = 500 * 1024 * 1024;
 const MAX_ENTRY_BYTES = 100 * 1024 * 1024;
+const MAX_EXTRACTED_BYTES = 500 * 1024 * 1024;
 const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.avif', '.bmp']);
+
+let sourceToken: string | null = null;
+let sourceTokenBase = '';
+
+function sourceTimeoutMs(): number {
+  const configured = Number(process.env.WORKSPACE_8765_TIMEOUT_MS || 30_000);
+  return Number.isFinite(configured) ? Math.max(1_000, Math.min(120_000, Math.round(configured))) : 30_000;
+}
+
+async function fetchSource(fetcher: typeof fetch, input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), sourceTimeoutMs());
+  try {
+    return await fetcher(input, { ...init, signal: init.signal ?? controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error('product_source_timeout');
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 
@@ -89,25 +117,89 @@ export async function queryProductGallery(
   params: { query?: string; membership?: string; category?: string; limit?: number; offset?: number } = {},
   fetcher: typeof fetch = fetch,
 ): Promise<GalleryItem[]> {
-  const url = new URL(`${baseUrl()}/api/v1/gallery`);
-  if (params.query?.trim()) url.searchParams.set('query', params.query.trim().slice(0, 200));
+  const root = baseUrl();
+  const url = new URL(`${root}/api/v1/gallery/search`);
+  if (params.query?.trim()) url.searchParams.set('q', params.query.trim().slice(0, 200));
   if (params.membership?.trim()) url.searchParams.set('membership', params.membership.trim().slice(0, 80));
   if (params.category?.trim()) url.searchParams.set('category', params.category.trim().slice(0, 80));
   if (params.limit !== undefined) url.searchParams.set('limit', String(Math.max(1, Math.min(100, Math.round(params.limit)))));
   if (params.offset !== undefined) url.searchParams.set('offset', String(Math.max(0, Math.min(1_000_000, Math.round(params.offset)))));
-  const response = await fetcher(url, { headers: { accept: 'application/json' } });
+  // Prefer the current search endpoint to avoid an extra failed round trip on
+  // every PID. Fall back to the legacy route for older 8765 deployments.
+  const legacy = new URL(`${root}/api/v1/gallery`);
+  if (params.query?.trim()) legacy.searchParams.set('query', params.query.trim().slice(0, 200));
+  if (params.membership?.trim()) legacy.searchParams.set('membership', params.membership.trim().slice(0, 80));
+  if (params.category?.trim()) legacy.searchParams.set('category', params.category.trim().slice(0, 80));
+  if (params.limit !== undefined) legacy.searchParams.set('limit', String(Math.max(1, Math.min(100, Math.round(params.limit)))));
+  if (params.offset !== undefined) legacy.searchParams.set('offset', String(Math.max(0, Math.min(1_000_000, Math.round(params.offset)))));
+  let response = await fetchSource(fetcher, url, { headers: { accept: 'application/json' } });
+  if (response.status === 403 || response.status === 404 || response.status === 405) response = await fetchSource(fetcher, legacy, { headers: { accept: 'application/json' } });
   if (!response.ok) throw new Error(`product_source_http_${response.status}`);
   const payload = await response.json() as unknown;
-  if (Array.isArray(payload)) return payload.filter(isGalleryItem).map(clone);
-  if (payload && typeof payload === 'object') {
-    const candidate = payload as { items?: unknown; data?: unknown; results?: unknown };
-    for (const value of [candidate.items, candidate.data, candidate.results]) if (Array.isArray(value)) return value.filter(isGalleryItem).map(clone);
-  }
+  const items = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === 'object'
+      ? ((payload as { items?: unknown; data?: unknown; results?: unknown }).items
+        ?? (payload as { data?: unknown }).data
+        ?? (payload as { results?: unknown }).results)
+      : undefined;
+  if (Array.isArray(items)) return items.filter(isGalleryItem).map((item) => normalizeGalleryItem(item, root));
   throw new Error('product_gallery_response_invalid');
 }
 
 function isGalleryItem(value: unknown): value is GalleryItem {
   return Boolean(value && typeof value === 'object' && typeof (value as { pid?: unknown }).pid === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test((value as { pid: string }).pid));
+}
+
+function normalizeGalleryItem(item: GalleryItem, root: string): GalleryItem {
+  const raw = item as GalleryItem & { cover?: unknown; image_count?: unknown; cover_available?: unknown };
+  const coverUrl = typeof raw.coverUrl === 'string' && raw.coverUrl.trim()
+    ? raw.coverUrl.trim()
+    : raw.cover || raw.cover_available
+      ? `${root}/api/v1/gallery/cover/${encodeURIComponent(item.pid)}`
+      : undefined;
+  return clone({ ...item, ...(coverUrl ? { coverUrl } : {}), ...(typeof raw.image_count === 'number' ? { imageCount: raw.image_count } : {}) });
+}
+
+async function sourceAuthHeaders(fetcher: typeof fetch): Promise<Record<string, string>> {
+  const root = baseUrl();
+  if (sourceToken && sourceTokenBase === root) return { 'X-Clone-Token': sourceToken };
+  const response = await fetchSource(fetcher, `${root}/api/v1/session`, { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`product_source_http_${response.status}`);
+  const payload = await response.json() as { token?: unknown };
+  if (typeof payload.token !== 'string' || !payload.token.trim()) throw new Error('product_source_session_invalid');
+  sourceToken = payload.token.trim();
+  sourceTokenBase = root;
+  return { 'X-Clone-Token': sourceToken };
+}
+
+async function authenticatedPost(fetcher: typeof fetch, path: string, body: Record<string, unknown>, accept: string): Promise<Response> {
+  const send = async (headers: Record<string, string>) => fetchSource(fetcher, `${baseUrl()}${path}`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json', accept }, body: JSON.stringify(body) });
+  let response = await send(await sourceAuthHeaders(fetcher));
+  // 8765 regenerates its local session token on process restart. Refresh it
+  // once on an authorization failure so imports recover without a manual
+  // server restart or page reload.
+  if (response.status === 401 || response.status === 403) {
+    sourceToken = null;
+    sourceTokenBase = '';
+    response = await send(await sourceAuthHeaders(fetcher));
+  }
+  return response;
+}
+
+/** Fetch the first image for a remote 8765 PID without exposing its local
+ * service address to the browser. The response is proxied by our API route. */
+export async function fetchProductGalleryCover(pidInput: string, fetcher: typeof fetch = fetch): Promise<{ bytes: Uint8Array; mimeType: string }> {
+  const pid = safeSegment(pidInput, 'product_pid_invalid');
+  const endpoint = `${baseUrl()}/api/v1/gallery/cover/${encodeURIComponent(pid)}`;
+  let response = await fetchSource(fetcher, endpoint, { headers: { accept: 'image/*' } });
+  if (response.status === 401 || response.status === 403) response = await fetchSource(fetcher, endpoint, { headers: { ...(await sourceAuthHeaders(fetcher)), accept: 'image/*' } });
+  if (!response.ok) throw new Error(`product_source_http_${response.status}`);
+  const mimeType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() || 'image/jpeg';
+  if (!mimeType.startsWith('image/')) throw new Error('product_cover_content_type_invalid');
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  if (!bytes.length || bytes.byteLength > MAX_ENTRY_BYTES) throw new Error('product_cover_invalid');
+  return { bytes, mimeType };
 }
 
 export async function importProductImages(
@@ -119,13 +211,18 @@ export async function importProductImages(
   const accountId = safeSegment(accountIdInput, 'account_id_invalid');
   const pids = normalizePidList(pidsInput);
   const root = baseUrl();
-  const check = await fetcher(`${root}/api/v1/gallery/check-pids`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ pids }) });
+  // Legacy 8765 builds accepted /check-pids without a session header. Try it
+  // first so existing deployments and test doubles remain compatible; the
+  // current clone falls back to authenticated /check.
+  let check = await fetchSource(fetcher, `${root}/api/v1/gallery/check-pids`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ pids }) });
+  if (check.status === 403 || check.status === 404) check = await authenticatedPost(fetcher, '/api/v1/gallery/check', { pids }, 'application/json');
   if (!check.ok) throw new Error(`product_source_http_${check.status}`);
   const checkPayload = await check.json() as unknown;
-  const valid = extractPidList(checkPayload);
+  const valid = extractPidList(checkPayload, pids);
   const requested = new Set(pids);
   if (valid.length !== requested.size || new Set(valid).size !== requested.size || valid.some((pid) => !requested.has(pid))) throw new Error('product_pid_unavailable');
-  const response = await fetcher(`${root}/api/v1/gallery/download-folder`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/zip, application/octet-stream' }, body: JSON.stringify({ pids }) });
+  let response = await fetchSource(fetcher, `${root}/api/v1/gallery/download-folder`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/zip, application/octet-stream' }, body: JSON.stringify({ pids }) });
+  if (response.status === 403 || response.status === 404) response = await authenticatedPost(fetcher, '/api/v1/gallery/download', { pids }, 'application/zip, application/octet-stream');
   if (!response.ok) throw new Error(`product_source_http_${response.status}`);
   const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
   if (contentType && !['application/zip', 'application/octet-stream', 'application/x-zip-compressed'].includes(contentType)) throw new Error('product_archive_content_type_invalid');
@@ -153,11 +250,17 @@ export async function importProductImages(
   return imported.map(clone);
 }
 
-function extractPidList(payload: unknown): string[] {
+function extractPidList(payload: unknown, requested: readonly string[] = []): string[] {
   if (Array.isArray(payload)) return payload.filter((value): value is string => typeof value === 'string');
   if (payload && typeof payload === 'object') {
-    const value = payload as { valid?: unknown; pids?: unknown; data?: unknown };
-    for (const candidate of [value.valid, value.pids, value.data]) if (Array.isArray(candidate)) return candidate.filter((item): item is string => typeof item === 'string');
+    const value = payload as { valid?: unknown; pids?: unknown; data?: unknown; existing?: unknown; missing?: unknown };
+    for (const candidate of [value.valid, value.pids, value.existing, value.data]) if (Array.isArray(candidate)) return candidate.filter((item): item is string => typeof item === 'string');
+    // 8765's /gallery/check returns existing/missing instead of a `valid`
+    // list. Treat every requested PID that is not missing as available.
+    if (Array.isArray(value.missing)) {
+      const missing = new Set(value.missing.filter((item): item is string => typeof item === 'string'));
+      return requested.filter((pid) => !missing.has(pid));
+    }
   }
   return [];
 }
@@ -170,6 +273,7 @@ function extractZipForPid(archive: Buffer, pid: string, destination: string, all
   const offset = archive.readUInt32LE(eocd + 16);
   if (offset + size > archive.length) throw new Error('product_archive_invalid');
   const files: string[] = [];
+  let extractedBytes = 0;
   let cursor = offset;
   for (let index = 0; index < count; index += 1) {
     if (cursor + 46 > archive.length || archive.readUInt32LE(cursor) !== 0x02014b50) throw new Error('product_archive_invalid');
@@ -186,13 +290,18 @@ function extractZipForPid(archive: Buffer, pid: string, destination: string, all
     const normalized = name.replace(/\\/g, '/');
     if (path.posix.isAbsolute(normalized) || normalized.split('/').includes('..') || normalized.includes('\0')) throw new Error('product_archive_path_invalid');
     const parts = normalized.split('/');
-    const relative = parts[0] === pid ? parts.slice(1).join('/') : normalized;
-    if (parts[0] !== pid && parts.length > 1) {
+    // A multi-PID archive is processed once per requested PID. Only entries
+    // rooted below the current PID may be written; entries for other requested
+    // PIDs are skipped and unscoped top-level files are rejected.
+    if (parts[0] !== pid) {
       if (allowedPids.has(parts[0])) continue;
       throw new Error('product_archive_pid_mismatch');
     }
+    const relative = parts.slice(1).join('/');
     if (!relative || !IMAGE_EXTENSIONS.has(path.extname(relative).toLowerCase())) continue;
     if (compressedSize > MAX_ENTRY_BYTES || uncompressedSize > MAX_ENTRY_BYTES) throw new Error('product_archive_entry_too_large');
+    extractedBytes += uncompressedSize;
+    if (extractedBytes > MAX_EXTRACTED_BYTES) throw new Error('product_archive_too_large');
     if (localOffset + 30 > archive.length || archive.readUInt32LE(localOffset) !== 0x04034b50) throw new Error('product_archive_invalid');
     const localNameLength = archive.readUInt16LE(localOffset + 26);
     const localExtraLength = archive.readUInt16LE(localOffset + 28);
@@ -239,8 +348,8 @@ export function listProductImages(accountIdInput?: string): ProductImageRecord[]
 }
 
 /** Lists individual shared product-image files across every operator account. */
-export function listProductImageAssets(): ProductImageAsset[] {
-  return listProductImages().flatMap((record) => record.files.map((file) => {
+export function listProductImageAssets(accountIdInput?: string): ProductImageAsset[] {
+  return listProductImages(accountIdInput).flatMap((record) => record.files.map((file) => {
     const relativePath = path.posix.join(record.relativePath.replace(/\\/g, '/'), file.replace(/\\/g, '/'));
     const absolutePath = path.resolve(getWorkspacePath(relativePath));
     let size = 0;
@@ -256,6 +365,34 @@ export function listProductImageAssets(): ProductImageAsset[] {
       size,
     } satisfies ProductImageAsset;
   }).filter((item): item is ProductImageAsset => Boolean(item)));
+}
+
+/** Return imported PID folders with their individual image assets. */
+export function listProductImageFolders(accountIdInput?: string): ProductImageFolder[] {
+  const records = listProductImages(accountIdInput);
+  const assets = listProductImageAssets(accountIdInput);
+  const grouped = new Map<string, ProductImageRecord[]>();
+  for (const record of records) {
+    // Keep PID folders isolated per owner.  Two operator accounts may import
+    // the same PID, but their assets must never be merged into one folder.
+    const key = `${record.accountId}:${record.pid}`;
+    grouped.set(key, [...(grouped.get(key) ?? []), record]);
+  }
+  return [...grouped.values()].map((recordGroup) => {
+    const record = [...recordGroup].sort((left, right) => right.importedAt.localeCompare(left.importedAt))[0];
+    const prefix = `product-image:${record.accountId}:${record.importDate}:${record.pid}:`;
+    const images = assets.filter((asset) => asset.id.startsWith(prefix));
+    const cover = images[0];
+    return {
+      ...record,
+      files: [...record.files],
+      images,
+      ...(cover ? {
+        coverAssetId: cover.id,
+        coverUrl: `/api/workspace/product-images/preview?assetId=${encodeURIComponent(cover.id)}`,
+      } : {}),
+    };
+  }).map(clone);
 }
 
 export function getProductImageAbsolutePath(assetId: string): string {
@@ -307,8 +444,8 @@ export function readProductImageAsset(assetId: string): ProductImageAsset | null
   return listProductImageAssets().find((candidate) => candidate.id === assetId) ?? null;
 }
 
-function readDirectories(directory: string): string[] { try { return fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name); } catch { return []; } }
-function listImageFiles(directory: string): string[] { try { return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? listImageFiles(path.join(directory, entry.name)).map((child) => `${entry.name}/${child}`) : IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()) ? [entry.name] : []); } catch { return []; } }
+function readDirectories(directory: string): string[] { try { return fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((left, right) => left.localeCompare(right, undefined, { numeric: true })); } catch { return []; } }
+function listImageFiles(directory: string): string[] { try { return fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true })).flatMap((entry) => entry.isDirectory() ? listImageFiles(path.join(directory, entry.name)).map((child) => `${entry.name}/${child}`) : IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()) ? [entry.name] : []); } catch { return []; } }
 
 export function cleanupExpiredProductImages(now: Date | number = new Date(), options: { dryRun?: boolean } = {}): ProductImageCleanupResult {
   const cutoffDate = subtractDays(dateInShanghai(now), 3);

@@ -63,6 +63,16 @@ describe('recovered video production capabilities', () => {
     expect(minimax.referenceAudios.max).toBe(3);
   });
 
+  it('uses Pro666 sd2-933-mini fixed 12s/720p limits', () => {
+    const capability = getVideoCapability('pro666-video', 'sd2-933-mini');
+    expect(capability.duration.values).toEqual([12]);
+    expect(capability.aspectRatios).toEqual(['9:16']);
+    expect(capability.resolutions).toEqual(['720p']);
+    expect(capability.referenceImages.max).toBe(1);
+    expect(capability.referenceAudios.max).toBe(1);
+    expect(capability.referenceVideos.max).toBe(0);
+  });
+
   it('exposes only the reference media kinds supported by each video model', () => {
     const grok = getVideoCapability('grok-video', 'grok-imagine-video-1.5（按次）');
     expect(grok.referenceVideos.max).toBe(0);

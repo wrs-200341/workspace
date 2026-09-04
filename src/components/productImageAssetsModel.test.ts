@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProductImagesUrl, normalizeProductImagesPayload } from './productImageAssetsModel';
+import { buildProductImagesUrl, normalizeProductImagesPayload, parsePidListText, parsePidRows } from './productImageAssetsModel';
 
 describe('product image asset view model', () => {
   it('builds an encoded account endpoint and optional query', () => {
@@ -16,5 +16,13 @@ describe('product image asset view model', () => {
 
   it('returns empty lists for malformed responses', () => {
     expect(normalizeProductImagesPayload({ success: false })).toEqual({ imported: [], gallery: [] });
+  });
+
+  it('parses PID lists from text while removing headers, duplicates, and invalid values', () => {
+    expect(parsePidListText('pid\n173453212\n173453212, abc-2\n../bad')).toEqual(['173453212', 'abc-2']);
+  });
+
+  it('reads PID values from the first Excel column', () => {
+    expect(parsePidRows([['商品编号', '标题'], ['A-1', 'x'], ['B-2', 'y'], ['A-1', 'z']])).toEqual(['A-1', 'B-2']);
   });
 });

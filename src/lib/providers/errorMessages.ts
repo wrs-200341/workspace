@@ -1,5 +1,10 @@
 /** User-facing Chinese messages for provider and task error codes. */
 const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  pro666_reference_video_unsupported: 'Pro666 sd2-933-mini 暂不支持参考视频。',
+  pro666_prompt_required: 'Pro666 视频提示词不能为空。',
+  pro666_too_many_reference_images: 'Pro666 sd2-933-mini 最多支持 1 张参考图。',
+  pro666_too_many_reference_audios: 'Pro666 sd2-933-mini 最多支持 1 条参考音频。',
+  pro666_reference_urls_must_be_https: 'Pro666 参考素材必须是公网 HTTPS 地址。',
   prompt_provider_failed: '提示词模型请求失败，请检查当前选择的提示词模型、API Key、模型名称和网络状态后重试。',
   provider_not_configured: '该供应商尚未配置有效密钥，请检查服务端供应商配置后重试。',
   provider_unauthorized: '供应商鉴权失败：API Key 无效、已过期或没有权限，请更新供应商密钥。',

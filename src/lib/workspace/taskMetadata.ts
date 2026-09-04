@@ -29,7 +29,10 @@ export function firstReferenceImageName(input: {
   for (const assetId of input.productImageAssetIds ?? []) {
     const product = readProductImageAsset(assetId);
     const fileName = product ? path.basename(product.relativePath).trim() : '';
-    if (fileName) return fileName;
+    // Imported 8765 images live inside a PID folder and their physical file
+    // names are usually generic (001.jpg). Prefix the PID so Excel matching
+    // can resolve the same `pid_...` convention used by uploaded references.
+    if (product?.pid && fileName) return `${product.pid}_${fileName}`;
   }
   return nameFromUrl(input.rawReferenceImages?.[0]);
 }

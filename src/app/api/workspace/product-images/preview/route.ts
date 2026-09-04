@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
+import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { getProductImageAbsolutePath, readProductImageAsset } from '@/lib/workspace/productImages';
 import fs from 'node:fs';
 
@@ -11,6 +12,8 @@ export async function GET(request: NextRequest) {
   if (!assetId || assetId.length > 512) return NextResponse.json({ success: false, error: 'asset_id_invalid' }, { status: 400 });
   const asset = readProductImageAsset(assetId);
   if (!asset) return NextResponse.json({ success: false, error: 'asset_not_found' }, { status: 404 });
+  const ownerId = asset.id.split(':')[1] || '';
+  if (ownerId !== 'shared' && !canAccessWorkspaceAccount(auth, ownerId)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   try {
     const filePath = getProductImageAbsolutePath(assetId);
     const bytes = fs.readFileSync(filePath);

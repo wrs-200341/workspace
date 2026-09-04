@@ -30,6 +30,12 @@ export type MiniMaxVideoInput = {
   referenceImages?: readonly string[];
   referenceAudios?: readonly string[];
 };
+/** Pro666 sd2-933-mini fixed 12s/720p portrait contract. */
+export type Pro666VideoInput = {
+  prompt: string;
+  images?: readonly string[];
+  audios?: readonly string[];
+};
 /** Quality V4 (video2.crack.cc.cd) request contract. */
 export type QualityV4VideoInput = {
   model: string;
@@ -302,6 +308,30 @@ export function buildMiniMaxVideoPayload(input: MiniMaxVideoInput): Record<strin
     ratio: input.aspectRatio,
     ...(images.length ? { image_urls: images } : {}),
     ...(audios.length ? { audio_urls: audios } : {}),
+  };
+}
+
+export function buildPro666VideoPayload(input: Pro666VideoInput): Record<string, unknown> {
+  const prompt = input.prompt.trim();
+  if (!prompt) throw new Error('pro666_prompt_required');
+  const images = [...(input.images ?? [])];
+  const audios = [...(input.audios ?? [])];
+  if (images.length > 1) throw new Error('pro666_too_many_reference_images');
+  if (audios.length > 1) throw new Error('pro666_too_many_reference_audios');
+  for (const url of [...images, ...audios]) {
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { throw new Error('pro666_reference_urls_must_be_https'); }
+    if (parsed.protocol !== 'https:') throw new Error('pro666_reference_urls_must_be_https');
+  }
+  return {
+    model: 'sd2-933-mini',
+    prompt,
+    duration: 12,
+    resolution: '720p',
+    aspect_ratio: '9:16',
+    generateAudio: true,
+    ...(images.length ? { images } : {}),
+    ...(audios.length ? { audios } : {}),
   };
 }
 

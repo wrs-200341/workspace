@@ -23,6 +23,29 @@ export function buildProductImagesUrl(accountId: string, query?: string): string
   return `/api/workspace/accounts/${encodeURIComponent(accountId)}/product-images${suffix ? `?${suffix}` : ''}`;
 }
 
+/** Parse PID values from a plain-text list (one per line, commas accepted). */
+export function parsePidListText(input: string, max = 100): string[] {
+  const values = input.split(/[\s,，、;；]+/).map(normalizePidToken);
+  return [...new Set(values.filter((value) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(value)))]
+    .filter((value) => !['pid', '商品编号', '商品id', 'product id', '鍟嗗搧缂栧彿', '鍟嗗搧id'].includes(value.toLowerCase()))
+    .slice(0, max);
+}
+
+function normalizePidToken(value: string): string {
+  const token = value.trim().replace(/^\uFEFF+/, '').replace(/^['\"]|['\"]$/g, '');
+  const scientific = token.match(/^(\d+)(?:\.(\d+))?[eE]([+-]?\d+)$/);
+  if (!scientific) return token;
+  const [, integerPart, fractionPart = '', exponentText] = scientific;
+  const exponent = Number(exponentText);
+  if (!Number.isSafeInteger(exponent) || exponent < 0 || fractionPart.replace(/0+$/, '').length > 0) return token;
+  return `${integerPart}${fractionPart}${'0'.repeat(Math.max(0, exponent - fractionPart.length))}`.replace(/^0+(?=\d)/, '');
+}
+
+/** Parse PID values from the first column of a worksheet represented as rows. */
+export function parsePidRows(rows: unknown[][], max = 100): string[] {
+  return parsePidListText(rows.map((row) => String(Array.isArray(row) ? row[0] ?? '' : '')).join('\n'), max);
+}
+
 export function normalizeProductImagesPayload(payload: unknown): {
   imported: ProductImageRecordView[];
   gallery: ProductGalleryItemView[];

@@ -29,13 +29,24 @@ describe('8765 product image adapter', () => {
   it('queries gallery using validated query parameters', async () => {
     const fetcher = vi.fn(async (input: RequestInfo | URL) => {
       const parsed = new URL(String(input));
-      expect(parsed.pathname).toBe('/api/v1/gallery');
-      expect(parsed.searchParams.get('query')).toBe('shoe blue');
+      expect(parsed.pathname).toBe('/api/v1/gallery/search');
+      expect(parsed.searchParams.get('q')).toBe('shoe blue');
       expect(parsed.searchParams.get('limit')).toBe('20');
       expect(parsed.searchParams.get('offset')).toBe('2');
       return new Response(JSON.stringify({ items: [{ pid: 'P1', title: 'Shoe' }] }), { status: 200 });
     });
     await expect(queryProductGallery({ query: 'shoe blue', limit: 20, offset: 2 }, fetcher)).resolves.toEqual([{ pid: 'P1', title: 'Shoe' }]);
+  });
+
+  it('uses the current 8765 search endpoint when the legacy route is unavailable', async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      const parsed = new URL(String(input));
+      if (parsed.pathname === '/api/v1/gallery') return new Response('{}', { status: 404 });
+      expect(parsed.pathname).toBe('/api/v1/gallery/search');
+      expect(parsed.searchParams.get('q')).toBe('1731106');
+      return new Response(JSON.stringify({ items: [{ pid: '1731106368253625737', cover_available: true }] }), { status: 200 });
+    });
+    await expect(queryProductGallery({ query: '1731106' }, fetcher)).resolves.toEqual([expect.objectContaining({ pid: '1731106368253625737', coverUrl: 'http://127.0.0.1:8765/api/v1/gallery/cover/1731106368253625737' })]);
   });
 
   it('downloads a zip, extracts files below the D-drive PID directory and records metadata', async () => {
@@ -53,6 +64,22 @@ describe('8765 product image adapter', () => {
     expect(fs.readFileSync(getWorkspacePath('product-images', 'account-1', '2026-09-02', 'P1', '001.jpg'), 'utf8')).toBe('image');
     expect(listProductImages('account-1')).toHaveLength(1);
     expect(listProductImageAssets()).toEqual([expect.objectContaining({ pid: 'P1', name: 'P1 · 001.jpg', mimeType: 'image/jpeg' })]);
+  });
+
+  it('falls back to the authenticated current 8765 check/download endpoints', async () => {
+    const zip = createStoredZip([{ name: 'P2/001.png', bytes: Buffer.from('image') }]);
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/check-pids')) return new Response('{}', { status: 404 });
+      if (url.endsWith('/session')) return new Response(JSON.stringify({ token: 'test-token' }), { status: 200 });
+      if (url.endsWith('/check')) return new Response(JSON.stringify({ existing: ['P2'], missing: [] }), { status: 200 });
+      if (url.endsWith('/download-folder')) return new Response('{}', { status: 404 });
+      expect(url).toBe('http://127.0.0.1:8765/api/v1/gallery/download');
+      expect((init?.headers as Record<string, string>)['X-Clone-Token']).toBe('test-token');
+      return new Response(zip as unknown as BodyInit, { status: 200, headers: { 'content-type': 'application/zip' } });
+    });
+    const imported = await importProductImages('account-1', ['P2'], fetcher, new Date('2026-09-02T08:00:00.000Z'));
+    expect(imported[0].files).toEqual(['001.png']);
   });
 
   it('rejects zip path traversal', async () => {

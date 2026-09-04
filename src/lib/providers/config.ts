@@ -1,4 +1,4 @@
-﻿export type ProviderId = 'grok-video' | 'mgrouter-grok-image' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'quality-v4' | 'yuanai-gemini-prompt' | 'yuanai-image' | 'pomoai-gemini-image' | 'gpt-2999-prompt' | 'oairegbox-omni' | 'origin-gpt-image' | 'origin-grok-image' | 'origin-nano-image' | 'junze-gpt-image' | 'junze-gemini-image' | 'bigsnake-prompt';
+﻿export type ProviderId = 'grok-video' | 'mgrouter-grok-image' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'pro666-video' | 'quality-v4' | 'yuanai-gemini-prompt' | 'yuanai-image' | 'pomoai-gemini-image' | 'gpt-2999-prompt' | 'oairegbox-omni' | 'origin-gpt-image' | 'origin-grok-image' | 'origin-nano-image' | 'junze-gpt-image' | 'junze-gemini-image' | 'bigsnake-prompt';
 
 export type ProviderCatalogEntry = {
   id: ProviderId;
@@ -56,12 +56,13 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
   // videos; image/audio limits are enforced by the production capability
   // table and request validator.
   { id: 'minimax-h3', name: 'MiniMax H3 / secure-skill', kind: 'video', model: process.env.MINIMAX_MODEL || 'minimax-h3', baseUrl: 'https://token.secure-skill.com', liveEnv: 'MINIMAX_API_KEY', supports: { referenceImages: 5, referenceVideos: 0, referenceAudios: 3, durations: [4, 6, 8, 10, 12, 15], ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'], resolutions: ['720p'] } },
+  { id: 'pro666-video', name: 'Pro666 / sd2-933-mini', kind: 'video', model: 'sd2-933-mini', baseUrl: 'https://api.pro666.top', liveEnv: 'PRO666_VIDEO_API_KEY', supports: { referenceImages: 1, referenceVideos: 0, referenceAudios: 1, durations: [12], ratios: ['9:16'], resolutions: ['720p'] } },
 ];
 
 export function getProviderCatalog(): ProviderCatalogEntry[] { return CATALOG.map((provider) => ({ ...provider, supports: { ...provider.supports, durations: provider.supports.durations ? [...provider.supports.durations] : undefined, ratios: [...provider.supports.ratios], resolutions: [...provider.supports.resolutions] } })); }
 export function isLiveProvidersAllowed(env: Readonly<Record<string, string | undefined>> = process.env): boolean { return env.WORKSPACE_ENABLE_LIVE_PROVIDERS === 'true'; }
 export function getProviderConfig(id: ProviderId, env: Readonly<Record<string, string | undefined>> = process.env): ProviderCatalogEntry & { apiKey?: string } { const provider = CATALOG.find((candidate) => candidate.id === id); if (!provider) throw new Error('provider_not_found'); const envBase = providerBaseEnv(id, env); const baseUrl = envBase && isExactOrigin(envBase, provider.baseUrl) ? envBase.replace(/\/$/, '') : provider.baseUrl; return { ...provider, baseUrl, apiKey: isLiveProvidersAllowed(env) ? env[provider.liveEnv] || undefined : undefined, supports: { ...provider.supports, durations: provider.supports.durations ? [...provider.supports.durations] : undefined, ratios: [...provider.supports.ratios], resolutions: [...provider.supports.resolutions] } }; }
-export function isLiveProviderEnabled(env: Readonly<Record<string, string | undefined>> = process.env): boolean { return isLiveProvidersAllowed(env) && Boolean(env.GROK_VIDEO_API_KEY || env.MGROUTER_API_KEY || env.WAN_API_KEY || env.MINIMAX_API_KEY || env.QUALITY_V4_API_KEY || env.GEMINI_PROMPT_API_KEY || env.YUANAI_API_KEY || env.POMOAI_API_KEY || env.GPT_PROMPT_API_KEY || env.OAIREGBOX_API_KEY || env.ORIGIN_GPTIMAGE_API_KEY || env.ORIGIN_GROK_API_KEY || env.ORIGIN_NANO_API_KEY || env.JUNZE_API_KEY || env.BIGSNAKE_API_KEY); }
+export function isLiveProviderEnabled(env: Readonly<Record<string, string | undefined>> = process.env): boolean { return isLiveProvidersAllowed(env) && Boolean(env.GROK_VIDEO_API_KEY || env.MGROUTER_API_KEY || env.WAN_API_KEY || env.MINIMAX_API_KEY || env.PRO666_VIDEO_API_KEY || env.QUALITY_V4_API_KEY || env.GEMINI_PROMPT_API_KEY || env.YUANAI_API_KEY || env.POMOAI_API_KEY || env.GPT_PROMPT_API_KEY || env.OAIREGBOX_API_KEY || env.ORIGIN_GPTIMAGE_API_KEY || env.ORIGIN_GROK_API_KEY || env.ORIGIN_NANO_API_KEY || env.JUNZE_API_KEY || env.BIGSNAKE_API_KEY); }
 export function isProviderLiveEnabled(id: ProviderId, env: Readonly<Record<string, string | undefined>> = process.env): boolean { const config = getProviderConfig(id, env); return isLiveProvidersAllowed(env) && Boolean(config.apiKey); }
 export function validateProviderUrl(id: ProviderId, value: string): boolean { try { const url = new URL(value); if (url.protocol !== 'https:') return false; const provider = CATALOG.find((candidate) => candidate.id === id); if (!provider) return false; const base = new URL(provider.baseUrl); return url.origin === base.origin; } catch { return false; } }
 function isExactOrigin(value: string, expected: string): boolean { try { const actual = new URL(value); const base = new URL(expected); return actual.protocol === 'https:' && actual.origin === base.origin; } catch { return false; } }
@@ -73,6 +74,7 @@ function providerBaseEnv(id: ProviderId, env: Readonly<Record<string, string | u
   if (id === 'pomoai-gemini-image') return env.POMOAI_BASE_URL;
   if (id === 'oairegbox-omni') return env.OAIREGBOX_BASE_URL;
   if (id === 'minimax-h3') return env.MINIMAX_BASE_URL;
+  if (id === 'pro666-video') return env.PRO666_VIDEO_BASE_URL;
   if (id === 'quality-v4') return env.QUALITY_V4_BASE_URL;
   if (id === 'gpt-2999-prompt') return env.GPT_PROMPT_BASE_URL;
   if (id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image') return env.ORIGIN_BASE_URL;

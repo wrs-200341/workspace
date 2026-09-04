@@ -16,7 +16,7 @@ import * as productSummaryModule from '@/lib/workspace/productSummary';
 import { enqueueProviderTask, pumpProviderTasks, recoverOrphanedSchedulerTasks, retryProviderTaskOnFailure, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 
-type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'quality-v4' | 'oairegbox-omni';
+type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni';
 
 const SYNC_THROTTLE_MS = 10_000;
 const liveSyncInFlight = new Map<string, Promise<void>>();
@@ -116,7 +116,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const body = await request.json().catch(() => ({})) as { prompt?: unknown; provider?: unknown; model?: unknown; duration?: unknown; seconds?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; referenceAudios?: unknown; assetIds?: unknown; pid?: unknown };
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) return NextResponse.json({ success: false, error: 'prompt_required' }, { status: 400 });
-  const requestedProvider: ProviderId = body.provider === 'mgrouter-grok-video' || body.provider === 'wan3-video' || body.provider === 'oairegbox-omni' || body.provider === 'minimax-h3' || body.provider === 'quality-v4' ? body.provider : 'grok-video';
+  const requestedProvider: ProviderId = body.provider === 'mgrouter-grok-video' || body.provider === 'wan3-video' || body.provider === 'oairegbox-omni' || body.provider === 'minimax-h3' || body.provider === 'pro666-video' || body.provider === 'quality-v4' ? body.provider : 'grok-video';
   const rawReferenceImages = Array.isArray(body.referenceImages) && body.referenceImages.every((item) => typeof item === 'string') ? body.referenceImages as string[] : [];
   const referenceAudios = Array.isArray(body.referenceAudios) && body.referenceAudios.every((item) => typeof item === 'string') ? body.referenceAudios as string[] : [];
   const assetIds = Array.isArray(body.assetIds) && body.assetIds.every((item) => typeof item === 'string') ? body.assetIds as string[] : [];
@@ -129,7 +129,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // sd-mini is handled by snumom's grok-video endpoint, not Quality V4.
   const provider: ProviderId = requestedProvider;
   const config = getProviderConfig(provider);
-  const model = provider === 'minimax-h3'
+  const model = provider === 'minimax-h3' || provider === 'pro666-video'
     ? config.model
     : provider === 'grok-video' && requestedModel === 'grok'
       ? config.model
@@ -165,7 +165,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ success: accepted, data: { ...queuedTask, status: queuedTask.status }, ...(accepted ? {} : { error: queuedTask.error ?? 'scheduler_queue_full' }) }, { status: accepted ? 202 : 503 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_asset_path_invalid', 'reference_asset_file_invalid', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];
+    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_asset_path_invalid', 'reference_asset_file_invalid', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'pro666_reference_video_unsupported', 'pro666_prompt_required', 'pro666_too_many_reference_images', 'pro666_too_many_reference_audios', 'pro666_reference_urls_must_be_https', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];
     const responseError = known.includes(message) || message.startsWith('provider_') ? message : 'provider_request_failed';
     const status = responseError.startsWith('provider_') ? 502 : 400;
     return NextResponse.json({ success: false, error: responseError }, { status });

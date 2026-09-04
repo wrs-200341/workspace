@@ -4,8 +4,11 @@
  * It never runs in the Edge runtime and is safe to call more than once.
  */
 export async function register() {
-  // Product-image cleanup is exposed through the authenticated cleanup API and
-  // can be scheduled by the host process/task scheduler. Keeping the
-  // instrumentation hook side-effect free avoids bundling node:fs/node:zlib
-  // into Next's instrumentation worker (which may be compiled for edge).
+  // Schedule cleanup from the long-lived Node server so the three-day PID
+  // retention policy runs at every Shanghai midnight even when nobody opens
+  // the asset page. The runtime guard keeps node:fs/node:zlib out of Edge.
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { scheduleProductImageCleanup } = await import('./lib/workspace/productImages');
+    scheduleProductImageCleanup();
+  }
 }

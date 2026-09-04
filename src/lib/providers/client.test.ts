@@ -182,6 +182,8 @@ describe('provider client helpers', () => {
     expect(providerEndpoint('minimax-h3', 'create')).toBe('https://token.secure-skill.com/v1/videos');
     expect(providerEndpoint('minimax-h3', 'status')).toBe('https://token.secure-skill.com/v1/videos/{id}');
     expect(providerEndpoint('minimax-h3', 'content')).toBe('https://token.secure-skill.com/v1/videos/{id}/content');
+    expect(providerEndpoint('pro666-video', 'create')).toBe('https://api.pro666.top/v1/videos');
+    expect(providerEndpoint('pro666-video', 'status')).toBe('https://api.pro666.top/v1/videos/{id}');
     expect(sanitizeProviderError('Bearer secret-token: provider failed')).toBe('provider request failed');
   });
 
@@ -380,6 +382,24 @@ describe('provider client helpers', () => {
     }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MINIMAX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).rejects.toThrow('minimax_reference_media_unsupported');
   });
 
+  it('submits Pro666 sd2-933-mini with fixed 12s portrait fields', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://api.pro666.top/v1/videos');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key', 'content-type': 'application/json' });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: 'sd2-933-mini', prompt: 'demo', duration: 12, resolution: '720p', aspect_ratio: '9:16', generateAudio: true,
+        images: ['https://assets.example/a.png'], audios: ['https://assets.example/a.mp3'],
+      });
+      return Response.json({ task_id: 'pro-task', status: 'queued' });
+    });
+    const result = await submitVideo({ provider: 'pro666-video', model: 'sd2-933-mini', prompt: 'demo', duration: 12, aspectRatio: '9:16', resolution: '720p', referenceImages: ['https://assets.example/a.png'], referenceAudios: ['https://assets.example/a.mp3'] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', PRO666_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ mode: 'live', provider: 'pro666-video' });
+  });
+
+  it('rejects Pro666 reference videos', async () => {
+    await expect(submitVideo({ provider: 'pro666-video', model: 'sd2-933-mini', prompt: 'demo', duration: 12, aspectRatio: '9:16', resolution: '720p', referenceVideos: ['https://assets.example/a.mp4'] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', PRO666_VIDEO_API_KEY: 'test-key' }, fetch: vi.fn() as typeof fetch })).rejects.toThrow('pro666_reference_video_unsupported');
+  });
+
   it('submits OAIRegBox multipart files without overriding the multipart boundary', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.body).toBeInstanceOf(FormData);
@@ -492,6 +512,7 @@ describe('provider client helpers', () => {
     expect(normalizeProviderResponse('grok-video', { id: 'grok-task', status: 'completed', url: 'https://cdn.example/video' })).toMatchObject({ providerTaskId: 'grok-task', status: 'completed', outputUrls: ['https://cdn.example/video'] });
     expect(normalizeProviderResponse('quality-v4', { id: 'quality-task', status: 'completed', url: 'http://video2.crack.cc.cd/media/v/quality-task' })).toMatchObject({ providerTaskId: 'quality-task', status: 'completed', outputUrls: ['https://video2.crack.cc.cd/media/v/quality-task'] });
     expect(normalizeProviderResponse('mgrouter-grok-video', { model: 'grok-imagine-video-1.5', progress: 100, status: 'done', video: { url: '/v1/videos/mg-task/content' } })).toMatchObject({ status: 'completed', progress: 100, outputUrls: ['https://raw.mgrouter.com/v1/videos/mg-task/content'] });
+    expect(normalizeProviderResponse('pro666-video', { task_id: 'pro-task', status: 'completed', output: [{ url: 'https://video.pro666.top/generated/pro.mp4' }] })).toMatchObject({ providerTaskId: 'pro-task', status: 'completed', outputUrls: ['https://video.pro666.top/generated/pro.mp4'] });
   });
 
   it('downloads snumom video content with bearer auth without exposing the token', async () => {

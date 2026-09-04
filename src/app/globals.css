@@ -254,7 +254,6 @@ h1 { font-size:30px; line-height:1.15; margin:7px 0 0; letter-spacing:-.03em; }
 .read-only-queue .production-queue-actions > button:not(.queue-link) { display:none; }
 .read-only-queue .production-queue-actions a[href*="restoreTaskId"] { display:none; }
 .read-only-notice { padding-bottom:18px; }
-.product-image-assets.read-only .product-image-toolbar > .primary-button { display:none; }
 .product-image-assets.read-only input[type="checkbox"] { pointer-events:none; }
 .workspace-panel-read-only .panel-header .primary-button,
 .workspace-panel-read-only .account-card-title-row .icon-button,
@@ -486,6 +485,8 @@ td strong { color:var(--ink); font-weight:600; }
 .asset-secondary-tab span { color:#a49b8a; font:10px 'Fira Code',monospace; }
 .asset-secondary-tab:hover,.asset-secondary-tab.active { color:#1f1f1c; border-bottom-color:#2e7a6c; background:#f5f4ee; }
 .product-image-assets { padding:22px 34px 34px; }
+.product-image-library-title { margin:0; font:600 19px Georgia,'Times New Roman',serif; color:#282822; }
+.product-image-library-hint { margin:5px 0 0; color:#8f897e; font-size:11px; }
 .product-image-toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
 .product-image-search { display:flex; align-items:center; gap:8px; min-width:min(100%,430px); color:#8c867b; }
 .product-image-search input { flex:1; min-width:160px; border:1px solid #d8d0c2; background:#fff; color:#282822; padding:9px 10px; outline:none; font-size:12px; }
@@ -520,6 +521,37 @@ td strong { color:var(--ink); font-weight:600; }
 .product-cover-placeholder { display:grid; place-items:center; color:#9a9488; }
 .product-gallery-card > span { color:#4c4942; font-size:12px; }
 .product-gallery-card > small { color:#9a9488; font-size:10px; line-height:1.4; }
+.product-pid-search-modal { width:min(920px, calc(100vw - 32px)); max-height:min(86vh, 860px); overflow:auto; }
+.product-pid-search-form { margin:0 20px 12px; min-width:0; }
+.product-pid-file-dropzone { display:grid; gap:4px; margin:0 20px 12px; padding:12px; border:1px dashed #b7c9c2; border-radius:8px; color:#4c4942; background:#f8fbf9; cursor:pointer; }
+.product-pid-file-dropzone:hover,.product-pid-file-dropzone:focus-within { border-color:#2e7a6c; background:#eef7f3; }
+.product-pid-file-dropzone input { position:absolute; width:1px; height:1px; opacity:0; pointer-events:none; }
+.product-pid-file-dropzone span { display:flex; align-items:center; gap:7px; font-size:12px; }
+.product-pid-file-dropzone small { color:#8f897e; font-size:10px; }
+.product-pid-file-dropzone.compact { margin:0 0 8px; padding:8px 10px; }
+.product-pid-file-dropzone.compact span { font-size:11px; }
+.product-pid-search-actions { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 20px 4px; color:#8f897e; font-size:11px; }
+.product-folder-row { display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:10px; width:100%; text-align:left; cursor:pointer; }
+.product-folder-row:hover { border-color:#aacdc3; background:#f7fbf9; }
+.product-folder-cover { width:42px; height:60px; display:grid; place-items:center; overflow:hidden; border-radius:4px; background:#f4f1e9; }
+.product-folder-cover img { width:100%; height:100%; object-fit:contain; }
+.product-folder-modal { width:min(920px, calc(100vw - 32px)); max-height:min(84vh, 820px); overflow:auto; }
+.product-folder-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:12px; }
+.product-folder-grid figure { margin:0; display:grid; gap:6px; min-width:0; }
+.product-folder-grid img { width:100%; aspect-ratio:9 / 16; object-fit:contain; background:#f4f1e9; border-radius:4px; }
+.product-folder-grid figcaption { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#64748b; font-size:11px; }
+.product-folder-picker-option { cursor:pointer; text-align:left; }
+.product-folder-picker-option > .asset-picker-image-preview { pointer-events:none; }
+.asset-picker-back { margin:0 20px 10px; }
+.product-gallery-importer { display:grid; gap:8px; margin:0 20px 10px; }
+.product-gallery-import-results { display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:8px; max-height:220px; overflow:auto; padding:8px; border:1px solid #e3ded4; background:#faf9f5; }
+.product-gallery-import-card { display:grid; grid-template-columns:18px 44px minmax(0,1fr); gap:8px; align-items:center; padding:7px; border:1px solid #e3ded4; background:#fff; cursor:pointer; }
+.product-gallery-import-card:hover { border-color:#aacdc3; background:#f7fbf9; }
+.product-gallery-import-card img { width:44px; height:62px; object-fit:contain; background:#f4f1e9; }
+.product-gallery-import-card span { display:grid; gap:3px; min-width:0; }
+.product-gallery-import-card strong,.product-gallery-import-card small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.product-gallery-import-card strong { font:11px 'Fira Code',monospace; color:#282822; }
+.product-gallery-import-card small { color:#8f897e; font-size:10px; }
 .product-imported-list { display:grid; gap:2px; margin-top:8px; }
 .product-imported-list h3 { margin-top:24px; }
 .spin { animation:asset-spin 1s linear infinite; }

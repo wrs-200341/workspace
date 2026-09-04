@@ -20,6 +20,7 @@ describe('product summary lookup', () => {
   it('extracts the pid prefix before a suffix and extension', () => {
     expect(productPidFromReferenceName('173453212_xx.jpg')).toBe('173453212');
     expect(productPidFromReferenceName('173453212-extra.webp')).toBe('173453212');
+    expect(productPidFromReferenceName('173453212 · 001.jpg')).toBe('173453212');
   });
 
   it('reads title and description from the workbook by pid', () => {

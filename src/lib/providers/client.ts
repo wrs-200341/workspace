@@ -1,4 +1,4 @@
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
@@ -43,6 +43,10 @@ export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' 
     // Wan 3 is the separate ManjuAI integration above.
     const minimaxBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
     return operation === 'create' ? `${minimaxBase}/videos` : `${minimaxBase}/videos/{id}` + (operation === 'content' ? '/content' : '');
+  }
+  if (id === 'pro666-video') {
+    const pro666Base = /\/v1$/i.test(base) ? base : base + '/v1';
+    return operation === 'create' ? pro666Base + '/videos' : pro666Base + '/videos/{id}';
   }
   if (id === 'yuanai-image') return operation === 'create' ? `${base}/v1/images/generations` : `${base}/v1/images/{id}`;
   if (id === 'pomoai-gemini-image') return `${base}/v1beta/models/${encodeURIComponent(getProviderConfig(id, env).model)}:generateContent`;
@@ -263,6 +267,7 @@ export function normalizeProviderResponse(_provider: ProviderId, payload: unknow
   const explicitOutputUrls = [
     ...collectExplicitOutputUrls(data, _provider === 'quality-v4'),
     ...collectExplicitOutputUrls(root, _provider === 'quality-v4'),
+    ...(_provider === 'pro666-video' ? [...collectNestedOutputUrls(data), ...collectNestedOutputUrls(root)] : []),
   ];
   // MGRouter status responses return a relative content path
   // (`video.url: /v1/videos/<id>/content`) rather than a public absolute URL.
@@ -406,6 +411,19 @@ function collectExplicitOutputUrls(value: Record<string, unknown> | undefined, a
   return ['url', 'result_url', 'video_url', 'download_url']
     .map((key) => value[key])
     .filter((item): item is string => typeof item === 'string' && pattern.test(item));
+}
+
+function collectNestedOutputUrls(value: unknown, output: string[] = []): string[] {
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectNestedOutputUrls(item, output));
+    return output;
+  }
+  if (!value || typeof value !== 'object') return output;
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (['url', 'video_url', 'result_url', 'download_url'].includes(key) && typeof item === 'string' && /^https:\/\//i.test(item)) output.push(item);
+    else collectNestedOutputUrls(item, output);
+  }
+  return output;
 }
 
 function collectBase64(value: unknown, output: string[] = []): string[] {
@@ -617,6 +635,7 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   const env = dependencies.env ?? process.env;
   const isSdMini = input.provider === 'grok-video' && input.model === 'sd-mini';
   const isMiniMax = input.provider === 'minimax-h3';
+  const isPro666 = input.provider === 'pro666-video';
   const config = getProviderConfig(input.provider, env);
   if (input.provider === 'mgrouter-grok-video' && (input.referenceAudios?.length || input.media?.some((item) => item.type === 'audio'))) {
     throw new Error('mgrouter_reference_audio_unsupported');
@@ -626,6 +645,9 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   }
   if (isMiniMax && (input.referenceFiles?.length || input.referenceVideos?.length || input.media?.some((item) => item.type === 'reference_video'))) {
     throw new Error('minimax_reference_media_unsupported');
+  }
+  if (isPro666 && (input.referenceFiles?.length || input.referenceVideos?.length || input.media?.some((item) => item.type === 'reference_video'))) {
+    throw new Error('pro666_reference_video_unsupported');
   }
   if (input.provider === 'oairegbox-omni' && (input.referenceImages ?? []).length > 0 && !(input.referenceFiles?.length)) throw new Error('reference_files_required');
   const sdMediaReferences = isSdMini && (!input.referenceImages || input.referenceImages.length === 0)
@@ -644,6 +666,8 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
       : buildOAIRegboxPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, references: [] }))
     : input.provider === 'minimax-h3'
     ? buildMiniMaxVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+    : isPro666
+    ? buildPro666VideoPayload({ prompt: input.prompt.trim(), images: validateReferenceUrls(input.referenceImages ?? []), audios: validateReferenceUrls(input.referenceAudios ?? []) })
     : isSdMini
     ? buildSdMiniVideoPayload({ model: input.model, prompt: input.prompt.trim(), seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
     : input.provider === 'grok-video'

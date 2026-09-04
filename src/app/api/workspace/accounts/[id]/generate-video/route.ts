@@ -20,8 +20,8 @@ import { enqueueProviderTask, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concu
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 import type { GPTPromptAttachment } from '@/lib/providers/payloads';
 
-type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'quality-v4' | 'oairegbox-omni';
-const VIDEO_PROVIDERS: readonly VideoProvider[] = ['grok-video', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'quality-v4', 'oairegbox-omni'];
+type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni';
+const VIDEO_PROVIDERS: readonly VideoProvider[] = ['grok-video', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'pro666-video', 'quality-v4', 'oairegbox-omni'];
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -67,7 +67,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const config = getProviderConfig(provider);
   // `grok` is a historical UI/provider alias, not a model id accepted by
   // snumom. Resolve it to the configured model before submitting upstream.
-  const model = provider === 'minimax-h3'
+  const model = provider === 'minimax-h3' || provider === 'pro666-video'
     ? config.model
     : provider === 'grok-video' && requestedModel === 'grok'
       ? config.model
@@ -157,7 +157,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       : undefined;
     if (provider === 'oairegbox-omni' && rawReferenceImages.length > 0 && !referenceFiles?.length) throw new Error('reference_files_required');
     const normalized = validateGenerationRequest({ provider, model, duration, aspectRatio, resolution, referenceImages, referenceVideos, referenceAudios });
-    if (provider === 'wan3-video' || provider === 'grok-video' || provider === 'mgrouter-grok-video' || provider === 'minimax-h3' || provider === 'quality-v4' || provider === 'oairegbox-omni') {
+    if (provider === 'wan3-video' || provider === 'grok-video' || provider === 'mgrouter-grok-video' || provider === 'minimax-h3' || provider === 'pro666-video' || provider === 'quality-v4' || provider === 'oairegbox-omni') {
         const capability = getVideoCapability(provider, model);
         validateVideoCapability(capability, {
           duration: normalized.duration!,
@@ -179,7 +179,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           updateProviderTask(task.id, { status: 'prompting', progress: Math.max(2, current?.progress ?? 0), metadata: { ...(current?.metadata ?? {}), promptGenerationPending: true } });
           try {
             const generated = await resolveChildPrompt();
-            finalPrompt = generated.text;
+            // Keep the Excel-matched title/description in the exact prompt
+            // sent to the video supplier, even if the child-prompt model
+            // paraphrases or omits those fields in its response.
+            finalPrompt = appendProductSummary(generated.text, productSummary);
             const generatedTask = getProviderTask(task.id);
             updateProviderTask(task.id, { prompt: finalPrompt, status: 'submitting', progress: Math.max(5, generatedTask?.progress ?? 0), metadata: { ...(generatedTask?.metadata ?? {}), childPrompt: finalPrompt, finalPrompt, promptGenerationPending: false, promptProvider: generated.provider, promptModel: generated.model, promptGenerationSource: generated.mode } });
           } catch (error) {
@@ -197,7 +200,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ success: !queueFull, data: { taskId: first.id, taskIds: persistedTasks.map((task) => task.id), count: persistedTasks.length, accountId: id, status: first.status, provider: first.provider, execution: 'pending', model: first.model, providerTaskId: first.providerTaskId, progress: first.progress }, ...(queueFull ? { error: 'scheduler_queue_full' } : {}) }, { status: queueFull ? 503 : 202 });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : '';
-      const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_files_required', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'minimax_prompt_required', 'minimax_invalid_duration', 'minimax_invalid_aspect_ratio', 'minimax_too_many_reference_images', 'minimax_too_many_reference_audios', 'minimax_reference_urls_must_be_https', 'mgrouter_reference_audio_unsupported', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];
+    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_files_required', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'minimax_prompt_required', 'minimax_invalid_duration', 'minimax_invalid_aspect_ratio', 'minimax_too_many_reference_images', 'minimax_too_many_reference_audios', 'minimax_reference_urls_must_be_https', 'pro666_reference_video_unsupported', 'pro666_prompt_required', 'pro666_too_many_reference_images', 'pro666_too_many_reference_audios', 'pro666_reference_urls_must_be_https', 'mgrouter_reference_audio_unsupported', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];
     const responseError = known.includes(message) ? message : 'provider_request_failed';
     const status = responseError === 'provider_not_configured' ? 503 : responseError.startsWith('provider_') ? 502 : 400;
     return NextResponse.json({ success: false, error: responseError }, { status });

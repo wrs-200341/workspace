@@ -167,6 +167,15 @@ const CAPABILITIES: Record<string, VideoCapability> = {
     referenceVideos: none,
     referenceAudios: imageRefs(3),
   },
+  'pro666-video:sd2-933-mini': {
+    duration: { min: 12, max: 12, values: [12] },
+    aspectRatios: ['9:16'],
+    resolutions: ['720p'],
+    defaultResolution: '720p',
+    referenceImages: imageRefs(1),
+    referenceVideos: none,
+    referenceAudios: imageRefs(1),
+  },
   // Keep legacy R2V records readable while new requests use the secure-skill
   // MiniMax H3 model above.  The secure-skill contract explicitly rejects
   // reference video fields, so this alias intentionally disables them too.

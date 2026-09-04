@@ -68,7 +68,11 @@ function loadRows(filePath: string): Map<string, SummaryRow> {
 export function productPidFromReferenceName(referenceName: string | undefined): string | undefined {
   if (!referenceName?.trim()) return undefined;
   const base = path.basename(referenceName.trim()).replace(/\.[^.]+$/, '');
-  const match = base.match(/^([^_-]+)/);
+  // PID is the leading identifier in both uploaded names (`pid_xx.png`)
+  // and imported product-image labels (`pid · 001.jpg`). Stop at any
+  // separator commonly used by the asset UI instead of treating the whole
+  // display label as the PID.
+  const match = base.match(/^([A-Za-z0-9]+)/);
   const pid = normalizePid(match?.[1]);
   return pid || undefined;
 }

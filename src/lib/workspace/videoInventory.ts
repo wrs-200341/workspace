@@ -11,7 +11,7 @@ const MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
 const MAX_OUTPUTS_PER_TASK = 4;
 const MAX_TOTAL_OUTPUT_BYTES = 400 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
-const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['media.manjuai.top', 'gogrok.iconmoi.com', 'snumom.com', 'video2.crack.cc.cd', 'token.secure-skill.com']);
+const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['media.manjuai.top', 'gogrok.iconmoi.com', 'snumom.com', 'video2.crack.cc.cd', 'token.secure-skill.com', 'video.pro666.top']);
 
 export type VideoInventoryDependencies = {
   fetcher?: typeof fetch;
