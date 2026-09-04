@@ -13,7 +13,7 @@ import { getDefaultProductionAspectRatio, getDefaultProductionDuration, getDefau
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { appendProductSummary, lookupProductSummary } from '@/lib/workspace/productSummary';
 import * as productSummaryModule from '@/lib/workspace/productSummary';
-import { enqueueProviderTask, pumpProviderTasks, recoverOrphanedSchedulerTasks, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
+import { enqueueProviderTask, pumpProviderTasks, recoverOrphanedSchedulerTasks, retryProviderTaskOnFailure, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 
 type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'quality-v4' | 'oairegbox-omni';
@@ -153,7 +153,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       : [];
     const referenceImages = [...rawReferenceImages, ...publishedReferences.map((item) => item.url)];
     const normalized = validateGenerationRequest({ provider, model, duration, aspectRatio, resolution, referenceImages, referenceAudios });
-    const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: promptWithSummary, status: 'queued', progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: 1, execution: 'pending', maxRetries: 2, finalPrompt: promptWithSummary, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(assetIds.length ? { assetIds, referenceTokens: publishedReferences.map((item) => item.token) } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) } });
+    const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: promptWithSummary, status: 'queued', progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: 1, execution: 'pending', maxRetries: 2, schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'video', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, finalPrompt: promptWithSummary, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(assetIds.length ? { assetIds, referenceTokens: publishedReferences.map((item) => item.token) } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) } });
     const accepted = enqueueProviderTask({
       taskId: task.id,
       ownerId: ownerId ?? id,

@@ -10,10 +10,10 @@ import { getWorkspacePath } from '@/lib/storagePaths';
 import fs from 'node:fs';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls } from '@/lib/workspace/imageInventory';
-import { getProductImageAbsolutePath, listProductImageAssets, publishProductImageReference } from '@/lib/workspace/productImages';
+import { getProductImageAbsolutePath, listProductImageAssets, publishProductImageReferences } from '@/lib/workspace/productImages';
 import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
-import { enqueueProviderTask } from '@/lib/providers/concurrency';
+import { enqueueProviderTask, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
 
 const IMAGE_PROVIDERS: readonly ProviderId[] = ['mgrouter-grok-image', 'yuanai-image', 'pomoai-gemini-image', 'origin-gpt-image', 'origin-grok-image', 'origin-nano-image', 'junze-gpt-image', 'junze-gemini-image'];
 
@@ -55,7 +55,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       ? publishAssetReferences(orderedImageAssets.filter((item) => item.kind === 'image').map((item) => ({ accountId: id, assetId: item.id, allowedKinds: ['image'] as const })))
       : [];
     const publishedProductReferences = isProviderLiveEnabled(provider) && (provider === 'mgrouter-grok-image' || provider === 'origin-grok-image')
-      ? orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => publishProductImageReference(item.id, id))
+      ? publishProductImageReferences(orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id), id)
       : [];
     const publishedByAssetId = new Map<string, string>();
     orderedImageAssets.filter((item) => item.kind === 'image').forEach((item, index) => {
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const pomoReferences = (provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image' || provider === 'origin-nano-image') && localImageAssets
       ? localImageAssets.map((reference) => ({ mimeType: reference.mimeType, dataBase64: Buffer.from(reference.bytes).toString('base64') }))
       : [];
-    const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'image', schedulerModel: model, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
+    const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'image', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
     const promptText = body.prompt.trim();
     const tasks = createProviderTasks(Array.from({ length: count }, (_, index) => ({ accountId: id, mode: 'image' as const, provider, model, prompt: promptText, status: 'queued' as const, progress: 0, metadata: { ...baseMetadata, maxRetries: 2, sequence: index + 1 } })));
     const accepted = tasks.map((task) => enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'image', model, run: () => submitImageTask({ accountId: id, taskId: task.id, provider, model, prompt: promptText, normalized, images, assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, yuanReferenceFiles, originReferenceFiles, pomoReferences }) }));
@@ -177,10 +177,15 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
     try {
       const fallbackReferences = [...input.images];
       if (isProviderLiveEnabled(fallbackProvider)) {
+        const imageIds = input.referenceAssetOrder.filter((asset) => asset.kind === 'image').map((asset) => asset.id);
+        const productIds = input.referenceAssetOrder.filter((asset) => asset.kind === 'product-image').map((asset) => asset.id);
+        const publishedImages = publishAssetReferences(imageIds.map((assetId) => ({ accountId: input.accountId, assetId, allowedKinds: ['image'] as const })));
+        const publishedProducts = publishProductImageReferences(productIds, input.accountId);
+        const imageUrls = new Map(publishedImages.map((item) => [item.assetId, item.url]));
+        const productUrls = new Map(publishedProducts.map((item) => [item.assetId, item.url]));
         for (const asset of input.referenceAssetOrder) {
-          fallbackReferences.push(asset.kind === 'image'
-            ? publishAssetReference({ accountId: input.accountId, assetId: asset.id, allowedKinds: ['image'] }).url
-            : publishProductImageReference(asset.id, input.accountId).url);
+          const url = asset.kind === 'image' ? imageUrls.get(asset.id) : productUrls.get(asset.id);
+          if (url) fallbackReferences.push(url);
         }
       }
       const uniqueReferences = [...new Set(fallbackReferences)];
@@ -203,7 +208,7 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
     } catch (error) {
       lastError = error;
       const current = getProviderTask(input.taskId);
-      updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }), metadata: { ...(current?.metadata ?? {}), execution: 'failed', fallbackError: sanitizeProviderError(error instanceof Error ? error.message : '') } });
+      updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }), metadata: { ...(current?.metadata ?? {}), execution: 'failed', fallbackError: sanitizeProviderError(error instanceof Error ? error.message : ''), schedulerRetryExhausted: true } });
       return;
     }
   }

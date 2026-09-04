@@ -33,7 +33,7 @@ const ACTIVE_STATUSES: readonly ProviderTaskStatus[] = ['prompting', 'submitting
 const WAITING_STATE = 'waiting';
 const PROVIDER_ACTIVE_STATE = 'provider-active';
 const DISPATCHING_STATE = 'dispatching';
-const SCHEDULER_RUNTIME_ID = crypto.randomUUID();
+export const SCHEDULER_RUNTIME_ID = crypto.randomUUID();
 const ORPHANED_TASK_AGE_MS = 2 * 60 * 1000;
 /** Every production task gets two automatic retries after its first failure. */
 export const DEFAULT_MAX_RETRIES = 2;
@@ -173,6 +173,7 @@ function retryCount(task: ProviderTask): number {
 }
 
 function maxRetries(task: ProviderTask): number {
+  if (task.metadata?.schedulerRetryExhausted === true) return 0;
   const value = task.metadata?.maxRetries;
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_MAX_RETRIES;
 }

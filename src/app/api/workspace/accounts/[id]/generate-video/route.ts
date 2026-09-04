@@ -9,14 +9,14 @@ import { publishAssetReferences } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getVideoCapability, validateVideoCapability } from '@/lib/workspace/production/video-capabilities';
 import { getDefaultProductionAspectRatio, getDefaultProductionDuration, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
-import { publishProductImageReference } from '@/lib/workspace/productImages';
+import { publishProductImageReferences } from '@/lib/workspace/productImages';
 import { getProductImageAbsolutePath, listProductImageAssets } from '@/lib/workspace/productImages';
 import { readAssetFile } from '@/lib/workspace/assetStore';
 import fs from 'node:fs';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { appendProductSummary, lookupProductSummary } from '@/lib/workspace/productSummary';
 import * as productSummaryModule from '@/lib/workspace/productSummary';
-import { enqueueProviderTask } from '@/lib/providers/concurrency';
+import { enqueueProviderTask, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 
 type VideoProvider = 'grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'quality-v4' | 'oairegbox-omni';
@@ -107,7 +107,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const publishedImages = publishedMedia.slice(0, imageCount);
     const publishedVideos = publishedMedia.slice(imageCount, imageCount + videoCount);
     const publishedAudios = publishedMedia.slice(imageCount + videoCount);
-    const publishedProductImages = live ? orderedProductImageAssetIds.map((assetId) => publishProductImageReference(assetId, id)) : [];
+    const publishedProductImages = live ? publishProductImageReferences(orderedProductImageAssetIds, id) : [];
     const publishedImageUrls = new Map<string, string>();
     orderedReferenceAssetIds.forEach((assetId, assetIndex) => { const item = publishedImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
     orderedProductImageAssetIds.forEach((assetId, assetIndex) => { const item = publishedProductImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
@@ -148,7 +148,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           referenceAudioCount: referenceAudios.length,
         });
     }
-    const tasks = createProviderTasks(Array.from({ length: count }, (_, index) => ({ accountId: id, mode: 'video' as const, provider, model, prompt: promptWithSummary, status: 'queued' as const, progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'video', schedulerModel: model, modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: promptWithSummary, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } })));
+    const tasks = createProviderTasks(Array.from({ length: count }, (_, index) => ({ accountId: id, mode: 'video' as const, provider, model, prompt: promptWithSummary, status: 'queued' as const, progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'video', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: promptWithSummary, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } })));
     for (const task of tasks) {
       enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'video', model, run: () => submitVideoTask({ taskId: task.id, provider, model, prompt: promptWithSummary, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos }) });
     }

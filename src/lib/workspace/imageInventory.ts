@@ -78,7 +78,7 @@ async function readOutput(accountId: string, task: ProviderTask, value: string, 
   if (!/^https?:\/\//i.test(value)) return null;
   const lookup = dependencies.lookup ?? ((hostname: string) => dns.lookup(hostname, { all: true, verbatim: true }));
   const parsed = new URL(value);
-  if (parsed.username || parsed.password || parsed.hash || (parsed.port && parsed.port !== '443')) return null;
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash || (parsed.port && parsed.port !== '443')) return null;
   const addresses = await lookup(parsed.hostname);
   const benchmarkMapping = addresses.length > 0 && addresses.every((item) => /^198\.(?:18|19)\./.test(item.address));
   // Provider media origins are explicit egress allowlist entries.  The

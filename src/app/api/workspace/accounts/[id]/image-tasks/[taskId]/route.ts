@@ -23,7 +23,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (persisted && persisted.accountId === id && persisted.mode === 'image') {
     if ((persisted.status === 'processing' && persisted.metadata?.localOutputReady !== true)
       || (persisted.status === 'failed' && persisted.error === 'image_output_cache_failed')) {
-      persisted = await recoverPendingImageTaskOutputCache(taskId) ?? persisted;
+      void recoverPendingImageTaskOutputCache(taskId).catch(() => null);
     }
     if (persisted.providerTaskId && isProviderLiveEnabled(persisted.provider) && ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(persisted.status)) {
       void queueDetailProviderSync(taskId, persisted);

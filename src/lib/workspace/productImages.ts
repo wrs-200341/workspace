@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { getWorkspacePath } from '../storagePaths';
-import { publishFileReference, type PublishedAssetReference } from './referenceBridge';
+import { publishFileReference, publishFileReferences, type PublishedAssetReference } from './referenceBridge';
 
 /** Product/PID records imported from the 8765 gallery service. */
 export type ProductImageRecord = {
@@ -287,6 +287,20 @@ export function publishProductImageReference(assetId: string, accountId: string)
   // legacy account-scoped imports remain restricted to their owner.
   if (asset.id.split(':')[1] !== 'shared' && asset.id.split(':')[1] !== accountId) throw new Error('reference_asset_not_found');
   return publishFileReference({ accountId, assetId, relativePath: asset.relativePath, mimeType: asset.mimeType });
+}
+
+/** Batch variant used by production submissions to avoid one registry rewrite per image. */
+export function publishProductImageReferences(assetIds: readonly string[], accountId: string): PublishedAssetReference[] {
+  if (!assetIds.length) return [];
+  const assets = listProductImageAssets();
+  const inputs = assetIds.map((assetId) => {
+    const asset = assets.find((candidate) => candidate.id === assetId);
+    if (!asset) throw new Error('reference_asset_not_found');
+    const owner = asset.id.split(':')[1];
+    if (owner !== 'shared' && owner !== accountId) throw new Error('reference_asset_not_found');
+    return { accountId, assetId, relativePath: asset.relativePath, mimeType: asset.mimeType };
+  });
+  return publishFileReferences(inputs);
 }
 
 export function readProductImageAsset(assetId: string): ProductImageAsset | null {

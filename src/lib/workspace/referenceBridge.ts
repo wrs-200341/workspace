@@ -215,30 +215,48 @@ export function publishAssetReferences(inputs: ReadonlyArray<{
 
 /** Publishes a validated file already stored under the workspace data root. */
 export function publishFileReference(input: { accountId: string; assetId: string; relativePath: string; mimeType: string; ttlMs?: number }): PublishedAssetReference {
-  const accountId = input.accountId.trim();
-  const assetId = input.assetId.trim();
-  if (!accountId || !assetId || !input.relativePath || path.isAbsolute(input.relativePath)) throw new Error('reference_asset_not_found');
-  const root = fs.realpathSync(path.resolve(getWorkspacePath()));
-  const lexicalFile = path.resolve(getWorkspacePath(input.relativePath));
-  if (!lexicalFile.startsWith(`${root}${path.sep}`) || !fs.existsSync(lexicalFile)) throw new Error('reference_asset_not_found');
-  let source: string;
-  try { source = fs.realpathSync(lexicalFile); } catch { throw new Error('reference_asset_not_found'); }
-  if (!source.startsWith(`${root}${path.sep}`)) throw new Error('reference_asset_not_found');
-  const stat = fs.statSync(source);
-  if (!stat.isFile() || stat.size <= 0 || stat.size > 100 * 1024 * 1024) throw new Error('reference_asset_file_invalid');
+  return publishFileReferences([input])[0];
+}
+
+type FileReferenceInput = { accountId: string; assetId: string; relativePath: string; mimeType: string; ttlMs?: number };
+
+/** Publish several already-validated workspace files with one registry write. */
+export function publishFileReferences(inputs: ReadonlyArray<FileReferenceInput>): PublishedAssetReference[] {
+  if (inputs.length === 0) return [];
+  if (inputs.length > MAX_BATCH_REFERENCES) throw new Error('reference_batch_too_large');
   const base = publicBaseUrl();
-  const ttl = typeof input.ttlMs === 'number' && Number.isFinite(input.ttlMs) ? Math.max(1, Math.min(MAX_TTL_MS, Math.round(input.ttlMs))) : DEFAULT_TTL_MS;
-  const token = crypto.randomBytes(32).toString('base64url');
-  const extension = path.extname(input.relativePath).toLowerCase().match(/^\.[a-z0-9]{1,8}$/)?.[0] || '.bin';
-  const cacheFile = `${token}${extension}`;
-  const destination = safeCachePath(cacheFile);
-  ensureDirectories();
-  fs.copyFileSync(source, destination);
   const now = Date.now();
-  const entry: RegistryEntry = { token, url: `${base}/api/workspace/references/${token}`, accountId, assetId, mimeType: input.mimeType || 'application/octet-stream', expiresAt: now + ttl, cacheFile, createdAt: now };
-  const entries = readRegistry().filter((candidate) => candidate.expiresAt > now && candidate.token !== token);
-  writeRegistry([...entries, entry]);
-  return clone(entry);
+  ensureDirectories();
+  const active = readRegistry().filter((candidate) => candidate.expiresAt > now);
+  const published: RegistryEntry[] = [];
+  try {
+    for (const input of inputs) {
+      const accountId = input.accountId.trim();
+      const assetId = input.assetId.trim();
+      if (!accountId || !assetId || !input.relativePath || path.isAbsolute(input.relativePath)) throw new Error('reference_asset_not_found');
+      const root = fs.realpathSync(path.resolve(getWorkspacePath()));
+      const lexicalFile = path.resolve(getWorkspacePath(input.relativePath));
+      if (!lexicalFile.startsWith(`${root}${path.sep}`) || !fs.existsSync(lexicalFile)) throw new Error('reference_asset_not_found');
+      let source: string;
+      try { source = fs.realpathSync(lexicalFile); } catch { throw new Error('reference_asset_not_found'); }
+      if (!source.startsWith(`${root}${path.sep}`)) throw new Error('reference_asset_not_found');
+      const stat = fs.statSync(source);
+      if (!stat.isFile() || stat.size <= 0 || stat.size > 100 * 1024 * 1024) throw new Error('reference_asset_file_invalid');
+      const ttl = typeof input.ttlMs === 'number' && Number.isFinite(input.ttlMs) ? Math.max(1, Math.min(MAX_TTL_MS, Math.round(input.ttlMs))) : DEFAULT_TTL_MS;
+      const token = crypto.randomBytes(32).toString('base64url');
+      const extension = path.extname(input.relativePath).toLowerCase().match(/^\.[a-z0-9]{1,8}$/)?.[0] || '.bin';
+      const cacheFile = `${token}${extension}`;
+      fs.copyFileSync(source, safeCachePath(cacheFile));
+      published.push({ token, url: `${base}/api/workspace/references/${token}`, accountId, assetId, mimeType: input.mimeType || 'application/octet-stream', expiresAt: now + ttl, cacheFile, createdAt: now });
+    }
+  } catch (error) {
+    for (const entry of published) {
+      try { fs.rmSync(safeCachePath(entry.cacheFile), { force: true }); } catch { /* best effort rollback */ }
+    }
+    throw error;
+  }
+  writeRegistry([...active, ...published]);
+  return published.map(clone);
 }
 
 export function readPublicReference(token: string): { accountId: string; assetId: string; mimeType: string; bytes: Buffer; expiresAt: number } | null {

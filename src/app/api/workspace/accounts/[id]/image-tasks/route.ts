@@ -100,8 +100,7 @@ async function runLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTask
           error: sanitizeProviderError(error instanceof Error ? error.message : 'provider_request_failed'),
           providerResponse,
         });
-        if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
-        if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
+         if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
       }
     })();

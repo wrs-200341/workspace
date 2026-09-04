@@ -54,7 +54,8 @@ export function TaskReviewPage({ accountId, taskId, mode, readOnly = false }: { 
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    if (!task || !['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying'].includes(task.status)) return;
+    const cacheRecoveryPending = task?.status === 'failed' && task.error === 'image_output_cache_failed';
+    if (!task || (!['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying'].includes(task.status) && !cacheRecoveryPending)) return;
     const timer = window.setInterval(() => void load(), 2_000);
     return () => window.clearInterval(timer);
   }, [load, task]);

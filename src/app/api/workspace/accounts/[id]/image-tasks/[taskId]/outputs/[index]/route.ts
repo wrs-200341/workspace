@@ -9,6 +9,12 @@ import { readAssetFile } from '@/lib/workspace/assetStore';
 
 const MAX_IMAGE_OUTPUT_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 25_000;
+const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['imgen.x.ai']);
+
+function isTrustedProviderOutputHost(hostname: string): boolean {
+  return TRUSTED_PROVIDER_OUTPUT_HOSTS.has(hostname.toLowerCase())
+    || /^pub-[a-f0-9]{32}\.r2\.dev$/i.test(hostname);
+}
 
 function imageExtension(mimeType: string): string {
   const normalized = mimeType.toLowerCase();
@@ -64,7 +70,9 @@ async function assertPublicImageTarget(value: string): Promise<URL> {
   }
   const family = net.isIP(hostname);
   const addresses = family ? [{ address: hostname }] : await dns.lookup(hostname, { all: true, verbatim: true });
-  if (!addresses.length || addresses.some((item) => isPrivateAddress(item.address))) throw new Error('image_output_target_blocked');
+  const benchmarkMapping = !family && addresses.length > 0 && addresses.every((item) => /^198\.(?:18|19)\./.test(item.address));
+  const hasPrivateAddress = addresses.some((item) => isPrivateAddress(item.address));
+  if (!addresses.length || (hasPrivateAddress && !(isTrustedProviderOutputHost(hostname) && benchmarkMapping))) throw new Error('image_output_target_blocked');
   return parsed;
 }
 
