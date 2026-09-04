@@ -37,6 +37,14 @@ describe('production form historical fields', () => {
     expect(providerOptionsForVideoModel(catalog, 'grok-imagine-video-1.5').map((item) => item.id)).toEqual(['grok-video', 'mgrouter-grok-video']);
   });
 
+  it('uses the secure-skill MiniMax H3 model id for new video requests', () => {
+    expect(modelIdForVideoProvider('minimax-h3')).toBe('minimax-h3');
+    expect(videoModelsForProvider('minimax-h3').map((item) => item.id)).toEqual(['minimax-h3']);
+    expect(providersForVideoModel([
+      { id: 'minimax-h3', name: 'MiniMax H3', kind: 'video', model: 'minimax-h3', baseUrl: 'https://token.secure-skill.com', liveEnv: 'MINIMAX_API_KEY', supports: { referenceImages: 5, referenceAudios: 3, ratios: [], resolutions: [] } },
+    ], 'minimax-h3').map((item) => item.id)).toEqual(['minimax-h3']);
+  });
+
   it('lists Omni and routes the model only to its OAIRegBox supplier', () => {
     expect(VIDEO_MODELS).toEqual(expect.arrayContaining([{ id: 'omni-fast-no-water', label: 'Omni Fast No Water' }]));
     const providers = providersForVideoModel([

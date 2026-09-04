@@ -1,4 +1,4 @@
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
@@ -652,11 +652,11 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   return { mode: 'live', provider: input.provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, providerEndpoint(input.provider, 'create', env), config.apiKey, body) };
 }
 
-export async function generatePomoAIImage(input: { model: string; prompt: string; references?: Array<{ mimeType: string; dataBase64: string }> }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
+export async function generatePomoAIImage(input: { model: string; prompt: string; references?: Array<{ mimeType: string; dataBase64: string }>; aspectRatio?: string; resolution?: string }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
   const env = dependencies.env ?? process.env;
   if ((input.references ?? []).length > 3) throw new Error('too_many_reference_images');
   const live = env.WORKSPACE_ENABLE_LIVE_PROVIDERS === 'true' && Boolean(env.POMOAI_API_KEY?.trim());
-  const payload = { contents: [{ parts: [...(input.references ?? []).map((reference) => ({ inlineData: { mimeType: reference.mimeType, data: reference.dataBase64 } })), { text: input.prompt.trim() }] }] };
+  const payload = buildPomoAIImagePayload(input);
   if (!live) {
     if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
     return { mode: 'mock', provider: 'pomoai-gemini-image', response: { id: `mock_pomo_${Date.now()}`, status: 'queued', payload } };

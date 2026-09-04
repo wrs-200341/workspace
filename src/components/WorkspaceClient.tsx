@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { ArrowUpRight, FileText, Image as ImageIcon, Pencil, PlaySquare, Plus, RefreshCw, Settings2, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ROLE_LABELS, type AuthUser } from '@/lib/auth/policy';
 import { getWorkspaceOperatorForUser, getWorkspaceOperators, type WorkspaceAccount, type WorkspaceCategory } from '@/lib/workspace/data';
 import { isCompletedNotInInventory, isInventorySavedToday, type WorkspaceTask } from '@/lib/workspace/tasks';
@@ -26,10 +26,11 @@ export function WorkspaceClient({ user, initialAccounts, initialTasks }: Props) 
   const operators = useMemo(() => {
     const recovered = getWorkspaceOperators();
     if (user.role === 'admin') return recovered;
-    const current = user.role === 'workspace'
-      ? (recovered.find((operator) => operator.id === 'operator-chenxi') ?? recovered[1])
-      : getWorkspaceOperatorForUser(user.username, user.displayName);
-    return current ? [current] : [];
+    if (user.role === 'workspace') {
+      const current = recovered.find((operator) => operator.id === 'operator-chenxi') ?? recovered[1];
+      return current ? [current] : [];
+    }
+    return recovered;
   }, [user.displayName, user.role, user.username]);
   const initialOwner = user.role === 'admin'
     ? operators[0]?.id
@@ -43,9 +44,34 @@ export function WorkspaceClient({ user, initialAccounts, initialTasks }: Props) 
   const [planDraft, setPlanDraft] = useState('');
   const [accountEditor, setAccountEditor] = useState<{ id?: string; name: string; strategy: string; category: WorkspaceCategory } | null>(null);
   const [refreshedAt, setRefreshedAt] = useState(() => new Date());
+  useEffect(() => {
+    if (user.role !== 'operator') return;
+    const selector = document.querySelector<HTMLSelectElement>('select[aria-label="选择运营人员"]');
+    selector?.removeAttribute('disabled');
+    const help = document.querySelector<HTMLElement>('.workspace-rail .rail-help');
+    if (help) help.textContent = '可查看其他运营工作区，只有自己的工作区可以编辑';
+  }, [user.role]);
+  useEffect(() => {
+    if (user.role !== 'operator') return;
+    document.querySelectorAll<HTMLSelectElement>('.workspace-rail select').forEach((select) => select.removeAttribute('disabled'));
+  }, [user.role]);
   const owner = operators.find((item) => item.id === ownerId) ?? operators[0];
-  const accounts = useMemo(() => liveAccounts.filter((account) => account.ownerId === ownerId && account.category === category), [liveAccounts, ownerId, category]);
-  const accountCountFor = (item: WorkspaceCategory) => liveAccounts.filter((account) => account.ownerId === ownerId && account.category === item).length;
+  const ownOwnerId = getWorkspaceOperatorForUser(user.username, user.displayName).id;
+  const canEditSelectedOwner = user.role === 'admin' || (user.role === 'operator' && ownerId === ownOwnerId) || (user.role === 'workspace' && ownerId === 'operator-chenxi');
+  const accounts = useMemo(() => liveAccounts.filter((account) => (user.role === 'operator' || account.ownerId === ownerId) && account.category === category), [liveAccounts, ownerId, category, user.role]);
+  useEffect(() => {
+    const panel = document.querySelector<HTMLElement>('.account-panel');
+    if (!panel) return;
+    panel.classList.toggle('workspace-panel-read-only', !canEditSelectedOwner);
+    if (user.role === 'operator') {
+      panel.querySelectorAll<HTMLElement>('.account-card').forEach((card) => {
+        const owner = card.querySelector('.account-owner')?.textContent ?? '';
+        const own = owner.includes(getWorkspaceOperatorForUser(user.username, user.displayName).name);
+        card.querySelectorAll<HTMLElement>('.account-card-title-row .icon-button, .plan-link').forEach((control) => control.classList.toggle('operator-read-only-control', !own));
+      });
+    }
+  }, [accounts.length, canEditSelectedOwner, category, user.displayName, user.role, user.username]);
+  const accountCountFor = (item: WorkspaceCategory) => liveAccounts.filter((account) => (user.role === 'operator' || account.ownerId === ownerId) && account.category === item).length;
   const ownerTasks = useMemo(() => initialTasks.filter((task) => task.owner === ownerId).map((task) => ({ ...task, outputUrls: task.outputUrls ? [...task.outputUrls] : undefined, outputBase64: task.outputBase64 ? [...task.outputBase64] : undefined })), [initialTasks, ownerId]);
   const summary = useMemo(() => ownerTasks.reduce((result, task) => {
     const outputs = taskOutputCount(task);
@@ -64,7 +90,7 @@ export function WorkspaceClient({ user, initialAccounts, initialTasks }: Props) 
 
   async function refreshStats() {
     try {
-      const query = ownerId ? `?ownerId=${encodeURIComponent(ownerId)}` : '';
+      const query = ownerId && user.role !== 'operator' ? `?ownerId=${encodeURIComponent(ownerId)}` : '';
       const response = await fetch(`/api/workspace/accounts${query}`, { cache: 'no-store' });
       const payload = await response.json().catch(() => null) as { success?: boolean; data?: { accounts?: WorkspaceAccount[] } } | null;
       if (response.ok && payload?.success && Array.isArray(payload.data?.accounts)) {
@@ -74,8 +100,8 @@ export function WorkspaceClient({ user, initialAccounts, initialTasks }: Props) 
       setRefreshedAt(new Date());
     }
   }
-  function openPlan(accountId: string) { const account = liveAccounts.find((item) => item.id === accountId); setPlanAccountId(accountId); setPlanDraft(account?.strategy ?? ''); }
-  function openAccountEditor(account?: WorkspaceAccount) { setAccountEditor(account ? { id: account.id, name: account.name, strategy: account.strategy, category: account.category } : { name: '', strategy: '', category }); }
+  function openPlan(accountId: string) { if (!canEditSelectedOwner) return; const account = liveAccounts.find((item) => item.id === accountId); setPlanAccountId(accountId); setPlanDraft(account?.strategy ?? ''); }
+  function openAccountEditor(account?: WorkspaceAccount) { if (!canEditSelectedOwner) return; setAccountEditor(account ? { id: account.id, name: account.name, strategy: account.strategy, category: account.category } : { name: '', strategy: '', category }); }
   async function saveAccount() { if (!accountEditor) return; const response = await fetch(accountEditor.id ? `/api/workspace/accounts/${accountEditor.id}` : '/api/workspace/accounts', { method: accountEditor.id ? 'PATCH' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(accountEditor) }); const payload = await response.json().catch(() => null) as { success?: boolean; error?: string } | null; if (!response.ok || !payload?.success) { window.alert(payload?.error || '保存账号失败'); return; } setAccountEditor(null); window.location.reload(); }
   async function savePlan() { if (!selectedAccount) return; const response = await fetch(`/api/workspace/accounts/${selectedAccount.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ strategy: planDraft, planStatus: 'planned' }) }); if (response.ok) { setPlanAccountId(null); window.location.reload(); } }
 

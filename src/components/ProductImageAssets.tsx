@@ -6,7 +6,7 @@ import { Check, Download, Image as ImageIcon, Loader2, RefreshCw } from 'lucide-
 type ProductRecord = { pid: string; importDate: string; files: string[]; relativePath: string };
 type GalleryItem = { pid: string; title?: string; description?: string; coverUrl?: string };
 
-export function ProductImageAssets({ accountId }: { accountId: string }) {
+export function ProductImageAssets({ accountId, readOnly = false }: { accountId: string; readOnly?: boolean }) {
   const [query, setQuery] = useState('');
   const [submittedQuery, setSubmittedQuery] = useState('');
   const [gallery, setGallery] = useState<GalleryItem[]>([]);
@@ -31,7 +31,7 @@ export function ProductImageAssets({ accountId }: { accountId: string }) {
   const importedPids = useMemo(() => new Set(imported.map((item) => item.pid)), [imported]);
 
   async function importSelected() {
-    if (!selected.length) return;
+    if (readOnly || !selected.length) return;
     setLoading(true); setMessage('');
     try {
       const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/product-images`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pids: selected }) });
@@ -43,7 +43,7 @@ export function ProductImageAssets({ accountId }: { accountId: string }) {
   }
 
   const submitSearch = (event: React.FormEvent<HTMLFormElement>) => { event.preventDefault(); const next = query.trim(); setSubmittedQuery(next); void load(next); };
-  return <div className="product-image-assets">
+  return <div className={`product-image-assets ${readOnly ? 'read-only' : ''}`}>
     <div className="product-image-toolbar"><form className="product-image-search" role="search" onSubmit={submitSearch}><label className="sr-only" htmlFor="product-pid-query">搜索 8765 PID</label><input id="product-pid-query" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="输入 PID、标题或描述" /><button type="submit" className="ghost-button" disabled={loading}><RefreshCw size={14} /> 查询</button></form><button type="button" className="primary-button" onClick={() => void importSelected()} disabled={loading || !selected.length}><Download size={14} /> 导入选中 ({selected.length})</button></div>
     {message && <p role="status" className="product-image-message"><Check size={14} />{message}</p>}
     {loading && <div className="asset-empty"><Loader2 size={16} className="spin" />正在加载商品图片…</div>}

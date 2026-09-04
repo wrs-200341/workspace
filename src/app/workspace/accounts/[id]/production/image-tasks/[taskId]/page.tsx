@@ -8,5 +8,6 @@ export default async function Page({ params }: { params: Promise<{ id: string; t
   const { id, taskId } = await params;
   const user = await requirePageRole(['admin', 'workspace', 'operator'], `/workspace/accounts/${id}/production/image-tasks/${taskId}`);
   if (!canAccessWorkspaceAccount(user, id)) redirect('/forbidden');
-  return <AppShell user={user}><TaskReviewPage accountId={id} taskId={taskId} mode="image" /></AppShell>;
+  const readOnly = !canAccessWorkspaceAccount(user, id, { write: true });
+  return <AppShell user={user}><TaskReviewPage accountId={id} taskId={taskId} mode="image" readOnly={readOnly} /></AppShell>;
 }

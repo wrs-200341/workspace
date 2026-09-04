@@ -22,7 +22,7 @@ type QueueTask = {
   prompt?: string;
 };
 
-type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string };
+type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string; readOnly?: boolean; ownerId?: string };
 type QueueTab = 'all' | 'active' | 'completed' | 'failed';
 
 const labels: Record<string, string> = {
@@ -55,7 +55,7 @@ export function promptReviewHref(accountId: string, mode: Props['mode'], taskId:
   return mode === 'prompt' ? restoreHref(accountId, mode, taskId) : `${reviewHref(accountId, mode, taskId)}#prompt`;
 }
 
-export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate }: Props) {
+export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate, readOnly = false, ownerId }: Props) {
   const focusTaskId = requestedFocusTaskId;
   const requestedDate = requestedQueueDate;
   const [tasks, setTasks] = useState<QueueTask[]>([]);
@@ -82,7 +82,8 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
     setLoadError('');
     try {
       const sync = options.sync === true ? '&sync=1' : '';
-      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${taskEndpoint(mode)}?scope=owner&date=${encodeURIComponent(queueDate)}${sync}`, { cache: 'no-store', signal: controller.signal });
+      const scope = `&scope=owner${ownerId ? `&ownerId=${encodeURIComponent(ownerId)}` : ''}`;
+      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${taskEndpoint(mode)}?date=${encodeURIComponent(queueDate)}${scope}${sync}`, { cache: 'no-store', signal: controller.signal });
       const payload = await response.json().catch(() => null) as { success?: boolean; error?: string; data?: { tasks?: QueueTask[] } | QueueTask[]; tasks?: QueueTask[] } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '队列加载失败');
       const raw = Array.isArray(payload.data) ? payload.data : payload.data?.tasks ?? payload.tasks ?? [];
@@ -173,7 +174,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
 
   return (
     <>
-    <section className="panel production-queue-panel">
+    <section className={`panel production-queue-panel ${readOnly ? 'read-only-queue' : ''}`}>
       <header className="production-queue-header">
         <div><span className="eyebrow">PRODUCTION QUEUE</span><h2>生产队列</h2><p>按上海时间汇总当前运营账号下全部工作区的任务。</p></div>
         <div className="production-queue-tools"><label><CalendarDays size={14} /><span className="sr-only">按日期筛选生产任务</span><input type="date" value={queueDate} onChange={(event) => setQueueDate(event.target.value)} /></label><button type="button" className="icon-button" onClick={() => void load({ sync: true })} aria-label="刷新生产队列" title="刷新生产队列"><RefreshCw size={14} /></button><strong>{visible.length}</strong></div>

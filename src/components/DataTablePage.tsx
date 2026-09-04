@@ -5,7 +5,6 @@ import { WorkspaceClient } from './WorkspaceClient';
 import type { AuthUser } from '@/lib/auth/policy';
 import { listStoredAccounts } from '@/lib/workspace/accountStore';
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
-import { getWorkspaceOperatorForUser } from '@/lib/workspace/data';
 import { withLiveAccountStatsList } from '@/lib/workspace/accountStats';
 import { getDashboardSnapshot } from '@/lib/workspace/dashboardStats';
 
@@ -48,7 +47,7 @@ export function AccountsPage() {
 }
 
 export function WorkspacePage({ user }: { user: AuthUser }) {
-  const ownerId = user.role === 'admin' ? undefined : user.role === 'workspace' ? 'operator-chenxi' : getWorkspaceOperatorForUser(user.username, user.displayName).id;
+  const ownerId = user.role === 'admin' || user.role === 'operator' ? undefined : 'operator-chenxi';
   const storedAccounts = listStoredAccounts(ownerId ? { ownerId } : {});
   return <WorkspaceClient user={user} initialAccounts={withLiveAccountStatsList(storedAccounts)} initialTasks={getServerWorkspaceTasks(ownerId ? { ownerId } : {})} />;
 }
@@ -58,4 +57,3 @@ function Metric({ label, value, hint }: { label: string; value: string; hint: st
 }
 
 export function AssetIcon() { return <ImageIcon size={14} aria-hidden="true" />; }
-

@@ -23,6 +23,7 @@ type Props = {
   section: AssetKind;
   initialAssets: WorkspaceAsset[];
   promptTab?: PromptAssetCategory;
+  readOnly?: boolean;
 };
 
 type UploadState = {
@@ -90,7 +91,7 @@ function iconFor(section: AssetKind) {
   return AudioLines;
 }
 
-export function AccountAssetLibrary({ accountId, section, initialAssets, promptTab }: Props) {
+export function AccountAssetLibrary({ accountId, section, initialAssets, promptTab, readOnly = false }: Props) {
   const [assets, setAssets] = useState<WorkspaceAsset[]>(initialAssets);
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
@@ -268,7 +269,7 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
   }, [section]);
 
   return <div className={`account-asset-library ${section}`}>
-    <div
+    {!readOnly && <div
       className={`asset-dropzone ${dragging ? 'dragging' : ''} ${uploading ? 'uploading' : ''}`}
       onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setDragging(true); }}
@@ -285,11 +286,11 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
       <strong>{uploading ? '正在上传…' : `拖入${sectionLabel(section)}文件到这里`}</strong>
       <span>{helperText}</span>
       <span className="ghost-button" aria-hidden="true"><UploadCloud size={14} /> 选择文件</span>
-    </div>
+    </div>}
     {uploadState && <div className="asset-upload-status" role="status"><Loader2 size={14} className="spin" /> 上传进度 {uploadState.completed}/{uploadState.total}{uploadState.failed ? ` · 失败 ${uploadState.failed}` : ''}</div>}
     {message && <div className="asset-feedback success" role="status"><Check size={14} />{message}</div>}
     {error && <div className="asset-feedback error" role="alert"><X size={14} />{error}</div>}
-    {section === 'prompt' && <PromptTemplateEditor accountId={accountId} initialAssets={assets} initialCategory={promptTab} onSaved={refresh} />}
+    {section === 'prompt' && !readOnly && <PromptTemplateEditor accountId={accountId} initialAssets={assets} initialCategory={promptTab} onSaved={refresh} />}
     {section !== 'prompt' && !assets.length && <div className="asset-empty"><FolderOpen size={18} />还没有{sectionLabel(section)}资产，拖入文件即可开始。</div>}
     {section !== 'prompt' && assets.length > 0 && <div className={`asset-card-grid ${section === 'image' ? 'image-grid' : 'media-grid'}`}>
       {assets.map((asset) => {
@@ -305,8 +306,8 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
           </div>
           <div className="asset-card-actions" aria-label={`${asset.name} 操作`}>
             <button type="button" className="asset-card-action" onClick={() => void downloadAsset(asset)} title="下载" aria-label={`下载 ${asset.name}`}><Download size={15} /></button>
-            <button type="button" className="asset-card-action" onClick={() => startRename(asset)} title="重命名" aria-label={`重命名 ${asset.name}`}><Pencil size={15} /></button>
-            <button type="button" className="asset-card-action danger" onClick={() => void removeAsset(asset)} title="删除" aria-label={`删除 ${asset.name}`}><Trash2 size={15} /></button>
+            {!readOnly && <><button type="button" className="asset-card-action" onClick={() => startRename(asset)} title="重命名" aria-label={`重命名 ${asset.name}`}><Pencil size={15} /></button>
+            <button type="button" className="asset-card-action danger" onClick={() => void removeAsset(asset)} title="删除" aria-label={`删除 ${asset.name}`}><Trash2 size={15} /></button></>}
           </div>
         </article>;
       })}

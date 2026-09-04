@@ -25,7 +25,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id } = await params;
-  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const body = await request.json().catch(() => ({}));
   if (!body || typeof body !== 'object' || typeof (body as { prompt?: unknown }).prompt !== 'string' || !(body as { prompt: string }).prompt.trim()) {
     return NextResponse.json({ success: false, error: 'prompt_required' }, { status: 400 });
@@ -65,7 +65,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const config = getProviderConfig(provider);
   // `grok` is a historical UI/provider alias, not a model id accepted by
   // snumom. Resolve it to the configured model before submitting upstream.
-  const model = provider === 'grok-video' && requestedModel === 'grok' ? config.model : requestedModel ?? config.model;
+  const model = provider === 'minimax-h3'
+    ? config.model
+    : provider === 'grok-video' && requestedModel === 'grok'
+      ? config.model
+      : requestedModel ?? config.model;
   const isSdMini = provider === 'grok-video' && model.toLowerCase() === 'sd-mini';
   // sd-mini requires seconds explicitly; unlike legacy providers, do not
   // silently inject the provider's first duration when the field is omitted.

@@ -32,7 +32,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id } = await params;
   let accountId: string;
   try { accountId = assertAssetAccountId(id); } catch { return NextResponse.json({ success: false, error: 'account_id_invalid' }, { status: 400 }); }
-  if (!canAccessWorkspaceAccount(auth, accountId)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  if (!canAccessWorkspaceAccount(auth, accountId, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const contentType = request.headers.get('content-type') || '';
   try {
     if (contentType.includes('multipart/form-data')) {

@@ -19,7 +19,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id, taskId } = await params;
-  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const body = await request.json().catch(() => ({}));
   const action = body?.action as TaskAction;
   if (!['retry', 'cancel', 'pause', 'resume'].includes(action)) return NextResponse.json({ success: false, error: 'invalid_task_action' }, { status: 400 });
@@ -34,7 +34,7 @@ export async function DELETE(_request: NextRequest, { params }: { params: Promis
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id, taskId } = await params;
-  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const task = getProviderTask(taskId);
   if (!task || task.accountId !== id || task.mode !== 'prompt') return NextResponse.json({ success: false, error: 'task_not_found' }, { status: 404 });
   deleteProviderTask(taskId);

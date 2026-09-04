@@ -59,6 +59,6 @@ describe('workspace account creation API', () => {
     mockListStoredAccounts.mockReturnValue([{ id: 'account-emily', ownerId: 'operator-emily', name: 'Emily 账号' }]);
     const response = await GET(new NextRequest('http://localhost/api/workspace/accounts'));
     expect(response.status).toBe(200);
-    expect(mockListStoredAccounts).toHaveBeenCalledWith({ ownerId: 'operator-emily', category: undefined });
+    expect(mockListStoredAccounts).toHaveBeenCalledWith({ ownerId: undefined, category: undefined });
   });
 });

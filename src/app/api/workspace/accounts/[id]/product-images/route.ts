@@ -27,7 +27,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id } = await params;
-  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const body = await request.json().catch(() => ({})) as { pids?: unknown };
   if (!Array.isArray(body.pids) || !body.pids.every((pid) => typeof pid === 'string')) return NextResponse.json({ success: false, error: 'product_pid_required' }, { status: 400 });
   scheduleProductImageCleanup();

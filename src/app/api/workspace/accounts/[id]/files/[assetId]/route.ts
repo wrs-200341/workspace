@@ -46,7 +46,7 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id, assetId } = await params;
-  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const body = await request.json().catch(() => null) as { name?: unknown; content?: unknown; category?: unknown } | null;
   if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.name !== 'string' || !body.name.trim() || (body.content !== undefined && (typeof body.content !== 'string' || !body.content.trim()))) {
     return NextResponse.json({ success: false, error: 'asset_name_required' }, { status: 400 });
@@ -66,7 +66,7 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id, assetId } = await params;
-  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   try {
     const asset = deleteAsset(id, assetId);
     return asset ? NextResponse.json({ success: true, data: { assetId: asset.id, deleted: true } }) : NextResponse.json({ success: false, error: 'asset_not_found' }, { status: 404 });

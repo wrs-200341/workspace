@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft, CircleAlert, Download, Film, LoaderCircle, PackageCheck, RotateCcw } from 'lucide-react';
+import { ArrowLeft, CircleAlert, Download, LoaderCircle, PackageCheck, RotateCcw } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { dedupeVideoOutputUrls } from '@/lib/providers/videoOutputUrls';
@@ -27,7 +27,7 @@ type ReviewTask = {
   providerResponse?: unknown;
 };
 
-export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string; taskId: string; mode: 'video' | 'image' }) {
+export function TaskReviewPage({ accountId, taskId, mode, readOnly = false }: { accountId: string; taskId: string; mode: 'video' | 'image'; readOnly?: boolean }) {
   const router = useRouter();
   const [task, setTask] = useState<ReviewTask | null>(null);
   const [loading, setLoading] = useState(true);
@@ -59,6 +59,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   }, [load, task]);
 
   async function action(actionName: 'save-inventory' | 'pause' | 'resume' | 'cancel') {
+    if (readOnly) return;
     if (busy) return;
     setBusy(true); setMessage('');
     try {
@@ -188,9 +189,12 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
   const restoreHref = task
     ? `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}&restoreTaskId=${encodeURIComponent(task.id)}`
     : `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}`;
-  return <div className={`task-review-page ${mode === 'video' ? 'video-task-review' : 'image-task-review'}`}>
+  const queueHref = task
+    ? `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}&focusTaskId=${encodeURIComponent(task.id)}&queueDate=${encodeURIComponent(new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(task.createdAt)))}`
+    : `/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${encodeURIComponent(mode)}`;
+  return <div className={`task-review-page ${mode === 'video' ? 'video-task-review' : 'image-task-review'} ${readOnly ? 'read-only-review' : ''}`}>
     <div className="task-review-topbar">
-      <Link href={`/workspace/accounts/${accountId}/production?mode=${mode}`} className="panel-meta task-review-back"><ArrowLeft size={13} /> 返回生产工作区</Link>
+      <Link href={queueHref} className="panel-meta task-review-back"><ArrowLeft size={13} /> 返回生产工作区</Link>
       <span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status ?? 'unknown'}</span>
     </div>
     {message && <div className="workspace-alert task-review-alert" role="status"><CircleAlert size={16} /><div><strong>{message}</strong></div></div>}
@@ -198,7 +202,7 @@ export function TaskReviewPage({ accountId, taskId, mode }: { accountId: string;
     {Boolean(task?.providerResponse) && <details className="task-provider-response"><summary>查看完整供应商响应</summary><pre>{JSON.stringify(task?.providerResponse, null, 2) ?? ''}</pre></details>}
     <div className="task-review-stage">
       <section className="panel task-review-pane task-output-pane">
-        <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">输出预览</h2><div className="panel-meta">任务成品</div></div><Film size={16} color="#1e40af" /></div>
+        <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">输出预览</h2><div className="panel-meta">任务成品</div></div></div>
         <div className="task-output-list">{outputSources.length > 0 ? outputSources.map((url, index) => <ZoomableMedia key={`${url}-${index}`} src={url} alt={`任务输出 ${index + 1}`} video={mode === 'video'} />) : <div className="task-review-empty">任务尚未生成输出</div>}</div>
         <div className="task-review-actions"><span className="task-review-count">输出 {outputCount}</span><span className="task-review-inventory">{task?.inventorySavedAt ? '已入库' : '待入库'}</span><div className="review-buttons"><Link className="ghost-button" href={restoreHref}><RotateCcw size={14} /> 恢复配置</Link><button className="ghost-button" type="button" onClick={() => void action('save-inventory')} disabled={busy || !task || task.status !== 'completed' || Boolean(task.inventorySavedAt)}><PackageCheck size={14} /> 写入库存</button>{outputSources.map((url, index) => <button className="primary-button" key={`${url}-${index}`} type="button" onClick={() => void downloadOutput(url, index)} disabled={downloadingIndex !== null}><Download size={14} /> 下载</button>)}</div></div>
       </section>
@@ -228,7 +232,13 @@ function ReferenceThumbnail({ src, index, active, onSelect }: { src: string; ind
 }
 function ZoomableMedia({ src, alt, video = false }: { src: string; alt: string; video?: boolean }) {
   const [imageFailed, setImageFailed] = useState(false);
-  return <div className={`task-media-zoom ${video ? 'task-video-media' : ''}`}>
-    {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} /> : imageFailed ? <div className="task-media-fallback" role="img" aria-label={`${alt}不可用`}>图片不可用</div> : <img src={src} alt={alt} draggable={false} onError={() => setImageFailed(true)} />}
+  const [scale, setScale] = useState(1);
+  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
+    if (video) return;
+    event.preventDefault();
+    setScale((current) => Math.min(4, Math.max(0.5, current + (event.deltaY < 0 ? 0.15 : -0.15))));
+  };
+  return <div className={`task-media-zoom ${video ? 'task-video-media' : ''}`} onWheel={video ? undefined : onWheel}>
+    {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} /> : imageFailed ? <div className="task-media-fallback" role="img" aria-label={`${alt}不可用`}>图片不可用</div> : <div className="task-media-zoom-content" style={{ width: `${scale * 100}%`, height: `${scale * 100}%` }}><img src={src} alt={alt} draggable={false} onError={() => setImageFailed(true)} /></div>}
   </div>;
 }

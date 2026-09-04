@@ -45,7 +45,7 @@ export type YuanAIImageInput = { model: string; prompt: string; aspectRatio: str
 
 /** Inline image part used by the PomoAI Gemini 3.1 Flash Image endpoint. */
 export type PomoAIImageReference = { mimeType: string; dataBase64: string };
-export type PomoAIImageInput = { model: string; prompt: string; references?: readonly PomoAIImageReference[] };
+export type PomoAIImageInput = { model: string; prompt: string; references?: readonly PomoAIImageReference[]; aspectRatio?: string; resolution?: string };
 export type GPTPromptAttachment = { name?: string; mimeType: string; dataBase64?: string; text?: string };
 
 /** A validated local file used to construct provider multipart requests. */
@@ -57,7 +57,10 @@ export function buildPomoAIImagePayload(input: PomoAIImageInput): Record<string,
   const referenceParts = (input.references ?? []).map((reference) => ({
     inlineData: { mimeType: reference.mimeType, data: reference.dataBase64 },
   }));
-  return { contents: [{ parts: [...referenceParts, { text: input.prompt.trim() }] }] };
+  const imageConfig = input.aspectRatio || input.resolution
+    ? { imageConfig: { ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}), ...(input.resolution ? { imageSize: input.resolution.toUpperCase() } : {}) } }
+    : undefined;
+  return { contents: [{ parts: [...referenceParts, { text: input.prompt.trim() }] }], ...(imageConfig ? { generationConfig: imageConfig } : {}) };
 }
 
 export function buildYuanAIImageEditFormData(input: YuanAIImageEditInput): FormData {

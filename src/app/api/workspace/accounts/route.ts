@@ -16,8 +16,11 @@ export async function GET(request: NextRequest) {
   const ownOperator = auth.role === 'workspace'
     ? (recoveredOperators.find((operator) => operator.id === 'operator-chenxi') ?? recoveredOperators[1])
     : getWorkspaceOperatorForUser(auth.username, auth.displayName);
-  const operators = auth.role === 'admin' ? recoveredOperators : ownOperator ? [ownOperator] : [];
-  const ownerId = auth.role === 'admin' ? queryOwner : ownOperator?.id;
+  const operators = auth.role === 'admin' || auth.role === 'operator' ? recoveredOperators : ownOperator ? [ownOperator] : [];
+  if (auth.role === 'operator' && queryOwner && !recoveredOperators.some((operator) => operator.id === queryOwner)) {
+    return NextResponse.json({ success: false, error: 'workspace_owner_not_found' }, { status: 404 });
+  }
+  const ownerId = auth.role === 'admin' || auth.role === 'operator' ? queryOwner : ownOperator?.id;
   const storedAccounts = listStoredAccounts({ ownerId, category: category ?? undefined });
   return NextResponse.json({ success: true, data: { operators, accounts: withLiveAccountStatsList(storedAccounts), ownerId: ownerId ?? null, category: category ?? 'all' } });
 }

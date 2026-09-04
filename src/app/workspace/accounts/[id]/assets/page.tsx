@@ -9,8 +9,9 @@ export default async function Page({ params, searchParams }: { params: Promise<{
   const query = await searchParams;
   const user = await requirePageRole(['admin', 'workspace', 'operator'], `/workspace/accounts/${id}/assets`);
   if (!canAccessWorkspaceAccount(user, id)) redirect('/forbidden');
+  const readOnly = !canAccessWorkspaceAccount(user, id, { write: true });
   const section = query.section === 'image' || query.section === 'inventory-video' || query.section === 'audio' ? query.section : 'prompt';
   const imageTab = query.tab === 'products' ? 'products' : 'materials';
   const promptTab = query.tab === 'image' ? 'image' : 'video';
-  return <AppShell user={user}><AccountAssetsPage accountId={id} section={section} imageTab={imageTab} promptTab={promptTab} /></AppShell>;
+  return <AppShell user={user}><AccountAssetsPage accountId={id} section={section} imageTab={imageTab} promptTab={promptTab} readOnly={readOnly} /></AppShell>;
 }

@@ -63,6 +63,11 @@ describe('provider payload contracts', () => {
     ] }] });
   });
 
+  it('passes the image ratio and size shown by the PomoAI form', () => {
+    const payload = buildPomoAIImagePayload({ model: 'gemini-3.1-flash-image', prompt: 'portrait', aspectRatio: '9:16', resolution: '1k' });
+    expect(payload).toMatchObject({ generationConfig: { imageConfig: { aspectRatio: '9:16', imageSize: '1K' } } });
+  });
+
   it('builds YuanAI gpt-image-2 multipart edit fields', () => {
     const form = buildYuanAIImageEditFormData({
       model: 'gpt-image-2', prompt: 'edit', size: '1536x1024', quality: 'low',

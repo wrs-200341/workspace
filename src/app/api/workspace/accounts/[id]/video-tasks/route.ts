@@ -26,7 +26,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const date = request.nextUrl.searchParams.get('date');
   const ownerScope = request.nextUrl.searchParams.get('scope') === 'owner';
-  const ownerId = ownerScope ? workspaceOwnerIdForUser(auth) ?? workspaceOwnerIdForAccount(id) : undefined;
+  const requestedOwnerId = request.nextUrl.searchParams.get('ownerId')?.trim() || undefined;
+  const ownerId = ownerScope
+    ? auth.role === 'operator' && requestedOwnerId ? requestedOwnerId : workspaceOwnerIdForUser(auth) ?? workspaceOwnerIdForAccount(id)
+    : undefined;
   if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
   const tasks = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'video' } : { accountId: id, mode: 'video' }).filter((task) => !date || businessDate(task.createdAt) === date);
   // Queue reads must stay fast. Provider synchronization is explicitly
@@ -96,7 +99,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id } = await params;
-  if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const body = await request.json().catch(() => ({})) as { prompt?: unknown; provider?: unknown; model?: unknown; duration?: unknown; seconds?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; referenceAudios?: unknown; assetIds?: unknown; pid?: unknown };
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) return NextResponse.json({ success: false, error: 'prompt_required' }, { status: 400 });
   const requestedProvider: ProviderId = body.provider === 'mgrouter-grok-video' || body.provider === 'wan3-video' || body.provider === 'oairegbox-omni' || body.provider === 'minimax-h3' || body.provider === 'quality-v4' ? body.provider : 'grok-video';
@@ -112,7 +115,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // sd-mini is handled by snumom's grok-video endpoint, not Quality V4.
   const provider: ProviderId = requestedProvider;
   const config = getProviderConfig(provider);
-  const model = provider === 'grok-video' && requestedModel === 'grok' ? config.model : requestedModel ?? config.model;
+  const model = provider === 'minimax-h3'
+    ? config.model
+    : provider === 'grok-video' && requestedModel === 'grok'
+      ? config.model
+      : requestedModel ?? config.model;
   const isSdMini = provider === 'grok-video' && model.toLowerCase() === 'sd-mini';
   const duration = rawDuration !== undefined ? Math.round(rawDuration) : (isSdMini ? undefined : config.supports.durations?.[0] ?? 10);
   const aspectRatio = typeof body.aspectRatio === 'string' && body.aspectRatio.trim()

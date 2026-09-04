@@ -9,7 +9,7 @@ import { repairSavedVideoTaskInventory } from '@/lib/workspace/videoInventory';
 
 export type ImageAssetTab = 'materials' | 'products';
 export type PromptAssetTab = 'image' | 'video';
-type Props = { accountId: string; section?: AssetKind; imageTab?: ImageAssetTab; promptTab?: PromptAssetTab };
+type Props = { accountId: string; section?: AssetKind; imageTab?: ImageAssetTab; promptTab?: PromptAssetTab; readOnly?: boolean };
 
 const sections: Array<{ id: AssetKind; label: string; icon: typeof FileText }> = [
   { id: 'prompt', label: '提示词', icon: FileText },
@@ -39,7 +39,7 @@ function sectionDescription(section: AssetKind): string {
   return '口播、环境声和配乐素材。';
 }
 
-export async function AccountAssetsPage({ accountId, section = 'prompt', imageTab = 'materials', promptTab = 'video' }: Props) {
+export async function AccountAssetsPage({ accountId, section = 'prompt', imageTab = 'materials', promptTab = 'video', readOnly = false }: Props) {
   // Inventory repair may need to download a provider result. Do not block
   // route rendering on that remote work; the library's client refresh will
   // pick up repaired assets once the background pass completes.
@@ -62,7 +62,7 @@ export async function AccountAssetsPage({ accountId, section = 'prompt', imageTa
         <div className="eyebrow">{workspaceAccount?.ownerName ?? '精选账号'}</div>
         <h1>{displayName}<span className="asset-heading-accent"> 数据资产</span></h1>
       </div>
-      <div className="toolbar"><Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${productionMode[section]}`} className="primary-button" style={{ textDecoration: 'none' }}><Plus size={14} /> 新建生产任务</Link></div>
+      <div className="toolbar">{!readOnly && <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${productionMode[section]}`} className="primary-button" style={{ textDecoration: 'none' }}><Plus size={14} /> 新建生产任务</Link>}</div>
     </div>
     <div className="asset-layout">
       <aside className="asset-sidebar panel">
@@ -77,18 +77,18 @@ export async function AccountAssetsPage({ accountId, section = 'prompt', imageTa
           <div><div className="eyebrow">精选账号</div><h2>{currentLabel}</h2><p>{sectionDescription(section)}</p></div>
           <span className="asset-count-badge">{counts[section]} 项</span>
         </div>
-        {section === 'image' ? <ImageAssets accountId={accountId} tab={imageTab} assets={listAssets(accountId, 'image')} /> : <AccountAssetLibrary accountId={accountId} section={section} initialAssets={listAssets(accountId, section)} promptTab={promptTab} />}
+        {section === 'image' ? <ImageAssets accountId={accountId} tab={imageTab} assets={listAssets(accountId, 'image')} readOnly={readOnly} /> : <AccountAssetLibrary accountId={accountId} section={section} initialAssets={listAssets(accountId, section)} promptTab={promptTab} readOnly={readOnly} />}
       </section>
     </div>
   </>;
 }
 
-function ImageAssets({ accountId, tab, assets }: { accountId: string; tab: ImageAssetTab; assets: ReturnType<typeof listAssets> }) {
+function ImageAssets({ accountId, tab, assets, readOnly }: { accountId: string; tab: ImageAssetTab; assets: ReturnType<typeof listAssets>; readOnly: boolean }) {
   return <div className="image-assets-panel">
     <nav className="asset-secondary-tabs" aria-label="图片资产分类" role="tablist">
       <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/images?tab=materials`} role="tab" aria-selected={tab === 'materials'} className={`asset-secondary-tab ${tab === 'materials' ? 'active' : ''}`}>素材图片<span>本地上传</span></Link>
       <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/images?tab=products`} role="tab" aria-selected={tab === 'products'} className={`asset-secondary-tab ${tab === 'products' ? 'active' : ''}`}>商品图片<span>8765 PID</span></Link>
     </nav>
-    {tab === 'products' ? <><AccountAssetLibrary accountId={accountId} section="image" initialAssets={assets} /><ProductImageAssets accountId={accountId} /></> : <AccountAssetLibrary accountId={accountId} section="image" initialAssets={assets} />}
+    {tab === 'products' ? <><AccountAssetLibrary accountId={accountId} section="image" initialAssets={assets} readOnly={readOnly} /><ProductImageAssets accountId={accountId} readOnly={readOnly} /></> : <AccountAssetLibrary accountId={accountId} section="image" initialAssets={assets} readOnly={readOnly} />}
   </div>;
 }

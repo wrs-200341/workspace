@@ -25,7 +25,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (auth instanceof Response) return auth;
 
   const { id } = await params;
-  if (!canAccessWorkspaceAccount(auth, id)) {
+  if (!canAccessWorkspaceAccount(auth, id, { write: true })) {
     return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   }
 

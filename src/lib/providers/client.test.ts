@@ -58,9 +58,10 @@ describe('provider client helpers', () => {
       expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key', 'x-goog-api-key': 'test-key' });
       const body = JSON.parse(String(init?.body));
       expect(body.contents[0].parts.at(-1)).toEqual({ text: 'draw' });
+      expect(body.generationConfig.imageConfig).toEqual({ aspectRatio: '9:16', imageSize: '1K' });
       return Response.json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'YWJj' } }] } }] });
     });
-    const result = await generatePomoAIImage({ model: 'gemini-3.1-flash-image', prompt: 'draw', references: [] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', POMOAI_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    const result = await generatePomoAIImage({ model: 'gemini-3.1-flash-image', prompt: 'draw', references: [], aspectRatio: '9:16', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', POMOAI_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result.mode).toBe('live');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
