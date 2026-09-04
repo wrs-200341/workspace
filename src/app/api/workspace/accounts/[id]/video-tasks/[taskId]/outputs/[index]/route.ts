@@ -5,8 +5,22 @@ import { getProviderTask } from '@/lib/providers/taskStore';
 import { readStoredVideoOutput } from '@/lib/providers/outputStore';
 import { dedupeVideoOutputUrls } from '@/lib/providers/videoOutputUrls';
 import { cacheVideoTaskOutputLocally } from '@/lib/workspace/videoInventory';
+import { readAssetFile } from '@/lib/workspace/assetStore';
 
 function safeTaskId(value: string): string { return /^[a-zA-Z0-9_-]+$/.test(value) ? value : 'task'; }
+
+function readInventoryVideoFallback(accountId: string, task: { metadata?: Record<string, unknown> }, index: number): { bytes: Buffer; mimeType: string } | null {
+  const ids = Array.isArray(task.metadata?.inventoryAssetIds)
+    ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    : [];
+  const assetId = ids[index];
+  if (!assetId) return null;
+  const stored = readAssetFile(accountId, assetId);
+  if (!stored || stored.asset.kind !== 'inventory-video') return null;
+  const mimeType = stored.asset.mimeType?.split(';', 1)[0].trim().toLowerCase() || 'video/mp4';
+  if (!mimeType.startsWith('video/')) return null;
+  return { bytes: stored.bytes, mimeType };
+}
 
 /**
  * Serve a task output from the server-side cache. A cache miss performs one
@@ -31,7 +45,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     if (!output && base64Index >= 0 && task.outputBase64[base64Index]) {
       await cacheVideoTaskOutputLocally(id, task, index);
     }
-    const cached = readStoredVideoOutput(id, taskId, index);
+    const cached = readStoredVideoOutput(id, taskId, index) ?? readInventoryVideoFallback(id, task, index);
     if (!cached) return NextResponse.json({ success: false, error: 'output_unavailable' }, { status: 404 });
     const disposition = request.nextUrl.searchParams.get('download') === '1' ? 'attachment' : 'inline';
     return new NextResponse(new Uint8Array(cached.bytes), {

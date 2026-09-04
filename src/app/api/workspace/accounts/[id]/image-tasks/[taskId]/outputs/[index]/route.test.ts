@@ -1,17 +1,19 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockReadStoredOutput } = vi.hoisted(() => ({
+const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockReadStoredOutput, mockReadAssetFile } = vi.hoisted(() => ({
   mockRequireApiRole: vi.fn(),
   mockCanAccessWorkspaceAccount: vi.fn(),
   mockGetProviderTask: vi.fn(),
   mockReadStoredOutput: vi.fn(),
+  mockReadAssetFile: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
 vi.mock('@/lib/workspace/access', () => ({ canAccessWorkspaceAccount: mockCanAccessWorkspaceAccount }));
 vi.mock('@/lib/providers/taskStore', () => ({ getProviderTask: mockGetProviderTask }));
 vi.mock('@/lib/providers/outputStore', () => ({ readStoredOutput: mockReadStoredOutput, storeImageOutput: vi.fn() }));
+vi.mock('@/lib/workspace/assetStore', () => ({ readAssetFile: mockReadAssetFile }));
 
 import { GET } from './route';
 
@@ -29,6 +31,7 @@ describe('image output proxy API', () => {
     mockCanAccessWorkspaceAccount.mockReset().mockReturnValue(true);
     mockGetProviderTask.mockReset().mockReturnValue({ ...task });
     mockReadStoredOutput.mockReset().mockReturnValue(null);
+    mockReadAssetFile.mockReset().mockReturnValue(null);
     vi.stubGlobal('fetch', vi.fn());
   });
 
@@ -83,6 +86,15 @@ describe('image output proxy API', () => {
     expect(response.status).toBe(404);
     expect(await response.json()).toEqual({ success: false, error: 'output_unavailable' });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('serves an inventory image when the generated cache file is missing', async () => {
+    mockGetProviderTask.mockReturnValue({ ...task, outputUrls: ['/api/workspace/accounts/account-1/image-tasks/image-task-1/outputs/0'], metadata: { inventoryAssetIds: ['asset-image-1'] } });
+    mockReadAssetFile.mockReturnValue({ asset: { id: 'asset-image-1', accountId: 'account-1', kind: 'image', mimeType: 'image/png' }, bytes: Buffer.from('inventory-image') });
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/image-tasks/image-task-1/outputs/0'), params);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect(await response.text()).toBe('inventory-image');
   });
 
   it('blocks private and loopback image targets before fetching', async () => {

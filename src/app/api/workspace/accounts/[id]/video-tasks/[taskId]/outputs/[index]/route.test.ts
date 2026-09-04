@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockReadStoredVideoOutput, mockCacheVideoTaskOutputLocally } = vi.hoisted(() => ({
+const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockReadStoredVideoOutput, mockCacheVideoTaskOutputLocally, mockReadAssetFile } = vi.hoisted(() => ({
   mockRequireApiRole: vi.fn(),
   mockCanAccessWorkspaceAccount: vi.fn(),
   mockGetProviderTask: vi.fn(),
   mockReadStoredVideoOutput: vi.fn(),
   mockCacheVideoTaskOutputLocally: vi.fn(),
+  mockReadAssetFile: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
@@ -14,6 +15,7 @@ vi.mock('@/lib/workspace/access', () => ({ canAccessWorkspaceAccount: mockCanAcc
 vi.mock('@/lib/providers/taskStore', () => ({ getProviderTask: mockGetProviderTask }));
 vi.mock('@/lib/providers/outputStore', () => ({ readStoredVideoOutput: mockReadStoredVideoOutput }));
 vi.mock('@/lib/workspace/videoInventory', () => ({ cacheVideoTaskOutputLocally: mockCacheVideoTaskOutputLocally }));
+vi.mock('@/lib/workspace/assetStore', () => ({ readAssetFile: mockReadAssetFile }));
 
 import { GET } from './route';
 
@@ -30,6 +32,7 @@ describe('video output proxy API', () => {
     mockGetProviderTask.mockReset().mockReturnValue({ ...task });
     mockReadStoredVideoOutput.mockReset().mockReturnValue({ bytes: Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]), mimeType: 'video/mp4' });
     mockCacheVideoTaskOutputLocally.mockReset();
+    mockReadAssetFile.mockReset().mockReturnValue(null);
   });
 
   it('serves the cached local video and exposes an attachment filename', async () => {
@@ -54,5 +57,14 @@ describe('video output proxy API', () => {
     const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0'), params);
     expect(response.status).toBe(403);
     expect(mockGetProviderTask).not.toHaveBeenCalled();
+  });
+
+  it('serves an inventory video when the generated cache file is missing', async () => {
+    mockReadStoredVideoOutput.mockReturnValue(null);
+    mockGetProviderTask.mockReturnValue({ ...task, outputUrls: ['/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0'], metadata: { inventoryAssetIds: ['asset-video-1'] } });
+    mockReadAssetFile.mockReturnValue({ asset: { id: 'asset-video-1', accountId: 'account-1', kind: 'inventory-video', mimeType: 'video/mp4' }, bytes: Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]) });
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0'), params);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('video/mp4');
   });
 });

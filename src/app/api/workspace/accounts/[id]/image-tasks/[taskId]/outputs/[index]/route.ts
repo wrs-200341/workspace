@@ -5,6 +5,7 @@ import { getProviderTask } from '@/lib/providers/taskStore';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { requireApiRole } from '@/lib/auth/server';
 import { readStoredOutput, storeImageOutput } from '@/lib/providers/outputStore';
+import { readAssetFile } from '@/lib/workspace/assetStore';
 
 const MAX_IMAGE_OUTPUT_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 25_000;
@@ -17,6 +18,19 @@ function imageExtension(mimeType: string): string {
   if (normalized === 'image/avif') return 'avif';
   if (normalized === 'image/bmp' || normalized === 'image/x-ms-bmp') return 'bmp';
   return 'png';
+}
+
+function readInventoryImageFallback(accountId: string, task: { metadata?: Record<string, unknown> }, index: number): { bytes: Buffer; mimeType: string } | null {
+  const ids = Array.isArray(task.metadata?.inventoryAssetIds)
+    ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+    : [];
+  const assetId = ids[index];
+  if (!assetId) return null;
+  const stored = readAssetFile(accountId, assetId);
+  if (!stored || stored.asset.kind !== 'image') return null;
+  const mimeType = stored.asset.mimeType?.split(';', 1)[0].trim().toLowerCase() || 'image/png';
+  if (!mimeType.startsWith('image/')) return null;
+  return { bytes: stored.bytes, mimeType };
 }
 
 function isPrivateAddress(address: string): boolean {
@@ -119,7 +133,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   const index = Number(rawIndex);
   if (!Number.isInteger(index) || index < 0 || index > 63) return NextResponse.json({ success: false, error: 'output_not_found' }, { status: 404 });
   const disposition = request.nextUrl.searchParams.get('download') === '1' ? 'attachment' : 'inline';
-  const output = readStoredOutput(id, taskId, index);
+  const output = readStoredOutput(id, taskId, index) ?? readInventoryImageFallback(id, task, index);
   if (output) {
     const safeTaskId = /^[a-zA-Z0-9_-]+$/.test(taskId) ? taskId : 'task';
     return new NextResponse(Buffer.from(output.bytes), {
