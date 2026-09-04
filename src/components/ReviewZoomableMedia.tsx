@@ -80,10 +80,13 @@ export default function ReviewZoomableMedia({ src, alt, video = false }: { src: 
 
   const mediaStyle: CSSProperties = {
     display: 'block',
-    width: '100%',
-    height: '100%',
-    maxWidth: 'none',
-    maxHeight: 'none',
+    // Keep image dimensions intrinsic, matching the reference viewer. The
+    // previous 100% x 100% box scaled letterboxing along with the bitmap and
+    // made portrait images appear clipped when panned.
+    width: video ? '100%' : 'auto',
+    height: video ? '100%' : 'auto',
+    maxWidth: '100%',
+    maxHeight: '100%',
     objectFit: 'contain',
     userSelect: 'none',
     transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})`,
