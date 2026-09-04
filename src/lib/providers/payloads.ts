@@ -52,15 +52,39 @@ export type GPTPromptAttachment = { name?: string; mimeType: string; dataBase64?
 export type MultipartReference = { bytes: Uint8Array; mimeType: string; fileName: string };
 export type YuanAIImageEditInput = { model: string; prompt: string; size: string; quality?: 'low' | 'high'; n?: number; references: readonly MultipartReference[] };
 export type OAIRegboxInput = { model: string; prompt: string; duration: number; aspectRatio: string; references?: readonly MultipartReference[] };
-export type OpenAIImageInput = { model: string; prompt: string; aspectRatio?: string; resolution?: string; quality?: 'low' | 'medium' | 'high'; n?: number };
+export type OpenAIImageInput = {
+  model: string;
+  prompt: string;
+  aspectRatio?: string;
+  resolution?: string;
+  quality?: 'auto' | 'low' | 'medium' | 'high';
+  n?: number;
+  responseFormat?: 'url' | 'b64_json';
+  /** Use OriginGateway's documented 4K canvas sizes. */
+  originGateway?: boolean;
+};
 
 /** OpenAI-compatible image generation payloads used by OriginGateway/Junze. */
 export function buildOpenAIImagePayload(input: OpenAIImageInput): Record<string, unknown> {
   const ratio = input.aspectRatio?.trim() || '1:1';
   const resolution = input.resolution?.trim().toLowerCase() || '1k';
   const isGrok = input.model.toLowerCase().includes('grok');
+  const origin4kSizes: Record<string, string> = {
+    '1:1': '2880x2880',
+    '5:4': '3200x2560',
+    '4:5': '2560x3200',
+    '4:3': '3264x2448',
+    '3:4': '2448x3264',
+    '3:2': '3504x2336',
+    '2:3': '2336x3504',
+    '16:9': '3840x2160',
+    '9:16': '2160x3840',
+    '21:9': '3696x1584',
+  };
   const size = isGrok
     ? (ratio === '9:16' ? '9:16' : '1024x1024')
+    : input.originGateway && resolution === '4k'
+      ? origin4kSizes[ratio] || origin4kSizes['1:1']
     : ratio === '9:16'
       ? '1152x2048'
       : ratio === '16:9'
@@ -72,8 +96,48 @@ export function buildOpenAIImagePayload(input: OpenAIImageInput): Record<string,
     n: input.n ?? 1,
     size,
     quality: isGrok ? (input.quality === 'low' ? 'low' : 'medium') : (input.quality === 'medium' ? 'high' : input.quality ?? 'high'),
-    response_format: 'url',
+    response_format: input.responseFormat ?? 'url',
   };
+}
+
+export type OpenAIImageEditInput = OpenAIImageInput & {
+  referenceImages?: readonly string[];
+  referenceFiles?: readonly MultipartReference[];
+};
+
+/** Build the documented JSON form of OriginGateway's image-edit request. */
+export function buildOpenAIImageEditPayload(input: OpenAIImageEditInput): Record<string, unknown> {
+  const references = [...(input.referenceImages ?? [])];
+  if (references.length === 0) throw new Error('origin_reference_required');
+  const generation = buildOpenAIImagePayload({ ...input, originGateway: true });
+  const cleanPayload: Record<string, unknown> = { ...generation };
+  if (references.length === 1) cleanPayload.image = references[0];
+  else cleanPayload.images = references;
+  return cleanPayload;
+}
+
+/** Build OriginGateway's multipart image-edit request for local assets. */
+export function buildOpenAIImageEditFormData(input: OpenAIImageEditInput): FormData {
+  const files = [...(input.referenceFiles ?? [])];
+  const urls = [...(input.referenceImages ?? [])];
+  if (files.length + urls.length === 0) throw new Error('origin_reference_required');
+  const generation = buildOpenAIImagePayload({ ...input, originGateway: true });
+  const form = new FormData();
+  form.set('model', String(generation.model));
+  form.set('prompt', String(generation.prompt));
+  form.set('n', String(generation.n ?? 1));
+  form.set('size', String(generation.size));
+  form.set('quality', String(generation.quality));
+  form.set('response_format', String(generation.response_format ?? 'url'));
+  const appendFile = (field: string, reference: MultipartReference) => {
+    form.append(field, new Blob([Uint8Array.from(reference.bytes).buffer as ArrayBuffer], { type: reference.mimeType }), reference.fileName);
+  };
+  if (files.length + urls.length === 1 && files.length === 1) appendFile('image', files[0]);
+  else {
+    urls.forEach((url) => form.append('image[]', url));
+    files.forEach((reference) => appendFile('image[]', reference));
+  }
+  return form;
 }
 
 /** Gemini native image request shared by PomoAI and Junze/Origin Nano. */

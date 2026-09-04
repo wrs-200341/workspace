@@ -1,12 +1,14 @@
 import dns from 'node:dns/promises';
 import { createUploadedAsset, getAsset, readAssetFile, type WorkspaceAsset } from './assetStore';
 import { readStoredOutput, storeImageBase64Outputs, storeImageOutput } from '@/lib/providers/outputStore';
-import type { ProviderTask } from '@/lib/providers/taskStore';
+import { getProviderTask, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
 import { assertPublicTarget, type LookupAddress } from './externalImageImport';
 import { inventoryFileName } from './inventoryNaming';
 
 const MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
+const CACHE_RETRY_DELAY_MS = 5_000;
+const MAX_CACHE_RETRIES = 5;
 
 export type ImageInventoryDependencies = {
   fetcher?: typeof fetch;
@@ -115,6 +117,48 @@ export async function cacheImageTaskOutputsBeforeCompletion(accountId: string, t
   // A completed response with no media is still a valid terminal task (for
   // example a provider-side no-op); there is nothing to cache in that case.
   return { cached, expected, ready: expected === 0 || cached >= expected };
+}
+
+/**
+ * Retry a completed image response whose first local download failed. The
+ * original implementation left these tasks at processing/99% forever; this
+ * bounded helper makes the cache self-healing while still ending clearly when
+ * an output URL is permanently unavailable.
+ */
+export async function recoverPendingImageTaskOutputCache(taskId: string, dependencies: ImageInventoryDependencies = {}): Promise<ProviderTask | null> {
+  const task = getProviderTask(taskId);
+  if (!task || task.mode !== 'image' || task.status !== 'processing') return task;
+  const expected = task.outputBase64.filter((value) => value.trim()).length + task.outputUrls.filter((value) => value.trim()).length;
+  if (expected === 0 || task.metadata?.localOutputReady === true) return task;
+  const lastAttempt = typeof task.metadata?.localCacheLastAttemptAt === 'string' ? Date.parse(task.metadata.localCacheLastAttemptAt) : 0;
+  if (lastAttempt && Date.now() - lastAttempt < CACHE_RETRY_DELAY_MS) return task;
+  const attempts = typeof task.metadata?.localCacheAttempts === 'number' && Number.isFinite(task.metadata.localCacheAttempts)
+    ? Math.max(0, Math.floor(task.metadata.localCacheAttempts))
+    : 0;
+  const nextAttempts = attempts + 1;
+  const cache = await cacheImageTaskOutputsBeforeCompletion(task.accountId, { ...task, status: 'completed', progress: 100 }, dependencies);
+  const attemptMetadata = {
+    ...(task.metadata ?? {}),
+    localCacheAttempts: nextAttempts,
+    localCacheLastAttemptAt: new Date().toISOString(),
+    localOutputCount: cache.cached,
+    localOutputExpected: cache.expected,
+    localOutputReady: cache.ready,
+  };
+  if (cache.ready) {
+    return updateProviderTask(task.id, {
+      status: 'completed',
+      progress: 100,
+      outputUrls: localImageOutputUrls(task.accountId, { ...task, outputUrls: task.outputUrls, outputBase64: task.outputBase64 }),
+      outputBase64: [],
+      error: undefined,
+      metadata: attemptMetadata,
+    });
+  }
+  if (nextAttempts >= MAX_CACHE_RETRIES) {
+    return updateProviderTask(task.id, { status: 'failed', progress: 100, error: 'image_output_cache_failed', metadata: { ...attemptMetadata, schedulerState: 'terminal' } });
+  }
+  return updateProviderTask(task.id, { status: 'processing', progress: 99, metadata: attemptMetadata });
 }
 
 /** Return only persisted, readable image assets declared by this task. */

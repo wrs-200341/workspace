@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
 
 describe('provider payload contracts', () => {
   it('uses documented Origin/Junze image contracts and preserves portrait ratios', () => {
@@ -7,6 +7,34 @@ describe('provider payload contracts', () => {
     expect(buildOpenAIImagePayload({ model: 'grok-imagine-image-2.0', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' })).toMatchObject({ size: '9:16', quality: 'medium' });
     expect(buildOriginNanoChatPayload('nano-banana-pro', 'cat')).toEqual({ model: 'nano-banana-pro', messages: [{ role: 'user', content: 'cat' }], max_tokens: 64 });
     expect(buildGeminiNativeImagePayload({ model: 'gemini-3-pro-image-preview', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' })).toMatchObject({ generationConfig: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '9:16', imageSize: '1K' } } });
+  });
+
+  it('builds OriginGateway reference-image JSON edits with image/images, never image_url', () => {
+    expect(buildOpenAIImageEditPayload({ model: 'gpt-image-2', prompt: 'edit', referenceImages: ['https://assets.example/a.png'], aspectRatio: '1:1', resolution: '1k' })).toEqual(expect.objectContaining({
+      model: 'gpt-image-2', prompt: 'edit', image: 'https://assets.example/a.png', size: '1024x1024', response_format: 'url',
+    }));
+    expect(buildOpenAIImageEditPayload({ model: 'gpt-image-2', prompt: 'merge', referenceImages: ['https://assets.example/a.png', 'https://assets.example/b.png'] })).toEqual(expect.objectContaining({
+      images: ['https://assets.example/a.png', 'https://assets.example/b.png'],
+    }));
+    expect(buildOpenAIImageEditPayload({ model: 'gpt-image-2', prompt: 'edit', referenceImages: ['https://assets.example/a.png'] })).not.toHaveProperty('image_url');
+  });
+
+  it('builds OriginGateway multipart edits with image and image[] fields', () => {
+    const single = buildOpenAIImageEditFormData({
+      model: 'gpt-image-2', prompt: 'edit', referenceFiles: [{ bytes: new Uint8Array([1, 2, 3]), mimeType: 'image/png', fileName: 'a.png' }],
+      aspectRatio: '16:9', resolution: '4k',
+    });
+    expect(single.get('image')).toBeInstanceOf(File);
+    expect(single.get('image[]')).toBeNull();
+    expect(single.get('size')).toBe('3840x2160');
+    const multiple = buildOpenAIImageEditFormData({
+      model: 'gpt-image-2', prompt: 'merge', referenceFiles: [
+        { bytes: new Uint8Array([1]), mimeType: 'image/png', fileName: 'a.png' },
+        { bytes: new Uint8Array([2]), mimeType: 'image/jpeg', fileName: 'b.jpg' },
+      ],
+    });
+    expect(multiple.getAll('image[]')).toHaveLength(2);
+    expect(multiple.get('image')).toBeNull();
   });
   it('builds native Grok payloads with the historical reference image split', () => {
     expect(buildGrokVideoPayload({ model: 'grok-imagine-video-1.5（按次）', prompt: 'demo', duration: 10, aspectRatio: '9:16', resolution: '720p', referenceImages: [] })).toEqual({ model: 'grok-imagine-video-1.5（按次）', prompt: 'demo', duration: 10, extra: { aspect_ratio: '9:16', resolution: '720p' } });

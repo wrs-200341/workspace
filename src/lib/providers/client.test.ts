@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, downloadProviderVideoContent, generateMGRouterImage } from './client';
+import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateGeminiPrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, downloadProviderVideoContent, generateMGRouterImage } from './client';
 
 describe('provider client helpers', () => {
   it('normalizes Gemini candidate text', () => {
@@ -26,6 +26,75 @@ describe('provider client helpers', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it('submits OriginGateway GPT Image reference edits as multipart for local files', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://origingateway.com/v1/images/edits');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key' });
+      expect((init?.headers as Record<string, string>)['content-type']).toBeUndefined();
+      const form = init?.body as FormData;
+      expect(form).toBeInstanceOf(FormData);
+      expect(form.get('model')).toBe('gpt-image-2');
+      expect(form.get('image')).toBeInstanceOf(File);
+      expect(form.get('size')).toBe('2160x3840');
+      return Response.json({ data: [{ url: 'https://img.example/edited.png' }] });
+    });
+    const result = await generateOpenAICompatibleImage('origin-gpt-image', {
+      model: 'gpt-image-2', prompt: 'edit', aspectRatio: '9:16', resolution: '4k',
+      referenceFiles: [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', ORIGIN_GPTIMAGE_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result.mode).toBe('live');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('submits OriginGateway Grok reference edits as JSON URL input', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://origingateway.com/v1/images/edits');
+      expect(JSON.parse(String(init?.body))).toEqual(expect.objectContaining({
+        model: 'grok-imagine-image-2.0', image: 'https://assets.example/ref.png', response_format: 'url',
+      }));
+      expect(JSON.parse(String(init?.body))).not.toHaveProperty('image_url');
+      return Response.json({ data: [{ url: 'https://img.example/edited.png' }] });
+    });
+    const result = await generateOpenAICompatibleImage('origin-grok-image', {
+      model: 'grok-imagine-image-2.0', prompt: 'edit', aspectRatio: '1:1', resolution: '1k',
+      referenceImages: ['https://assets.example/ref.png'],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', ORIGIN_GROK_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result.mode).toBe('live');
+  });
+
+  it('requires multipart local input for OriginGateway 4K reference edits', async () => {
+    await expect(generateOpenAICompatibleImage('origin-gpt-image', {
+      model: 'gpt-image-2', prompt: 'edit', aspectRatio: '9:16', resolution: '4k',
+      referenceImages: ['https://assets.example/ref.png'],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', ORIGIN_GPTIMAGE_API_KEY: 'test-key' }, fetch: vi.fn() as typeof fetch })).rejects.toThrow('origin_4k_reference_requires_multipart');
+  });
+
+  it('submits Origin Nano reference edits through Gemini inlineData', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://origingateway.com/v1beta/models/nano-banana-pro:generateContent');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key' });
+      expect((init?.headers as Record<string, string>)['x-goog-api-key']).toBeUndefined();
+      const body = JSON.parse(String(init?.body));
+      expect(body.contents[0].parts).toEqual([
+        { inlineData: { mimeType: 'image/png', data: 'YWJj' } },
+        { text: 'edit' },
+      ]);
+      return Response.json({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'YWJj' } }] } }] });
+    });
+    const result = await generateOriginNanoImage({
+      model: 'nano-banana-pro', prompt: 'edit', aspectRatio: '1:1', resolution: '1k',
+      references: [{ mimeType: 'image/png', dataBase64: 'YWJj' }],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', ORIGIN_NANO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result.mode).toBe('live');
+  });
+
+  it('does not silently drop unsupported Origin Nano external references', async () => {
+    await expect(generateOriginNanoImage({
+      model: 'nano-banana-pro', prompt: 'edit', aspectRatio: '1:1',
+      referenceImages: ['https://assets.example/ref.png'],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', ORIGIN_NANO_API_KEY: 'test-key' }, fetch: vi.fn() as typeof fetch })).rejects.toThrow('origin_nano_external_reference_unsupported');
+  });
+
   it('routes Origin Nano portrait requests through Gemini native generateContent', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe('https://origingateway.com/v1beta/models/nano-banana-pro:generateContent');
@@ -38,12 +107,50 @@ describe('provider client helpers', () => {
   });
 
   it('calls BigSnake Responses for child prompt generation', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-5.5', input: 'make a hook', max_output_tokens: 2800 });
       return new Response(JSON.stringify({ output_text: 'hook result' }), { status: 200, headers: { 'content-type': 'application/json' } });
     });
     const result = await generateBigSnakePrompt({ model: 'gpt-5.5', prompt: 'make a hook' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', BIGSNAKE_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result.text).toBe('hook result');
+    expect(timeoutSpy).toHaveBeenCalledWith(5 * 60 * 1000);
+    timeoutSpy.mockRestore();
+  });
+
+  it('includes reference images in BigSnake child prompt requests', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.input[0].content).toEqual([
+        { type: 'input_text', text: 'identify the product' },
+        { type: 'input_image', image_url: 'data:image/png;base64,aGVsbG8=' },
+      ]);
+      return Response.json({ output_text: 'image-aware prompt' });
+    });
+    const result = await generateBigSnakePrompt({ model: 'gpt-5.5', prompt: 'identify the product', attachments: [{ name: 'product.png', mimeType: 'image/png', dataBase64: 'aGVsbG8=' }] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', BIGSNAKE_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result.text).toBe('image-aware prompt');
+  });
+
+  it('maps BigSnake network timeout to provider_408 with endpoint context', async () => {
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    const fetchMock = vi.fn(async () => { throw timeout; });
+    await expect(generateBigSnakePrompt({ model: 'gpt-5.5', prompt: 'slow prompt' }, {
+      env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', BIGSNAKE_API_KEY: 'test-key' },
+      fetch: fetchMock as typeof fetch,
+    })).rejects.toMatchObject({ name: 'ProviderRequestError', info: { code: 'provider_408', endpoint: 'https://api.bigsnake.xyz/v1/responses' } });
+  });
+
+  it('includes reference images in Gemini child prompt requests', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body.contents[0].parts).toEqual([
+        { inlineData: { mimeType: 'image/jpeg', data: 'aGVsbG8=' } },
+        { text: 'describe the product' },
+      ]);
+      return Response.json({ candidates: [{ content: { parts: [{ text: 'gemini prompt' }] } }] });
+    });
+    const result = await generateGeminiPrompt({ model: 'gemini-2.5-flash', prompt: 'describe the product', references: [{ name: 'product.jpg', mimeType: 'image/jpeg', dataBase64: 'aGVsbG8=' }] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', GEMINI_PROMPT_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result.text).toBe('gemini prompt');
   });
 
   it('rejects local or non-https reference URLs', () => {

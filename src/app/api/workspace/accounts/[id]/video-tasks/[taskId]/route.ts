@@ -49,17 +49,16 @@ function queueDetailProviderSync(taskId: string, task: NonNullable<ReturnType<ty
       const normalizedStatus = status.status === 'unknown' ? task.status : status.status;
       const cacheTask = { ...task, status: 'completed' as const, progress: 100, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64 };
       const cache = normalizedStatus === 'completed' ? await cacheVideoTaskOutputsBeforeCompletion(task.accountId, cacheTask) : null;
-      const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
-      const updated = updateProviderTask(taskId, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
+      const noOutput = normalizedStatus === 'completed' && cache?.expected === 0;
+      const cachePending = normalizedStatus === 'completed' && cache && cache.expected > 0 && !cache.ready;
+      const updated = updateProviderTask(taskId, { status: noOutput ? 'failed' : cachePending ? 'processing' : normalizedStatus, progress: noOutput ? 100 : cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: noOutput ? 'provider_upstream_failed' : status.error, providerResponse: status.status === 'failed' || noOutput ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
       if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
       pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
-      if (message.startsWith('provider_')) {
-        const updated = updateProviderTask(taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(message), providerResponse: providerResponseSnapshot(error) });
-        if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
-        pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
-      }
+      const updated = updateProviderTask(taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(message || 'provider_request_failed'), providerResponse: providerResponseSnapshot(error) });
+      if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
+      pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
     }
   })();
   detailSyncInFlight.set(key, run);

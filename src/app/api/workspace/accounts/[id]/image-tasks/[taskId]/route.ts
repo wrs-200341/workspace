@@ -7,8 +7,8 @@ import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } fro
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
-import { cacheImageTaskOutputsBeforeCompletion, listImageTaskInventoryAssets, localImageOutputUrls, saveImageTaskOutputsToAssets } from '@/lib/workspace/imageInventory';
-import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask } from '@/lib/providers/concurrency';
+import { cacheImageTaskOutputsBeforeCompletion, listImageTaskInventoryAssets, localImageOutputUrls, recoverPendingImageTaskOutputCache, saveImageTaskOutputsToAssets } from '@/lib/workspace/imageInventory';
+import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
 
 const DETAIL_SYNC_THROTTLE_MS = 10_000;
 const detailSyncInFlight = new Map<string, Promise<void>>();
@@ -19,8 +19,11 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (auth instanceof Response) return auth;
   const { id, taskId } = await params;
   if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
-  const persisted = getProviderTask(taskId);
+  let persisted = getProviderTask(taskId);
   if (persisted && persisted.accountId === id && persisted.mode === 'image') {
+    if (persisted.status === 'processing' && persisted.metadata?.localOutputReady !== true) {
+      persisted = await recoverPendingImageTaskOutputCache(taskId) ?? persisted;
+    }
     if (persisted.providerTaskId && isProviderLiveEnabled(persisted.provider) && ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(persisted.status)) {
       void queueDetailProviderSync(taskId, persisted);
     }
@@ -53,9 +56,8 @@ function queueDetailProviderSync(taskId: string, task: NonNullable<ReturnType<ty
       pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
     } catch (error) {
       const providerResponse = providerResponseSnapshot(error);
-      const statusCode = typeof providerResponse.status === 'number' ? providerResponse.status : 0;
-      const terminal = statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429;
-      updateProviderTask(taskId, { status: terminal ? 'failed' : task.status, progress: terminal ? 100 : task.progress, error: sanitizeProviderError(error instanceof Error ? error.message : ''), providerResponse });
+      const updated = updateProviderTask(taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : 'provider_request_failed'), providerResponse });
+      if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
       pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
     }
   })();

@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUploadedAsset, listAssets } from './assetStore';
-import { cacheImageTaskOutputsBeforeCompletion, saveImageTaskOutputsToAssets } from './imageInventory';
+import { cacheImageTaskOutputsBeforeCompletion, recoverPendingImageTaskOutputCache, saveImageTaskOutputsToAssets } from './imageInventory';
+import { createProviderTask } from '@/lib/providers/taskStore';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
 const root = `D:\\all_projects\\workspace\\data\\image-inventory-test-${process.pid}`;
@@ -57,6 +58,17 @@ describe('image task inventory persistence', () => {
     const fetcher = vi.fn();
     await expect(saveImageTaskOutputsToAssets(accountId, task({ outputUrls: ['https://127.0.0.1/private.png'] }), { fetcher, lookup: publicLookup })).rejects.toThrow('image_url_target_blocked');
     expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it('recovers a task left at 99% when a later cache attempt succeeds', async () => {
+    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+    const fetcher = vi.fn().mockResolvedValue(new Response(pngBytes, { status: 200, headers: { 'content-type': 'image/png' } }));
+    const pending = createProviderTask(task({ status: 'processing', progress: 99, outputUrls: ['https://cdn.example.test/retry.png'], metadata: { localOutputReady: false } }));
+    const recovered = await recoverPendingImageTaskOutputCache(pending.id, { fetcher, lookup: publicLookup });
+    expect(recovered?.status).toBe('completed');
+    expect(recovered?.metadata?.localOutputReady).toBe(true);
+    expect(recovered?.outputUrls[0]).toContain(`/image-tasks/${pending.id}/outputs/0`);
+    expect(recovered?.outputBase64).toEqual([]);
   });
 
   it('does not save failed, non-image, or already-recorded tasks', async () => {

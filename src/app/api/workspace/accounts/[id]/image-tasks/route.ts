@@ -6,8 +6,9 @@ import { businessDate } from '@/lib/workspace/tasks';
 import { isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } from '@/lib/providers/client';
 import { updateProviderTask } from '@/lib/providers/taskStore';
-import { pumpProviderTasks, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
-import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls } from '@/lib/workspace/imageInventory';
+import * as taskStore from '@/lib/providers/taskStore';
+import { pumpProviderTasks, recoverOrphanedSchedulerTasks, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
+import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls, recoverPendingImageTaskOutputCache } from '@/lib/workspace/imageInventory';
 
 const SYNC_THROTTLE_MS = 10_000;
 const liveSyncInFlight = new Map<string, Promise<void>>();
@@ -26,7 +27,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     ? auth.role === 'operator' && requestedOwnerId ? requestedOwnerId : workspaceOwnerIdForUser(auth) ?? workspaceOwnerIdForAccount(id)
     : undefined;
   if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
+  recoverOrphanedSchedulerTasks();
   const tasks = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'image' } : { accountId: id, mode: 'image' }).filter((task) => !date || businessDate(task.createdAt) === date);
+  void recoverPendingImageCaches(tasks);
   // Keep queue reads local and responsive. Provider polling is opt-in and
   // runs in the background so slow upstreams never block rendering.
   if (request.nextUrl.searchParams.get('sync') === '1') void syncLiveImageTasks(tasks);
@@ -34,9 +37,23 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   return NextResponse.json({ success: true, data: queueTasks, tasks: queueTasks });
 }
 
+async function recoverPendingImageCaches(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
+  if (process.env.NODE_ENV === 'test') return;
+  const listTasks = (taskStore as typeof taskStore & { listProviderTasks?: typeof import('@/lib/providers/taskStore').listProviderTasks }).listProviderTasks;
+  if (typeof listTasks !== 'function') return;
+  const ids = new Set(tasks.map((task) => task.id));
+  const pending = listTasks({ mode: 'image' }).filter((task) => ids.has(task.id));
+  for (const task of pending.slice(0, 8)) {
+    await recoverPendingImageTaskOutputCache(task.id).catch(() => null);
+  }
+}
+
 function toQueueTask<T extends Record<string, unknown>>(task: T) {
-  const { outputUrls: _outputUrls, outputBase64: _outputBase64, metadata: _metadata, providerResponse: _providerResponse, ...summary } = task;
-  return summary;
+  const { outputUrls: _outputUrls, outputBase64: _outputBase64, metadata, providerResponse: _providerResponse, ...summary } = task;
+  const schedulerState = metadata && typeof metadata === 'object' && typeof (metadata as { schedulerState?: unknown }).schedulerState === 'string'
+    ? (metadata as { schedulerState: string }).schedulerState
+    : undefined;
+  return schedulerState ? { ...summary, schedulerState } : summary;
 }
 
 function syncLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
@@ -73,14 +90,13 @@ async function runLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTask
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
       } catch (error) {
         const providerResponse = providerResponseSnapshot(error);
-        const statusCode = typeof providerResponse.status === 'number' ? providerResponse.status : 0;
-        const terminal = statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429;
         const updated = updateProviderTask(task.id, {
-          status: terminal ? 'failed' : task.status,
-          progress: terminal ? 100 : task.progress,
+          status: 'failed',
+          progress: 100,
           error: sanitizeProviderError(error instanceof Error ? error.message : 'provider_request_failed'),
           providerResponse,
         });
+        if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
         if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
       }

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProviderTask, getProviderTask, updateProviderTask } from './taskStore';
-import { enqueueProviderTask, resetSchedulerForTests } from './concurrency';
+import { enqueueProviderTask, recoverOrphanedSchedulerTasks, resetSchedulerForTests } from './concurrency';
 
 const testRoot = `D:\\all_projects\\workspace\\data\\concurrency-test-${process.pid}`;
 const previousRoot = process.env.WORKSPACE_DATA_ROOT;
@@ -53,6 +53,32 @@ describe('production concurrency scheduler', () => {
     await tick();
     expect(started).toBe(0);
     expect(ids.every((task) => getProviderTask(task.id)?.status === 'completed')).toBe(true);
+  });
+
+  it('allocates five model slots independently for each operator', async () => {
+    const operatorA = Array.from({ length: 5 }, (_, index) => seed(`operator-a-omni-${index}`, 'video', 'omni-fast-no-water', 'operator-a'));
+    const operatorB = Array.from({ length: 5 }, (_, index) => seed(`operator-b-omni-${index}`, 'video', 'omni-fast-no-water', 'operator-b'));
+    const finishers: Array<() => void> = [];
+    let startedA = 0;
+    let startedB = 0;
+    for (const task of operatorA) enqueueProviderTask({ taskId: task.id, ownerId: 'operator-a', mode: 'video', model: 'omni-fast-no-water', run: () => { startedA += 1; return new Promise<void>((resolve) => finishers.push(() => { startedA -= 1; updateProviderTask(task.id, { status: 'completed', progress: 100 }); resolve(); })); } });
+    for (const task of operatorB) enqueueProviderTask({ taskId: task.id, ownerId: 'operator-b', mode: 'video', model: 'omni-fast-no-water', run: () => { startedB += 1; return new Promise<void>((resolve) => finishers.push(() => { startedB -= 1; updateProviderTask(task.id, { status: 'completed', progress: 100 }); resolve(); })); } });
+    await tick();
+    expect(startedA).toBe(5);
+    expect(startedB).toBe(5);
+    expect(finishers).toHaveLength(10);
+    finishers.splice(0).forEach((finish) => finish());
+    await tick();
+    expect(startedA).toBe(0);
+    expect(startedB).toBe(0);
+  });
+
+  it('marks never-submitted jobs from a previous runtime as interrupted', () => {
+    const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const task = createProviderTask({ id: 'orphaned-task', accountId: 'operator-a-account', mode: 'video', provider: 'grok-video', model: 'grok-model', status: 'submitting', createdAt: old, metadata: { ownerId: 'operator-a', schedulerState: 'dispatching', execution: 'pending' } });
+    const recovered = recoverOrphanedSchedulerTasks(Date.now(), { force: true });
+    expect(recovered.map((item) => item.id)).toContain(task.id);
+    expect(getProviderTask(task.id)).toMatchObject({ status: 'failed', error: 'scheduler_interrupted', progress: 100 });
   });
 
   it('caps all media modes at twenty jobs for one operator', async () => {
@@ -173,5 +199,36 @@ describe('production concurrency scheduler', () => {
     expect(attempts).toBe(3);
     expect(getProviderTask(task.id)?.status).toBe('failed');
     expect(getProviderTask(task.id)?.metadata?.schedulerRetryCount).toBe(2);
+  });
+
+  it('clears stale provider handles before an automatic retry is dispatched', async () => {
+    const task = createProviderTask({
+      id: 'auto-retry-clears-provider',
+      accountId: 'operator-a-account',
+      mode: 'video',
+      provider: 'grok-video',
+      model: 'retry-model',
+      status: 'queued',
+      providerTaskId: 'stale-upstream-id',
+      outputUrls: ['https://cdn.example/video.mp4'],
+      metadata: { ownerId: 'operator-a', schedulerState: 'waiting' },
+    });
+    let attempts = 0;
+    enqueueProviderTask({
+      taskId: task.id,
+      ownerId: 'operator-a',
+      mode: 'video',
+      model: 'retry-model',
+      run: async () => {
+        attempts += 1;
+        updateProviderTask(task.id, { status: 'failed', progress: 100, error: 'failed' });
+      },
+    });
+    await tick();
+    const retrying = getProviderTask(task.id);
+    expect(retrying?.status).toBe('retrying');
+    expect(retrying?.providerTaskId).toBeUndefined();
+    expect(retrying?.outputUrls).toEqual([]);
+    expect(attempts).toBe(1);
   });
 });

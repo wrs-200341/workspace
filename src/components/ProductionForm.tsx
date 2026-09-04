@@ -1,6 +1,6 @@
 'use client';
 
-import { Film, Image as ImageIcon, LoaderCircle, Save, WandSparkles, X } from 'lucide-react';
+import { Film, Image as ImageIcon, LoaderCircle, Save, Search, WandSparkles, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { getProviderCatalog, type ProviderCatalogEntry, type ProviderId } from '@/lib/providers/config';
@@ -94,15 +94,15 @@ const VIDEO_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers:
   { id: 'seedance', label: 'Seedance', providers: [] },
 ];
 const IMAGE_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers: ProviderId[] }> = [
-  { id: 'grok-image', label: 'Grok', providers: ['mgrouter-grok-image', 'yuanai-image', 'origin-grok-image'] },
+  { id: 'grok-image', label: 'Grok', providers: ['mgrouter-grok-image', 'origin-grok-image'] },
   { id: 'gemini-image', label: 'Gemini', providers: ['pomoai-gemini-image', 'origin-nano-image', 'junze-gemini-image'] },
-  { id: 'gpt-image', label: 'GPT Image', providers: ['origin-gpt-image', 'junze-gpt-image'] },
+  { id: 'gpt-image', label: 'GPT Image', providers: ['origin-gpt-image', 'junze-gpt-image', 'yuanai-image'] },
 ];
 
 /** Kept as a small pure helper for callers/tests that used the previous form API. */
-export function validateGenerationInput(mode: Props['mode'], input: { prompt: string; referenceImages: string[]; referenceAudios: string[] }): string | null {
+export function validateGenerationInput(mode: Props['mode'], input: { prompt: string; referenceImages: string[]; referenceAudios: string[] }, maxReferenceImages = 10): string | null {
   if (!input.prompt.trim()) return mode === 'prompt' ? '请输入商品上下文或提示词' : '请输入提示词';
-  if (input.referenceImages.length > (mode === 'image' ? 3 : 10)) return mode === 'image' ? '生图最多选择 3 张参考图' : '视频最多选择 10 张参考图';
+  if (input.referenceImages.length > maxReferenceImages) return mode === 'image' ? `生图最多选择 ${maxReferenceImages} 张参考图` : '视频最多选择 10 张参考图';
   if (mode !== 'video' && input.referenceAudios.length > 0) return '当前模式不支持音频参考';
   if (input.referenceAudios.length > 5) return '视频最多选择 5 条参考音频';
   return null;
@@ -149,6 +149,11 @@ export function ProductionForm({ accountId, mode }: Props) {
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const [assetPickerKind, setAssetPickerKind] = useState<'image' | 'inventory-video' | 'audio'>('image');
   const [assetPickerTab, setAssetPickerTab] = useState<'material' | 'product'>('material');
+  const [assetPickerQuery, setAssetPickerQuery] = useState('');
+
+  useEffect(() => {
+    if (!assetPickerOpen) setAssetPickerQuery('');
+  }, [assetPickerOpen]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -283,6 +288,15 @@ export function ProductionForm({ accountId, mode }: Props) {
   const availableMediaAssets = mediaAssets.filter((asset) => mode === 'image'
     ? (asset.kind === 'image' || asset.kind === 'product-image')
     : asset.kind === 'image' || asset.kind === 'product-image' ? maxImages > 0 : asset.kind === 'inventory-video' ? maxVideos > 0 : maxAudios > 0);
+  const pickerAssets = useMemo(() => {
+    const query = assetPickerQuery.trim().toLowerCase();
+    return availableMediaAssets
+      .filter((asset) => (assetPickerKind === 'image'
+        ? (asset.kind === 'image' || asset.kind === 'product-image')
+        : asset.kind === assetPickerKind))
+      .filter((asset) => assetPickerKind !== 'image' || (assetPickerTab === 'product' ? asset.shared : !asset.shared))
+      .filter((asset) => !query || `${asset.name} ${asset.pid ?? ''}`.toLowerCase().includes(query));
+  }, [assetPickerKind, assetPickerQuery, assetPickerTab, availableMediaAssets]);
   const selectedMediaForDisplay = selectedAssetIds
     .map((id) => mediaAssets.find((asset) => asset.id === id))
     .filter((asset): asset is MediaAsset => Boolean(asset));
@@ -479,28 +493,12 @@ export function ProductionForm({ accountId, mode }: Props) {
       provider,
     }, capability);
     if (validationError) { setMessage(validationError.message); return; }
-    const legacyError = validateGenerationInput(mode, { prompt, referenceImages: images, referenceAudios: audios });
+    const legacyError = validateGenerationInput(mode, { prompt, referenceImages: images, referenceAudios: audios }, maxImages);
     if (legacyError) { setMessage(legacyError); return; }
     setLoading(true); setMessage(null);
     try {
       let effectiveChildPrompt = childPrompt;
       let effectiveFinalPrompt = finalPrompt;
-      if (mode === 'video' && promptMode === 'asset-template-child-prompt') {
-        const template = promptTemplates.find((item) => item.id === templateId);
-        const generatedResponse = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/generate-prompt`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ title: prompt, description: template?.content ?? '', promptModel }),
-        });
-        const generatedPayload = await generatedResponse.json().catch(() => null) as { success?: boolean; data?: { prompt?: string }; error?: string } | null;
-        if (!generatedResponse.ok || !generatedPayload?.success || !generatedPayload.data?.prompt?.trim()) {
-          throw new Error(generatedPayload?.error || '子提示词生成失败');
-        }
-        effectiveChildPrompt = generatedPayload.data.prompt.trim();
-        effectiveFinalPrompt = effectiveChildPrompt;
-        setChildPrompt(effectiveChildPrompt);
-        setFinalPrompt(effectiveFinalPrompt);
-      }
       let assetIds: string[] = selectedMedia.filter((asset) => !asset.shared).map((asset) => asset.id);
       let uploadedReferenceAssetIds: string[] = [];
       let uploadedReferenceVideoAssetIds: string[] = [];
@@ -520,6 +518,24 @@ export function ProductionForm({ accountId, mode }: Props) {
         if (kind === 'image') uploadedReferenceAssetIds = [...uploadedReferenceAssetIds, payload.data.id];
         if (kind === 'inventory-video') uploadedReferenceVideoAssetIds = [...uploadedReferenceVideoAssetIds, payload.data.id];
         if (kind === 'audio') uploadedReferenceAudioAssetIds = [...uploadedReferenceAudioAssetIds, payload.data.id];
+      }
+      if (mode === 'video' && promptMode === 'asset-template-child-prompt') {
+        const template = promptTemplates.find((item) => item.id === templateId);
+        const referenceAssetIds = [...selectedMedia.filter((asset) => asset.kind === 'image').map((asset) => asset.id), ...uploadedReferenceAssetIds];
+        const productImageAssetIds = selectedMedia.filter((asset) => asset.kind === 'product-image').map((asset) => asset.id);
+        const generatedResponse = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/generate-prompt`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ title: prompt, description: template?.content ?? '', promptModel, referenceAssetIds, productImageAssetIds }),
+        });
+        const generatedPayload = await generatedResponse.json().catch(() => null) as { success?: boolean; data?: { prompt?: string }; error?: string } | null;
+        if (!generatedResponse.ok || !generatedPayload?.success || !generatedPayload.data?.prompt?.trim()) {
+          throw new Error(generatedPayload?.error || '子提示词生成失败');
+        }
+        effectiveChildPrompt = generatedPayload.data.prompt.trim();
+        effectiveFinalPrompt = effectiveChildPrompt;
+        setChildPrompt(effectiveChildPrompt);
+        setFinalPrompt(effectiveFinalPrompt);
       }
       const referenceAssetOrder: ProductionAssetSelection[] = [...selectedMedia, ...uploadedSelections];
       const body = buildGenerationPayload(mode, {
@@ -560,7 +576,7 @@ export function ProductionForm({ accountId, mode }: Props) {
       // references and parameters. Local files intentionally remain selected;
       // the next submit will upload them again as a new task input.
     } catch (error) {
-      setMessage(formatProductionError(error instanceof Error ? error.message : '请求失败'));
+      setMessage(formatProductionError(error instanceof Error ? error.message : '请求失败', promptModel));
     } finally { setLoading(false); }
   }
 
@@ -583,16 +599,20 @@ export function ProductionForm({ accountId, mode }: Props) {
     {assetPickerOpen && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setAssetPickerOpen(false); }}>
       <section className="modal-card asset-picker-modal" role="dialog" aria-modal="true" aria-labelledby="asset-picker-title">
         <div className="panel-header"><div><h2 id="asset-picker-title" className="panel-title">选择{assetPickerKind === 'image' ? '参考图' : assetPickerKind === 'inventory-video' ? '参考视频' : '参考音频'}</h2><div className="panel-meta">已选择 {assetPickerKind === 'image' ? selectedImageCountForDisplay : assetPickerKind === 'inventory-video' ? selectedVideoCountForDisplay : selectedAudioCountForDisplay} 项</div></div><button type="button" className="icon-button" aria-label="关闭" onClick={() => setAssetPickerOpen(false)}><X size={15} /></button></div>
+        {mode === 'video' && <ProductSummaryUploader accountId={accountId} compact />}
         {assetPickerKind === 'image' && <div className="asset-picker-tabs"><button type="button" className={assetPickerTab === 'material' ? 'active' : ''} onClick={() => setAssetPickerTab('material')}>素材图片</button><button type="button" className={assetPickerTab === 'product' ? 'active' : ''} onClick={() => setAssetPickerTab('product')}>商品图片</button></div>}
-         <div className="asset-reference-grid asset-picker-grid">{availableMediaAssets.filter((asset) => (assetPickerKind === 'image' ? (asset.kind === 'image' || asset.kind === 'product-image') : asset.kind === assetPickerKind) && (assetPickerKind !== 'image' || (assetPickerTab === 'product' ? asset.shared : !asset.shared))).map((asset) => {
+         <label className="asset-picker-search"><Search size={15} /><span className="sr-only">搜索素材</span><input value={assetPickerQuery} onChange={(event) => setAssetPickerQuery(event.target.value)} placeholder="搜索文件名或 PID" /></label>
+         <div className="asset-reference-grid asset-picker-grid">{pickerAssets.map((asset) => {
            const selected = selectedAssetIds.includes(asset.id);
+           const order = selectedAssetIds.indexOf(asset.id);
            return <label key={asset.id} className={`asset-reference-option asset-picker-option ${selected ? 'is-selected' : ''} ${asset.shared ? 'shared-asset' : ''}`}>
              {assetPickerKind === 'image' ? <AssetPickerPreview accountId={accountId} asset={asset} /> : <div className="asset-picker-media-placeholder"><ImageIcon size={22} /></div>}
+             {order >= 0 && <span className="asset-picker-order" aria-label={`第 ${order + 1} 张参考素材`}>{order + 1}</span>}
              <input type="checkbox" checked={selected} onChange={() => toggleAsset(asset)} />
              <span className="asset-picker-name">{asset.name}</span>
              <small>{asset.shared ? `商品图${asset.pid ? ` · ${asset.pid}` : ''} · 全运营共享` : assetPickerKind === 'inventory-video' ? '库存视频 · 当前账号' : assetPickerKind === 'audio' ? '音频 · 当前账号' : '素材图 · 当前账号'}</small>
            </label>;
-         })}</div>
+         })}{pickerAssets.length === 0 && <div className="asset-picker-empty">没有匹配的素材</div>}</div>
         <div className="modal-actions"><button type="button" className="ghost-button" onClick={() => setAssetPickerOpen(false)}>完成选择</button></div>
       </section>
     </div>}
@@ -619,6 +639,39 @@ function AssetPickerPreview({ accountId, asset }: { accountId: string; asset: Me
     : `/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(asset.id)}`;
   if (failed || !src) return <div className="asset-picker-image-preview asset-picker-image-placeholder"><ImageIcon size={24} /><span>暂无预览</span></div>;
   return <div className="asset-picker-image-preview"><img src={src} alt={`${asset.name} 预览`} loading="lazy" onError={() => setFailed(true)} /></div>;
+}
+
+function ProductSummaryUploader({ accountId, compact = false }: { accountId: string; compact?: boolean }) {
+  const [info, setInfo] = useState<{ fileName: string | null; rowCount: number; source: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const [dragging, setDragging] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/product-summary`, { cache: 'no-store' })
+      .then((response) => response.json())
+      .then((payload: { success?: boolean; data?: typeof info }) => { if (!cancelled && payload.success && payload.data) setInfo(payload.data); })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [accountId]);
+  async function upload(file: File) {
+    if (!/\.(xlsx|xls)$/i.test(file.name)) { setMessage('请选择 .xlsx 或 .xls 文件'); return; }
+    setBusy(true); setMessage(null);
+    try {
+      const form = new FormData(); form.append('file', file);
+      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/product-summary`, { method: 'POST', body: form });
+      const payload = await response.json().catch(() => null) as { success?: boolean; data?: typeof info; error?: string } | null;
+      if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.error || 'Excel 上传失败');
+      setInfo(payload.data); setMessage(`已载入 ${payload.data.rowCount} 条商品资料`);
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Excel 上传失败'); }
+    finally { setBusy(false); if (inputRef.current) inputRef.current.value = ''; }
+  }
+  return <div className={`product-summary-uploader ${compact ? 'compact' : ''} ${dragging ? 'dragging' : ''}`} onDragEnter={(event) => { event.preventDefault(); setDragging(true); }} onDragOver={(event) => event.preventDefault()} onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }} onDrop={(event) => { event.preventDefault(); setDragging(false); const file = event.dataTransfer.files[0]; if (file) void upload(file); }}>
+    <div><strong>商品 Excel 匹配表（可选）</strong><small>拖入或点击选择本机 .xlsx/.xls；列需包含 pid、标题、产品描述。按当前账号保存并用于视频提示词匹配。</small>{info?.fileName && <small>当前：{info.fileName}（{info.rowCount} 条）</small>}{message && <small role="status">{message}</small>}</div>
+    <button type="button" className="ghost-button" onClick={() => inputRef.current?.click()} disabled={busy}>{busy ? '上传中…' : '选择 Excel'}</button>
+    <input ref={inputRef} type="file" accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file); }} />
+  </div>;
 }
 
 function providerModelId(provider: ProviderId): string | undefined {
@@ -674,10 +727,19 @@ export function videoModelsForProvider(provider: ProviderId, currentModelId?: st
 
 function UploadIcon() { return <span className="dropzone-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7"><path d="M12 16V4m0 0L7 9m5-5 5 5" /><path d="M5 14v5h14v-5" /></svg></span>; }
 
-function formatProductionError(code: string): string {
+export function promptProviderLabel(promptModel: string): string {
+  const normalized = promptModel.trim().toLowerCase();
+  if (normalized === 'bigsnake' || normalized.startsWith('bigsnake:')) return 'BigSnake';
+  if (normalized === 'gpt-2999' || /^gpt[-_]/.test(normalized)) return 'GPT-2999';
+  if (/^gemini[-_]/.test(normalized)) return 'Gemini';
+  return '当前提示词模型';
+}
+
+function formatProductionError(code: string, promptModel = ''): string {
+  if (code === 'prompt_provider_failed') {
+    return `提示词模型请求失败（${promptProviderLabel(promptModel)}）：请检查当前选择的提示词模型、API Key、模型名称和网络状态后重试`;
+  }
   const messages: Record<string, string> = {
-    prompt_provider_failed: '提示词供应商请求失败：请检查 GPT-2999 的 API Key、模型名称和网络状态后重试',
-    provider_400: '供应商拒绝了请求：参数或请求格式不正确，请检查模型和输入内容',
     provider_401: '供应商鉴权失败：API Key 无效、已过期或没有权限，请更新 Key 后重试',
     provider_403: '供应商拒绝访问：当前 API Key 没有调用权限，请检查账户权限',
     provider_404: '供应商接口或模型不存在，请检查 Base URL 和模型配置',

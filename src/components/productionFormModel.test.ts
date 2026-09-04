@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { getVideoCapability } from '@/lib/workspace/production/video-capabilities';
 import { buildGenerationPayload, normalizeReferenceList, validateProductionInput } from './productionFormModel';
-import { modelIdForVideoProvider, providerOptionsForVideoModel, providersForVideoModel, VIDEO_MODELS, videoModelsForProvider } from './ProductionForm';
+import { modelIdForVideoProvider, promptProviderLabel, providerOptionsForVideoModel, providersForVideoModel, VIDEO_MODELS, videoModelsForProvider } from './ProductionForm';
 
 describe('production form historical fields', () => {
+  it('labels prompt provider errors using the selected prompt model', () => {
+    expect(promptProviderLabel('bigsnake')).toBe('BigSnake');
+    expect(promptProviderLabel(' BigSnake ')).toBe('BigSnake');
+    expect(promptProviderLabel('gpt-2999')).toBe('GPT-2999');
+    expect(promptProviderLabel('gemini-2.5-flash')).toBe('Gemini');
+  });
+
   it('lists Quality V4 independently and routes sd-mini through snumom Grok', () => {
     expect(VIDEO_MODELS).toEqual(expect.arrayContaining([{ id: 'quality-v4', label: 'Quality V4' }]));
     const providers = providersForVideoModel([

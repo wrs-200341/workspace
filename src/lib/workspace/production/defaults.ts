@@ -12,6 +12,17 @@ export function getDefaultProductionAspectRatio(ratios: readonly string[]): stri
 }
 
 /**
+ * Prefer the standard 10-second production preset whenever a video model
+ * supports it. This keeps API fallbacks aligned with the production form,
+ * including Wan 3 R2V (9:16 / 10s / 720P).
+ */
+export function getDefaultProductionDuration(durations: readonly number[] | undefined): number {
+  if (!durations?.length) return 10;
+  const tenSeconds = durations.find((value) => Number(value) === 10);
+  return tenSeconds ?? durations[0] ?? 10;
+}
+
+/**
  * Image generation defaults to 4K whenever the selected model advertises it;
  * otherwise use the last (normally highest) advertised resolution.
  */

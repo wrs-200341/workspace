@@ -1,5 +1,6 @@
 /** User-facing Chinese messages for provider and task error codes. */
 const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  prompt_provider_failed: '提示词模型请求失败，请检查当前选择的提示词模型、API Key、模型名称和网络状态后重试。',
   provider_not_configured: '该供应商尚未配置有效密钥，请检查服务端供应商配置后重试。',
   provider_unauthorized: '供应商鉴权失败：API Key 无效、已过期或没有权限，请更新供应商密钥。',
   provider_400: '供应商拒绝了请求（HTTP 400）：可能是内容审核拒绝或请求校验失败，请查看任务详情中的完整供应商响应。',
@@ -29,6 +30,8 @@ const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   video_outputs_unavailable: '视频任务没有可保存的输出结果，请等待任务完成或重新生成。',
   provider_resume_unsupported: '该任务已提交给供应商，不能本地重复提交；请等待当前任务完成。',
   scheduler_queue_full: '当前运营账号的生产队列已达到安全上限，请稍后再提交。',
+  scheduler_interrupted: '服务器重启时中断了尚未提交的任务，请点击恢复配置重新提交。',
+  image_output_cache_failed: '图片已生成但本地缓存失败，请重试或重新生成。',
 };
 
 export function formatProviderError(code: string | undefined): string {

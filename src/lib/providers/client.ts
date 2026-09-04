@@ -1,4 +1,4 @@
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
@@ -13,6 +13,11 @@ const IMAGE_GENERATION_TIMEOUT_MS = 15 * 60 * 1000;
 // GPT-2999 Responses can take longer than the short task/status timeout,
 // especially when the gateway performs reasoning before returning text.
 const PROMPT_GENERATION_TIMEOUT_MS = 90 * 1000;
+// BigSnake's Codex-compatible gateway can spend well over a minute on
+// image-grounded prompts (the response includes a full reasoning envelope).
+// Keep this timeout separate from GPT-2999 so a slow BigSnake image request is
+// not aborted and misreported as a generic provider failure.
+const BIGSNAKE_PROMPT_GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_VIDEO_CONTENT_BYTES = 200 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 1 * 1024 * 1024;
 
@@ -520,7 +525,15 @@ async function requestProvider(url: string, apiKey: string, body: Record<string,
 }
 
 async function requestProviderWithFetcher(fetcher: typeof fetch, url: string, apiKey: string, body: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
-  const response = await fetcher(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+  let response: Response;
+  try {
+    response = await fetcher(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+  } catch (error) {
+    if (isProviderTimeoutError(error)) {
+      throw new ProviderRequestError({ code: 'provider_408', endpoint: url, method: 'POST', receivedAt: new Date().toISOString() });
+    }
+    throw error;
+  }
   if (!response.ok) throw await providerHttpError(response, { endpoint: url, method: 'POST' });
   return readJsonLimited(response);
 }
@@ -685,21 +698,38 @@ export async function generatePomoAIImage(input: { model: string; prompt: string
 
 export async function generateOpenAICompatibleImage(
   provider: Extract<ProviderId, 'origin-gpt-image' | 'origin-grok-image' | 'junze-gpt-image'>,
-  input: { model: string; prompt: string; aspectRatio?: string; resolution?: string },
+  input: { model: string; prompt: string; aspectRatio?: string; resolution?: string; referenceImages?: readonly string[]; referenceFiles?: readonly MultipartReference[] },
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
 ): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
   const env = dependencies.env ?? process.env;
   const config = getProviderConfig(provider, env);
-  const genericPayload = buildOpenAIImagePayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high' });
+  const references = validateReferenceUrls(input.referenceImages ?? []);
+  const referenceFiles = [...(input.referenceFiles ?? [])];
+  if (provider === 'junze-gpt-image' && (references.length > 0 || referenceFiles.length > 0)) throw new Error('reference_images_unsupported');
+  if (references.length + referenceFiles.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
+  if (provider === 'origin-gpt-image' && references.length > 0 && referenceFiles.length === 0 && input.resolution?.trim().toLowerCase() === '4k') throw new Error('origin_4k_reference_requires_multipart');
+  const genericPayload = buildOpenAIImagePayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', originGateway: provider !== 'junze-gpt-image' });
   const payload = provider === 'junze-gpt-image'
     ? { ...genericPayload, size: input.aspectRatio === '9:16' ? '9:16' : '1024x1024', quality: 'low' }
     : genericPayload;
+  const hasReferences = references.length > 0 || referenceFiles.length > 0;
+  const editPayload = hasReferences && referenceFiles.length === 0
+    ? buildOpenAIImageEditPayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', referenceImages: references })
+    : payload;
+  const editForm = hasReferences && referenceFiles.length > 0
+    ? buildOpenAIImageEditFormData({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', referenceImages: references, referenceFiles })
+    : undefined;
   if (!config.apiKey) {
     if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
-    return { mode: 'mock', provider, response: { id: `mock_${provider}_${Date.now()}`, status: 'queued', payload } };
+    return { mode: 'mock', provider, response: { id: `mock_${provider}_${Date.now()}`, status: 'queued', payload: editForm ?? editPayload } };
   }
-  const endpoint = providerEndpoint(provider, 'create', env);
-  return { mode: 'live', provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, endpoint, config.apiKey, payload, IMAGE_GENERATION_TIMEOUT_MS) };
+  const endpoint = hasReferences ? `${config.baseUrl.replace(/\/$/, '')}/images/edits` : providerEndpoint(provider, 'create', env);
+  if (editForm) {
+    const response = await (dependencies.fetch ?? fetch)(endpoint, { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body: editForm, signal: AbortSignal.timeout(IMAGE_GENERATION_TIMEOUT_MS), cache: 'no-store' });
+    if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
+    return { mode: 'live', provider, response: await readJsonLimited(response) };
+  }
+  return { mode: 'live', provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, endpoint, config.apiKey, hasReferences ? editPayload : payload, IMAGE_GENERATION_TIMEOUT_MS) };
 }
 
 export async function generateGeminiNativeImage(
@@ -718,16 +748,22 @@ export async function generateGeminiNativeImage(
     ? config.baseUrl.replace(/\/v1\/?$/i, '')
     : config.baseUrl.replace(/\/$/, '');
   const endpoint = `${nativeBase}/v1beta/models/${encodeURIComponent(input.model)}:generateContent`;
-  return { mode: 'live', provider, response: await fetcherRequest(dependencies.fetch ?? fetch, endpoint, config.apiKey, payload, false, IMAGE_GENERATION_TIMEOUT_MS) };
+  return { mode: 'live', provider, response: await fetcherRequest(dependencies.fetch ?? fetch, endpoint, config.apiKey, payload, false, IMAGE_GENERATION_TIMEOUT_MS, provider !== 'origin-nano-image') };
 }
 
 export async function generateOriginNanoImage(
-  input: { model: string; prompt: string; aspectRatio?: string; resolution?: string },
+  input: { model: string; prompt: string; aspectRatio?: string; resolution?: string; references?: Array<{ mimeType: string; dataBase64: string }>; referenceImages?: readonly string[] },
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
 ): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
   const env = dependencies.env ?? process.env;
   const provider: ProviderId = 'origin-nano-image';
   const config = getProviderConfig(provider, env);
+  if ((input.references ?? []).length > config.supports.referenceImages) throw new Error('too_many_reference_images');
+  if ((input.referenceImages ?? []).length > 0) throw new Error('origin_nano_external_reference_unsupported');
+  // The OpenAI-compatible chat path has no image content slot. Route any
+  // reference-image request through the Gemini-compatible endpoint, where
+  // OriginGateway accepts inlineData parts.
+  if ((input.references ?? []).length > 0) return generateGeminiNativeImage(provider, input, dependencies);
   // The chat-compatible route is reliable for square output. Portrait output
   // must use Gemini native generateContent to preserve the requested ratio.
   if ((input.aspectRatio ?? '1:1') === '9:16') return generateGeminiNativeImage(provider, input, dependencies);
@@ -754,35 +790,58 @@ export async function generateGPTPrompt(input: { model: string; messages: readon
 }
 
 /** BigSnake's Responses endpoint is used for child/sub-prompt generation. */
-export async function generateBigSnakePrompt(input: { model: string; prompt: string }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; text: string; response: unknown }> {
+export async function generateBigSnakePrompt(input: { model: string; prompt: string; attachments?: readonly GPTPromptAttachment[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; text: string; response: unknown }> {
   const env = dependencies.env ?? process.env;
   const provider: ProviderId = 'bigsnake-prompt';
   const config = getProviderConfig(provider, env);
-  const payload = { model: input.model, input: input.prompt.trim(), max_output_tokens: 2_800 };
+  const attachments = (input.attachments ?? []).filter((attachment) => Boolean(attachment.dataBase64?.trim()));
+  const payload = attachments.length
+    ? { ...buildGPTResponsesPayload(input.model, [{ role: 'user' as const, content: input.prompt.trim() }], attachments), max_output_tokens: 2_800 }
+    : { model: input.model, input: input.prompt.trim(), max_output_tokens: 2_800 };
   if (!config.apiKey) {
     if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
     return { mode: 'mock', provider, text: '', response: { id: `mock_bigsnake_${Date.now()}`, status: 'queued', payload } };
   }
-  const response = await fetcherRequest(dependencies.fetch ?? fetch, providerEndpoint(provider, 'create', env), config.apiKey, payload, true, PROMPT_GENERATION_TIMEOUT_MS);
+  const response = await fetcherRequest(dependencies.fetch ?? fetch, providerEndpoint(provider, 'create', env), config.apiKey, payload, true, BIGSNAKE_PROMPT_GENERATION_TIMEOUT_MS);
   return { mode: 'live', provider, text: normalizeGPTResponsesResponse(response), response };
 }
 
-async function fetcherRequest(fetcher: typeof fetch, endpoint: string, apiKey: string, payload: Record<string, unknown>, bearer: boolean, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
+async function fetcherRequest(fetcher: typeof fetch, endpoint: string, apiKey: string, payload: Record<string, unknown>, bearer: boolean, timeoutMs = REQUEST_TIMEOUT_MS, includeGoogleApiKey = !bearer): Promise<unknown> {
   const headers: Record<string, string> = { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'WorkspaceProduction/1.0' };
-  if (bearer) headers.authorization = `Bearer ${apiKey}`; else { headers.authorization = `Bearer ${apiKey}`; headers['x-goog-api-key'] = apiKey; }
-  const response = await fetcher(endpoint, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+  headers.authorization = `Bearer ${apiKey}`;
+  if (includeGoogleApiKey) headers['x-goog-api-key'] = apiKey;
+  let response: Response;
+  try {
+    response = await fetcher(endpoint, { method: 'POST', headers, body: JSON.stringify(payload), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+  } catch (error) {
+    if (isProviderTimeoutError(error)) {
+      throw new ProviderRequestError({ code: 'provider_408', endpoint, method: 'POST', receivedAt: new Date().toISOString() });
+    }
+    throw error;
+  }
   if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
   return readJsonLimited(response);
 }
 
-export async function generateGeminiPrompt(input: { prompt: string; model?: string }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; text: string; response?: unknown }> {
+function isProviderTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { name?: unknown; message?: unknown };
+  const name = typeof candidate.name === 'string' ? candidate.name.toLowerCase() : '';
+  const message = typeof candidate.message === 'string' ? candidate.message.toLowerCase() : '';
+  return name === 'aborterror' || name === 'timeouterror' || message.includes('timed out') || message.includes('timeout') || message.includes('aborted');
+}
+
+export async function generateGeminiPrompt(input: { prompt: string; model?: string; references?: readonly GPTPromptAttachment[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; text: string; response?: unknown }> {
   const env = dependencies.env ?? process.env;
   const config = getProviderConfig('yuanai-gemini-prompt', env);
   const model = typeof input.model === 'string' && input.model.trim() ? input.model.trim() : config.model;
   if (!config.apiKey && isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
   if (!config.apiKey) return { mode: 'mock', text: `${input.prompt.trim()}\n\n镜头稳定，突出商品细节、使用步骤和明确的行动引导。` };
   const endpoint = `${config.baseUrl.replace(/\/$/, '')}/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(config.apiKey)}`;
-  const response = await (dependencies.fetch ?? fetch)(endpoint, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify({ contents: [{ parts: [{ text: input.prompt.trim() }] }] }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), cache: 'no-store' });
+  const referenceParts = (input.references ?? [])
+    .filter((reference) => Boolean(reference.dataBase64?.trim()))
+    .map((reference) => ({ inlineData: { mimeType: reference.mimeType, data: reference.dataBase64 } }));
+  const response = await (dependencies.fetch ?? fetch)(endpoint, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify({ contents: [{ parts: [...referenceParts, { text: input.prompt.trim() }] }] }), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), cache: 'no-store' });
   if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
   const payload = await readJsonLimited(response);
   return { mode: 'live', text: normalizeGeminiResponse(payload), response: payload };

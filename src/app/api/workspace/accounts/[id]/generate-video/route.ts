@@ -8,13 +8,14 @@ import { validateGenerationRequest } from '@/lib/providers/validation';
 import { publishAssetReferences } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getVideoCapability, validateVideoCapability } from '@/lib/workspace/production/video-capabilities';
-import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
+import { getDefaultProductionAspectRatio, getDefaultProductionDuration, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { publishProductImageReference } from '@/lib/workspace/productImages';
 import { getProductImageAbsolutePath, listProductImageAssets } from '@/lib/workspace/productImages';
 import { readAssetFile } from '@/lib/workspace/assetStore';
 import fs from 'node:fs';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
-import { lookupProductSummary } from '@/lib/workspace/productSummary';
+import { appendProductSummary, lookupProductSummary } from '@/lib/workspace/productSummary';
+import * as productSummaryModule from '@/lib/workspace/productSummary';
 import { enqueueProviderTask } from '@/lib/providers/concurrency';
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 
@@ -73,7 +74,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const isSdMini = provider === 'grok-video' && model.toLowerCase() === 'sd-mini';
   // sd-mini requires seconds explicitly; unlike legacy providers, do not
   // silently inject the provider's first duration when the field is omitted.
-  const duration = rawDuration !== undefined ? Math.round(rawDuration) : (isSdMini ? undefined : config.supports.durations?.[0] ?? 10);
+  const duration = rawDuration !== undefined ? Math.round(rawDuration) : (isSdMini ? undefined : getDefaultProductionDuration(config.supports.durations));
   const aspectRatio = typeof input.aspectRatio === 'string' && input.aspectRatio.trim()
     ? input.aspectRatio.trim()
     : getDefaultProductionAspectRatio(config.supports.ratios);
@@ -84,10 +85,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const count = typeof input.count === 'number' && Number.isFinite(input.count) ? Math.min(4, Math.max(1, Math.round(input.count))) : 1;
     const ownerId = workspaceOwnerIdForAccount(id);
     const referenceImageName = firstReferenceImageName({ accountId: id, referenceAssetIds: orderedReferenceAssetIds, assetIds, productImageAssetIds: orderedProductImageAssetIds, rawReferenceImages });
-    const productSummary = lookupProductSummary(referenceImageName);
-    const promptWithSummary = productSummary
-      ? `${input.prompt.trim()}\n\n商品资料（来自 Excel）\n标题：${productSummary.title}\n描述：${productSummary.description}`.trim()
-      : input.prompt.trim();
+    const accountLookup = (productSummaryModule as typeof productSummaryModule & { lookupProductSummaryForAccount?: typeof lookupProductSummary }).lookupProductSummaryForAccount;
+    const productSummary = typeof accountLookup === 'function' ? accountLookup(id, referenceImageName) : lookupProductSummary(referenceImageName);
+    const promptWithSummary = appendProductSummary(input.prompt, productSummary);
     // Publish/validate reference media once per request. Previously this work
     // ran inside the count loop, duplicating filesystem copies and registry
     // writes for every output in a batch and making queue submission appear
@@ -143,8 +143,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       tasks.push(task);
       enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'video', model, run: () => submitVideoTask({ taskId: task.id, provider, model, prompt: promptWithSummary, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos }) });
     }
-    const first = tasks[0];
-    return NextResponse.json({ success: true, data: { taskId: first.id, taskIds: tasks.map((task) => task.id), count: tasks.length, accountId: id, status: first.status, provider: first.provider, execution: 'pending', model: first.model, providerTaskId: first.providerTaskId, progress: first.progress } }, { status: 202 });
+    const persistedTasks = tasks.map((task) => getProviderTask(task.id) ?? task);
+    const first = persistedTasks[0];
+    const queueFull = persistedTasks.some((task) => task.status === 'failed' && task.error === 'scheduler_queue_full');
+    return NextResponse.json({ success: !queueFull, data: { taskId: first.id, taskIds: persistedTasks.map((task) => task.id), count: persistedTasks.length, accountId: id, status: first.status, provider: first.provider, execution: 'pending', model: first.model, providerTaskId: first.providerTaskId, progress: first.progress }, ...(queueFull ? { error: 'scheduler_queue_full' } : {}) }, { status: queueFull ? 503 : 202 });
   } catch (caught) {
     const message = caught instanceof Error ? caught.message : '';
       const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_files_required', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'minimax_prompt_required', 'minimax_invalid_duration', 'minimax_invalid_aspect_ratio', 'minimax_too_many_reference_images', 'minimax_too_many_reference_audios', 'minimax_reference_urls_must_be_https', 'mgrouter_reference_audio_unsupported', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];
@@ -166,8 +168,9 @@ async function submitVideoTask(input: { taskId: string; provider: VideoProvider;
     const cache = normalizedStatus === 'completed' && cacheTask
       ? await cacheVideoTaskOutputsBeforeCompletion(cacheTask.accountId, cacheTask)
       : null;
-    const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
-    const updated = updateProviderTask(input.taskId, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: providerResponse, method: 'POST' }) : undefined, metadata: { ...(current?.metadata ?? {}), execution: submitted.mode, ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
+    const noOutput = normalizedStatus === 'completed' && cache?.expected === 0;
+    const cachePending = normalizedStatus === 'completed' && cache && cache.expected > 0 && !cache.ready;
+    const updated = updateProviderTask(input.taskId, { status: noOutput ? 'failed' : cachePending ? 'processing' : normalizedStatus, progress: noOutput ? 100 : cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: noOutput ? 'provider_upstream_failed' : status.error, providerResponse: status.status === 'failed' || noOutput ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: providerResponse, method: 'POST' }) : undefined, metadata: { ...(current?.metadata ?? {}), execution: submitted.mode, ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
     if (updated && submitted.mode === 'mock') void processMockProviderTask(input.taskId);
   } catch (error) {
     updateProviderTask(input.taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(error instanceof Error ? error.message : ''), providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }), metadata: { ...(getProviderTask(input.taskId)?.metadata ?? {}), execution: 'failed' } });
