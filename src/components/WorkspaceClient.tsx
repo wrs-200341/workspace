@@ -50,9 +50,6 @@ export function WorkspaceClient({ user, initialAccounts, initialTasks }: Props) 
     selector?.removeAttribute('disabled');
     const help = document.querySelector<HTMLElement>('.workspace-rail .rail-help');
     if (help) help.textContent = '可查看其他运营工作区，只有自己的工作区可以编辑';
-  }, [user.role]);
-  useEffect(() => {
-    if (user.role !== 'operator') return;
     document.querySelectorAll<HTMLSelectElement>('.workspace-rail select').forEach((select) => select.removeAttribute('disabled'));
   }, [user.role]);
   const owner = operators.find((item) => item.id === ownerId) ?? operators[0];
