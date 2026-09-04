@@ -3,7 +3,7 @@ import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 import { generateMGRouterImage, generateYuanAIImage, generatePomoAIImage, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
-import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
+import { createProviderTasks, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
 import { publishAssetReference, publishAssetReferences, assertAssetReference } from '@/lib/workspace/referenceBridge';
 import { getWorkspacePath } from '@/lib/storagePaths';
@@ -45,10 +45,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     const ownerId = workspaceOwnerIdForAccount(id);
     const referenceImageName = firstReferenceImageName({ accountId: id, assetIds: orderedImageAssets.filter((item) => item.kind === 'image').map((item) => item.id), productImageAssetIds: orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id), rawReferenceImages: rawImages });
-    const publishedReferences = isProviderLiveEnabled(provider) && provider === 'mgrouter-grok-image'
+    // OriginGateway's Grok image edit endpoint accepts JSON only (the
+    // screenshot error was a 415 caused by sending multipart/form-data).  For
+    // Grok, publish local account assets through the reference bridge first so
+    // the provider receives regular HTTPS image URLs. GPT Image keeps its
+    // local multipart path for 4K edits, while MGRouter continues to use the
+    // documented JSON URL payload.
+    const publishedReferences = isProviderLiveEnabled(provider) && (provider === 'mgrouter-grok-image' || provider === 'origin-grok-image')
       ? publishAssetReferences(orderedImageAssets.filter((item) => item.kind === 'image').map((item) => ({ accountId: id, assetId: item.id, allowedKinds: ['image'] as const })))
       : [];
-    const publishedProductReferences = isProviderLiveEnabled(provider) && provider === 'mgrouter-grok-image'
+    const publishedProductReferences = isProviderLiveEnabled(provider) && (provider === 'mgrouter-grok-image' || provider === 'origin-grok-image')
       ? orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => publishProductImageReference(item.id, id))
       : [];
     const publishedByAssetId = new Map<string, string>();
@@ -72,7 +78,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const referenceTokens = orderedImageAssets.map((item) => publishedTokensByAssetId.get(item.id)).filter((value): value is string => Boolean(value));
     const images = [...rawImages, ...orderedImageAssets.map((item) => publishedByAssetId.get(item.id)).filter((value): value is string => Boolean(value))];
     const normalized = validateGenerationRequest({ provider, aspectRatio, resolution, referenceImages: images, referenceAudios: [] });
-    const localImageAssets = (provider === 'yuanai-image' || provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image' || provider === 'origin-gpt-image' || provider === 'origin-grok-image' || provider === 'origin-nano-image') && orderedImageAssets.length > 0
+    const localImageAssets = (provider === 'yuanai-image' || provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image' || provider === 'origin-gpt-image' || provider === 'origin-nano-image') && orderedImageAssets.length > 0
       ? orderedImageAssets.map((item) => item.kind === 'image'
         ? (() => {
           const asset = assertAssetReference(id, item.id, ['image']);
@@ -86,17 +92,24 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           return { bytes: new Uint8Array(fs.readFileSync(getProductImageAbsolutePath(item.id))), mimeType: product.mimeType, fileName: product.name };
         })())
       : undefined;
-    if (images.length + orderedImageAssets.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
+    // `images` already contains published URLs for live providers. Counting
+    // `orderedImageAssets` again incorrectly doubled the reference count and
+    // could reject otherwise valid multi-image edits.
+    const referenceCount = rawImages.length + orderedImageAssets.length;
+    if (referenceCount > config.supports.referenceImages) throw new Error('too_many_reference_images');
     if (localImageAssets && localImageAssets.some((asset) => !isImageBytes(asset.bytes))) throw new Error('reference_image_invalid');
     if (localImageAssets && (provider === 'origin-gpt-image' || provider === 'origin-grok-image') && (localImageAssets.some((asset) => asset.bytes.byteLength > 25 * 1024 * 1024) || localImageAssets.reduce((total, asset) => total + asset.bytes.byteLength, 0) > 150 * 1024 * 1024)) throw new Error('origin_reference_payload_too_large');
     const yuanReferenceFiles = provider === 'yuanai-image' ? localImageAssets : undefined;
-    const originReferenceFiles = (provider === 'origin-gpt-image' || provider === 'origin-grok-image') ? localImageAssets : undefined;
+    // OriginGateway Grok `/images/edits` explicitly rejects multipart and
+    // requires application/json. Its local assets are already published into
+    // `images` above, so only GPT Image uses the multipart file contract.
+    const originReferenceFiles = provider === 'origin-gpt-image' ? localImageAssets : undefined;
     const pomoReferences = (provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image' || provider === 'origin-nano-image') && localImageAssets
       ? localImageAssets.map((reference) => ({ mimeType: reference.mimeType, dataBase64: Buffer.from(reference.bytes).toString('base64') }))
       : [];
-    const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
+    const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'image', schedulerModel: model, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
     const promptText = body.prompt.trim();
-    const tasks = Array.from({ length: count }, (_, index) => createProviderTask({ accountId: id, mode: 'image', provider, model, prompt: promptText, status: 'queued', progress: 0, metadata: { ...baseMetadata, maxRetries: 2, sequence: index + 1 } }));
+    const tasks = createProviderTasks(Array.from({ length: count }, (_, index) => ({ accountId: id, mode: 'image' as const, provider, model, prompt: promptText, status: 'queued' as const, progress: 0, metadata: { ...baseMetadata, maxRetries: 2, sequence: index + 1 } })));
     const accepted = tasks.map((task) => enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'image', model, run: () => submitImageTask({ accountId: id, taskId: task.id, provider, model, prompt: promptText, normalized, images, assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, yuanReferenceFiles, originReferenceFiles, pomoReferences }) }));
     const persistedTasks = tasks.map((task) => getProviderTask(task.id) ?? task);
     const first = persistedTasks[0];
@@ -104,7 +117,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ success: !queueFull, data: { accountId: id, taskId: first.id, taskIds: persistedTasks.map((task) => task.id), count: persistedTasks.length, status: first.status, provider: first.provider, execution: 'pending', model: first.model, progress: first.progress }, ...(queueFull ? { error: 'scheduler_queue_full' } : {}) }, { status: queueFull ? 503 : 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_images_must_be_https', 'too_many_reference_images', 'reference_image_invalid', 'origin_reference_payload_too_large', 'origin_4k_reference_requires_multipart', 'origin_nano_external_reference_unsupported', 'reference_images_unsupported', 'unsupported_aspect_ratio', 'unsupported_resolution'];
+    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_images_must_be_https', 'too_many_reference_images', 'reference_image_invalid', 'origin_reference_payload_too_large', 'origin_4k_reference_requires_multipart', 'origin_grok_reference_requires_json', 'origin_nano_external_reference_unsupported', 'reference_images_unsupported', 'unsupported_aspect_ratio', 'unsupported_resolution'];
     const responseError = known.includes(message) ? message : 'image_provider_failed';
     const status = responseError === 'provider_not_configured' ? 503 : responseError.startsWith('provider_') ? 502 : 400;
     return NextResponse.json({ success: false, error: responseError }, { status });

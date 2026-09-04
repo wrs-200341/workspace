@@ -499,12 +499,10 @@ export function ProductionForm({ accountId, mode }: Props) {
     try {
       let effectiveChildPrompt = childPrompt;
       let effectiveFinalPrompt = finalPrompt;
-      let assetIds: string[] = selectedMedia.filter((asset) => !asset.shared).map((asset) => asset.id);
-      let uploadedReferenceAssetIds: string[] = [];
-      let uploadedReferenceVideoAssetIds: string[] = [];
-      let uploadedReferenceAudioAssetIds: string[] = [];
-      const uploadedSelections: ProductionAssetSelection[] = [];
-      for (const file of droppedFiles) {
+      const selectedAssetIds = selectedMedia.filter((asset) => !asset.shared).map((asset) => asset.id);
+      // Upload all dropped references concurrently so queue submission is not
+      // delayed by one network round-trip per file.
+      const pendingUploads = droppedFiles.map(async (file): Promise<ProductionAssetSelection> => {
         const form = new FormData();
         form.set('file', file);
         const kind = fileKind(file);
@@ -513,12 +511,13 @@ export function ProductionForm({ accountId, mode }: Props) {
         const uploaded = await fetch(`/api/workspace/accounts/${accountId}/files`, { method: 'POST', body: form });
         const payload = await uploaded.json().catch(() => null) as { success?: boolean; data?: { id?: string }; error?: string } | null;
         if (!uploaded.ok || !payload?.success || !payload.data?.id) throw new Error(payload?.error || '本地素材上传失败');
-        assetIds = [...assetIds, payload.data.id];
-        uploadedSelections.push({ id: payload.data.id, kind });
-        if (kind === 'image') uploadedReferenceAssetIds = [...uploadedReferenceAssetIds, payload.data.id];
-        if (kind === 'inventory-video') uploadedReferenceVideoAssetIds = [...uploadedReferenceVideoAssetIds, payload.data.id];
-        if (kind === 'audio') uploadedReferenceAudioAssetIds = [...uploadedReferenceAudioAssetIds, payload.data.id];
-      }
+        return { id: payload.data.id, kind };
+      });
+      const uploadedSelections = await Promise.all(pendingUploads);
+      const assetIds = [...selectedAssetIds, ...uploadedSelections.map((selection) => selection.id)];
+      const uploadedReferenceAssetIds = uploadedSelections.filter((selection) => selection.kind === 'image').map((selection) => selection.id);
+      const uploadedReferenceVideoAssetIds = uploadedSelections.filter((selection) => selection.kind === 'inventory-video').map((selection) => selection.id);
+      const uploadedReferenceAudioAssetIds = uploadedSelections.filter((selection) => selection.kind === 'audio').map((selection) => selection.id);
       if (mode === 'video' && promptMode === 'asset-template-child-prompt') {
         const template = promptTemplates.find((item) => item.id === templateId);
         const referenceAssetIds = [...selectedMedia.filter((asset) => asset.kind === 'image').map((asset) => asset.id), ...uploadedReferenceAssetIds];

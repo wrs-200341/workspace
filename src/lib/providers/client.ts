@@ -706,6 +706,10 @@ export async function generateOpenAICompatibleImage(
   const references = validateReferenceUrls(input.referenceImages ?? []);
   const referenceFiles = [...(input.referenceFiles ?? [])];
   if (provider === 'junze-gpt-image' && (references.length > 0 || referenceFiles.length > 0)) throw new Error('reference_images_unsupported');
+  // OriginGateway's Grok image edit route is JSON-only. A multipart body is
+  // rejected with HTTP 415 (`Unsupported Media Type`), so callers must
+  // publish local assets first and pass their HTTPS bridge URLs instead.
+  if (provider === 'origin-grok-image' && referenceFiles.length > 0) throw new Error('origin_grok_reference_requires_json');
   if (references.length + referenceFiles.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
   if (provider === 'origin-gpt-image' && references.length > 0 && referenceFiles.length === 0 && input.resolution?.trim().toLowerCase() === '4k') throw new Error('origin_4k_reference_requires_multipart');
   const genericPayload = buildOpenAIImagePayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', originGateway: provider !== 'junze-gpt-image' });

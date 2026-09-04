@@ -21,7 +21,8 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   let persisted = getProviderTask(taskId);
   if (persisted && persisted.accountId === id && persisted.mode === 'image') {
-    if (persisted.status === 'processing' && persisted.metadata?.localOutputReady !== true) {
+    if ((persisted.status === 'processing' && persisted.metadata?.localOutputReady !== true)
+      || (persisted.status === 'failed' && persisted.error === 'image_output_cache_failed')) {
       persisted = await recoverPendingImageTaskOutputCache(taskId) ?? persisted;
     }
     if (persisted.providerTaskId && isProviderLiveEnabled(persisted.provider) && ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(persisted.status)) {

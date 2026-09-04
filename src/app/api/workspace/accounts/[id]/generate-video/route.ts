@@ -3,7 +3,7 @@ import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 import { normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError, submitVideo } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
-import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
+import { createProviderTasks, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
 import { publishAssetReferences } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
@@ -93,10 +93,21 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // writes for every output in a batch and making queue submission appear
     // to hang for tens of seconds.
     const live = isProviderLiveEnabled(provider);
-    const publishedImages = live ? publishAssetReferences(orderedReferenceAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['image'] as const }))) : [];
+    // Publish all account media in one registry transaction. Four separate
+    // publishAssetReferences calls each read/copy/write registry.json and made
+    // a submit wait noticeably longer (and could race on the registry file).
+    const imageCount = orderedReferenceAssetIds.length;
+    const videoCount = referenceVideoAssetIds.length;
+    const mediaInputs = [
+      ...orderedReferenceAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['image'] as const })),
+      ...referenceVideoAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['inventory-video'] as const })),
+      ...referenceAudioAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['audio'] as const })),
+    ];
+    const publishedMedia = live ? publishAssetReferences(mediaInputs) : [];
+    const publishedImages = publishedMedia.slice(0, imageCount);
+    const publishedVideos = publishedMedia.slice(imageCount, imageCount + videoCount);
+    const publishedAudios = publishedMedia.slice(imageCount + videoCount);
     const publishedProductImages = live ? orderedProductImageAssetIds.map((assetId) => publishProductImageReference(assetId, id)) : [];
-    const publishedVideos = live ? publishAssetReferences(referenceVideoAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['inventory-video'] as const }))) : [];
-    const publishedAudios = live ? publishAssetReferences(referenceAudioAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['audio'] as const }))) : [];
     const publishedImageUrls = new Map<string, string>();
     orderedReferenceAssetIds.forEach((assetId, assetIndex) => { const item = publishedImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
     orderedProductImageAssetIds.forEach((assetId, assetIndex) => { const item = publishedProductImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
@@ -137,10 +148,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           referenceAudioCount: referenceAudios.length,
         });
     }
-    const tasks = [];
-    for (let index = 0; index < count; index += 1) {
-      const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: promptWithSummary, status: 'queued', progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: promptWithSummary, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } });
-      tasks.push(task);
+    const tasks = createProviderTasks(Array.from({ length: count }, (_, index) => ({ accountId: id, mode: 'video' as const, provider, model, prompt: promptWithSummary, status: 'queued' as const, progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'video', schedulerModel: model, modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: promptWithSummary, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } })));
+    for (const task of tasks) {
       enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'video', model, run: () => submitVideoTask({ taskId: task.id, provider, model, prompt: promptWithSummary, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos }) });
     }
     const persistedTasks = tasks.map((task) => getProviderTask(task.id) ?? task);

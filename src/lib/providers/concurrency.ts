@@ -292,17 +292,29 @@ export function enqueueProviderTask(job: SchedulerJob): boolean {
   registeredJobs.set(normalized.taskId, normalized);
   const current = getProviderTask(normalized.taskId);
   if (current) {
-    updateProviderTask(normalized.taskId, {
-      status: 'queued',
-      metadata: {
-        ...(current.metadata ?? {}),
-        schedulerState: WAITING_STATE,
-        schedulerOwnerId: normalized.ownerId,
-        schedulerMode: normalized.mode,
-        schedulerModel: normalized.model,
-        schedulerRuntimeId: SCHEDULER_RUNTIME_ID,
-      },
-    });
+    const metadata = current.metadata ?? {};
+    // Route handlers create tasks with the waiting scheduler metadata already
+    // attached. Once this process has stamped its runtime id, avoid rewriting
+    // the entire (potentially multi-megabyte) tasks.json file on re-enqueue.
+    const alreadyWaiting = current.status === 'queued'
+      && metadata.schedulerState === WAITING_STATE
+      && metadata.schedulerOwnerId === normalized.ownerId
+      && metadata.schedulerMode === normalized.mode
+      && metadata.schedulerModel === normalized.model
+      && metadata.schedulerRuntimeId === SCHEDULER_RUNTIME_ID;
+    if (!alreadyWaiting) {
+      updateProviderTask(normalized.taskId, {
+        status: 'queued',
+        metadata: {
+          ...metadata,
+          schedulerState: WAITING_STATE,
+          schedulerOwnerId: normalized.ownerId,
+          schedulerMode: normalized.mode,
+          schedulerModel: normalized.model,
+          schedulerRuntimeId: SCHEDULER_RUNTIME_ID,
+        },
+      });
+    }
   }
   if (!pendingJobs.some((candidate) => candidate.taskId === normalized.taskId)) pendingJobs.push(normalized);
   void pumpScope({ ownerId: normalized.ownerId, mode: normalized.mode });

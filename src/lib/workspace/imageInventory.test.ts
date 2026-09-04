@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUploadedAsset, listAssets } from './assetStore';
 import { cacheImageTaskOutputsBeforeCompletion, recoverPendingImageTaskOutputCache, saveImageTaskOutputsToAssets } from './imageInventory';
+import { storeImageOutput } from '@/lib/providers/outputStore';
 import { createProviderTask } from '@/lib/providers/taskStore';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
@@ -9,6 +10,7 @@ const root = `D:\\all_projects\\workspace\\data\\image-inventory-test-${process.
 const previous = process.env.WORKSPACE_DATA_ROOT;
 const accountId = 'image-inventory-account';
 const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
+const providerBenchmarkLookup = async () => [{ address: '198.18.0.191', family: 4 }];
 
 beforeEach(() => {
   process.env.WORKSPACE_DATA_ROOT = root;
@@ -54,6 +56,17 @@ describe('image task inventory persistence', () => {
     expect(vi.mocked(fetch)).toHaveBeenCalledWith('https://cdn.example.test/image.png', expect.objectContaining({ redirect: 'error', cache: 'no-store' }));
   });
 
+  it('allows trusted provider image hosts resolved through the LAN benchmark range', async () => {
+    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+    const fetcher = vi.fn().mockResolvedValue(new Response(pngBytes, { status: 200, headers: { 'content-type': 'image/png' } }));
+    const result = await cacheImageTaskOutputsBeforeCompletion(accountId, task({
+      provider: 'mgrouter-grok-image',
+      outputUrls: ['https://imgen.x.ai/xai-imgen/result.png'],
+    }), { fetcher, lookup: providerBenchmarkLookup });
+    expect(result).toEqual({ cached: 1, expected: 1, ready: true });
+    expect(fetcher).toHaveBeenCalledWith('https://imgen.x.ai/xai-imgen/result.png', expect.objectContaining({ redirect: 'error', cache: 'no-store' }));
+  });
+
   it('blocks private image output targets before fetching', async () => {
     const fetcher = vi.fn();
     await expect(saveImageTaskOutputsToAssets(accountId, task({ outputUrls: ['https://127.0.0.1/private.png'] }), { fetcher, lookup: publicLookup })).rejects.toThrow('image_url_target_blocked');
@@ -69,6 +82,23 @@ describe('image task inventory persistence', () => {
     expect(recovered?.metadata?.localOutputReady).toBe(true);
     expect(recovered?.outputUrls[0]).toContain(`/image-tasks/${pending.id}/outputs/0`);
     expect(recovered?.outputBase64).toEqual([]);
+  });
+
+  it('repairs a terminal cache failure when the output was persisted before the status race', async () => {
+    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
+    const failed = createProviderTask(task({
+      id: 'image-task-raced-cache',
+      status: 'failed',
+      progress: 100,
+      error: 'image_output_cache_failed',
+      outputUrls: ['https://imgen.x.ai/xai-imgen/raced.png'],
+      metadata: { localOutputReady: false, localCacheAttempts: 5 },
+    }));
+    expect(storeImageOutput(accountId, failed.id, 0, pngBytes, 'image/png')).not.toBeNull();
+    const recovered = await recoverPendingImageTaskOutputCache(failed.id, { lookup: providerBenchmarkLookup });
+    expect(recovered?.status).toBe('completed');
+    expect(recovered?.error).toBeUndefined();
+    expect(recovered?.metadata?.localOutputReady).toBe(true);
   });
 
   it('does not save failed, non-image, or already-recorded tasks', async () => {

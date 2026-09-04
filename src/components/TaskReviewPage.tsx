@@ -5,6 +5,7 @@ import { ArrowLeft, CircleAlert, Download, LoaderCircle, PackageCheck, RotateCcw
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { dedupeVideoOutputUrls } from '@/lib/providers/videoOutputUrls';
+import ReviewZoomableMedia from '@/components/ReviewZoomableMedia';
 
 type ReviewTask = {
   id: string;
@@ -53,7 +54,7 @@ export function TaskReviewPage({ accountId, taskId, mode, readOnly = false }: { 
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => {
-    if (!task || !['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running'].includes(task.status)) return;
+    if (!task || !['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying'].includes(task.status)) return;
     const timer = window.setInterval(() => void load(), 2_000);
     return () => window.clearInterval(timer);
   }, [load, task]);
@@ -203,13 +204,13 @@ export function TaskReviewPage({ accountId, taskId, mode, readOnly = false }: { 
     <div className="task-review-stage">
       <section className="panel task-review-pane task-output-pane">
         <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">输出预览</h2><div className="panel-meta">任务成品</div></div></div>
-        <div className="task-output-list">{outputSources.length > 0 ? outputSources.map((url, index) => <ZoomableMedia key={`${url}-${index}`} src={url} alt={`任务输出 ${index + 1}`} video={mode === 'video'} />) : <div className="task-review-empty">任务尚未生成输出</div>}</div>
+        <div className="task-output-list">{outputSources.length > 0 ? outputSources.map((url, index) => <ReviewZoomableMedia key={`${url}-${index}`} src={url} alt={`任务输出 ${index + 1}`} video={mode === 'video'} />) : <div className="task-review-empty">任务尚未生成输出</div>}</div>
         <div className="task-review-actions"><span className="task-review-count">输出 {outputCount}</span><span className="task-review-inventory">{task?.inventorySavedAt ? '已入库' : '待入库'}</span><div className="review-buttons"><Link className="ghost-button" href={restoreHref}><RotateCcw size={14} /> 恢复配置</Link><button className="ghost-button" type="button" onClick={() => void action('save-inventory')} disabled={busy || !task || task.status !== 'completed' || Boolean(task.inventorySavedAt)}><PackageCheck size={14} /> 写入库存</button>{outputSources.map((url, index) => <button className="primary-button" key={`${url}-${index}`} type="button" onClick={() => void downloadOutput(url, index)} disabled={downloadingIndex !== null}><Download size={14} /> 下载</button>)}</div></div>
       </section>
       <aside className="panel task-review-pane task-reference-pane">
         <div className="panel-header task-review-pane-header"><div><h2 className="panel-title">参考图</h2><div className="panel-meta">{referenceUrls.length} 张 · 点击缩略图预览</div></div></div>
         {referenceUrls.length > 0 ? <>
-          <div className="task-reference-selected"><ZoomableMedia src={referenceUrls[selectedReferenceIndex]} alt={`参考图 ${selectedReferenceIndex + 1}`} /></div>
+          <div className="task-reference-selected"><ReviewZoomableMedia src={referenceUrls[selectedReferenceIndex]} alt={`参考图 ${selectedReferenceIndex + 1}`} /></div>
           <div className="task-reference-thumbnails" role="listbox" aria-label="选择参考图">
             {referenceUrls.map((url, index) => <ReferenceThumbnail key={`${url}-${index}`} src={url} index={index} active={selectedReferenceIndex === index} onSelect={() => setSelectedReferenceIndex(index)} />)}
           </div>
@@ -218,7 +219,6 @@ export function TaskReviewPage({ accountId, taskId, mode, readOnly = false }: { 
     </div>
   </div>;
 }
-
 function stringArray(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []; }
 function assetSelectionArray(value: unknown): Array<{ id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' }> {
   if (!Array.isArray(value)) return [];
@@ -229,16 +229,4 @@ function ReferenceThumbnail({ src, index, active, onSelect }: { src: string; ind
   return <button type="button" className={`task-reference-thumbnail ${active ? 'active' : ''}`} onClick={onSelect} aria-label={`查看参考图 ${index + 1}`} aria-selected={active}>
     {failed ? <span className="task-thumbnail-fallback">不可用</span> : <img src={src} alt={`参考图 ${index + 1} 缩略图`} onError={() => setFailed(true)} />}
   </button>;
-}
-function ZoomableMedia({ src, alt, video = false }: { src: string; alt: string; video?: boolean }) {
-  const [imageFailed, setImageFailed] = useState(false);
-  const [scale, setScale] = useState(1);
-  const onWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    if (video) return;
-    event.preventDefault();
-    setScale((current) => Math.min(4, Math.max(0.5, current + (event.deltaY < 0 ? 0.15 : -0.15))));
-  };
-  return <div className={`task-media-zoom ${video ? 'task-video-media' : ''}`} onWheel={video ? undefined : onWheel}>
-    {video ? <video src={src} controls preload="metadata" playsInline aria-label={alt} /> : imageFailed ? <div className="task-media-fallback" role="img" aria-label={`${alt}不可用`}>图片不可用</div> : <div className="task-media-zoom-content" style={{ width: `${scale * 100}%`, height: `${scale * 100}%` }}><img src={src} alt={alt} draggable={false} onError={() => setImageFailed(true)} /></div>}
-  </div>;
 }

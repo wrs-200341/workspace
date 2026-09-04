@@ -9,6 +9,21 @@ const MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
 const CACHE_RETRY_DELAY_MS = 5_000;
 const MAX_CACHE_RETRIES = 5;
+// The LAN's DNS proxy resolves provider media origins to the RFC 2544
+// benchmark range (198.18/15) instead of their public addresses.  The video
+// inventory already accounts for this mapping; image outputs must use the
+// same narrowly-scoped exception or valid YuanAI/MGRouter images are rejected
+// by the SSRF guard and remain stuck at `processing`/`image_output_cache_failed`.
+const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['imgen.x.ai']);
+
+function isTrustedProviderOutputHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  // YuanAI/Gemini commonly returns Cloudflare R2 public buckets named
+  // `pub-<32 hex chars>.r2.dev`.  Keep the pattern strict so arbitrary R2
+  // buckets cannot bypass the public-target validator.
+  return TRUSTED_PROVIDER_OUTPUT_HOSTS.has(normalized)
+    || /^pub-[a-f0-9]{32}\.r2\.dev$/i.test(normalized);
+}
 
 export type ImageInventoryDependencies = {
   fetcher?: typeof fetch;
@@ -62,7 +77,16 @@ async function readOutput(accountId: string, task: ProviderTask, value: string, 
   }
   if (!/^https?:\/\//i.test(value)) return null;
   const lookup = dependencies.lookup ?? ((hostname: string) => dns.lookup(hostname, { all: true, verbatim: true }));
-  const target = await assertPublicTarget(value, lookup);
+  const parsed = new URL(value);
+  if (parsed.username || parsed.password || parsed.hash || (parsed.port && parsed.port !== '443')) return null;
+  const addresses = await lookup(parsed.hostname);
+  const benchmarkMapping = addresses.length > 0 && addresses.every((item) => /^198\.(?:18|19)\./.test(item.address));
+  // Provider media origins are explicit egress allowlist entries.  The
+  // benchmark mapping is accepted only for those exact origins; all other
+  // hosts continue through the normal SSRF validator.
+  const target = isTrustedProviderOutputHost(parsed.hostname) && benchmarkMapping
+    ? parsed
+    : await assertPublicTarget(value, async () => addresses);
   const response = await (dependencies.fetcher ?? fetch)(target.toString(), { redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
   if (!response.ok) return null;
   const mimeType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
@@ -127,11 +151,20 @@ export async function cacheImageTaskOutputsBeforeCompletion(accountId: string, t
  */
 export async function recoverPendingImageTaskOutputCache(taskId: string, dependencies: ImageInventoryDependencies = {}): Promise<ProviderTask | null> {
   const task = getProviderTask(taskId);
-  if (!task || task.mode !== 'image' || task.status !== 'processing') return task;
+  // A previous cache attempt may have persisted a terminal
+  // `image_output_cache_failed` error even though the output file was written
+  // just before the task update raced.  Allow that exact error to self-heal
+  // from the task-local output store; all other failed tasks remain terminal.
+  const recoverableCacheFailure = task?.status === 'failed' && task.error === 'image_output_cache_failed';
+  if (!task || task.mode !== 'image' || (task.status !== 'processing' && !recoverableCacheFailure)) return task;
+  // A terminal cache failure gets one immediate recovery pass (important for
+  // a write/status race), then stays terminal so every queue refresh does not
+  // repeatedly fetch a permanently unavailable provider URL.
+  if (recoverableCacheFailure && task.metadata?.localCacheExhausted === true) return task;
   const expected = task.outputBase64.filter((value) => value.trim()).length + task.outputUrls.filter((value) => value.trim()).length;
   if (expected === 0 || task.metadata?.localOutputReady === true) return task;
   const lastAttempt = typeof task.metadata?.localCacheLastAttemptAt === 'string' ? Date.parse(task.metadata.localCacheLastAttemptAt) : 0;
-  if (lastAttempt && Date.now() - lastAttempt < CACHE_RETRY_DELAY_MS) return task;
+  if (!recoverableCacheFailure && lastAttempt && Date.now() - lastAttempt < CACHE_RETRY_DELAY_MS) return task;
   const attempts = typeof task.metadata?.localCacheAttempts === 'number' && Number.isFinite(task.metadata.localCacheAttempts)
     ? Math.max(0, Math.floor(task.metadata.localCacheAttempts))
     : 0;
@@ -156,7 +189,7 @@ export async function recoverPendingImageTaskOutputCache(taskId: string, depende
     });
   }
   if (nextAttempts >= MAX_CACHE_RETRIES) {
-    return updateProviderTask(task.id, { status: 'failed', progress: 100, error: 'image_output_cache_failed', metadata: { ...attemptMetadata, schedulerState: 'terminal' } });
+    return updateProviderTask(task.id, { status: 'failed', progress: 100, error: 'image_output_cache_failed', metadata: { ...attemptMetadata, localCacheExhausted: true, schedulerState: 'terminal' } });
   }
   return updateProviderTask(task.id, { status: 'processing', progress: 99, metadata: attemptMetadata });
 }

@@ -184,6 +184,15 @@ function taskId(value: unknown): string {
 }
 
 export function createProviderTask(input: CreateProviderTaskInput): ProviderTask {
+  return createProviderTasks([input])[0];
+}
+
+/** Create several tasks with a single tasks.json read/write. Route handlers
+ * use this for count>1 submissions so large persisted queues do not incur one
+ * full-file rewrite per output. */
+export function createProviderTasks(inputs: readonly CreateProviderTaskInput[]): ProviderTask[] {
+  if (!inputs.length) return [];
+  const created: ProviderTask[] = inputs.map((input) => {
   const createdAt = text(input.createdAt) ?? new Date().toISOString();
   const task: ProviderTask = {
     id: taskId(input.id),
@@ -204,10 +213,17 @@ export function createProviderTask(input: CreateProviderTaskInput): ProviderTask
     createdAt,
     updatedAt: createdAt,
   };
+    return task;
+  });
+  const ids = new Set<string>();
+  for (const task of created) {
+    if (ids.has(task.id)) throw new Error('task_id_exists');
+    ids.add(task.id);
+  }
   const tasks = readTasks();
-  if (tasks.some((candidate) => candidate.id === task.id)) throw new Error('task_id_exists');
-  writeTasks([...tasks, task]);
-  return clone(task);
+  if (created.some((task) => tasks.some((candidate) => candidate.id === task.id))) throw new Error('task_id_exists');
+  writeTasks([...tasks, ...created]);
+  return created.map(clone);
 }
 
 export function listProviderTasks(filters: ProviderTaskFilters = {}): ProviderTask[] {

@@ -49,6 +49,7 @@ describe('provider client helpers', () => {
   it('submits OriginGateway Grok reference edits as JSON URL input', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe('https://origingateway.com/v1/images/edits');
+      expect((init?.headers as Record<string, string>)['content-type']).toBe('application/json');
       expect(JSON.parse(String(init?.body))).toEqual(expect.objectContaining({
         model: 'grok-imagine-image-2.0', image: 'https://assets.example/ref.png', response_format: 'url',
       }));
@@ -60,6 +61,13 @@ describe('provider client helpers', () => {
       referenceImages: ['https://assets.example/ref.png'],
     }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', ORIGIN_GROK_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result.mode).toBe('live');
+  });
+
+  it('rejects multipart OriginGateway Grok edits so callers use JSON bridge URLs', async () => {
+    await expect(generateOpenAICompatibleImage('origin-grok-image', {
+      model: 'grok-imagine-image-2.0', prompt: 'edit', aspectRatio: '1:1', resolution: '1k',
+      referenceFiles: [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', ORIGIN_GROK_API_KEY: 'test-key' }, fetch: vi.fn() as typeof fetch })).rejects.toThrow('origin_grok_reference_requires_json');
   });
 
   it('requires multipart local input for OriginGateway 4K reference edits', async () => {

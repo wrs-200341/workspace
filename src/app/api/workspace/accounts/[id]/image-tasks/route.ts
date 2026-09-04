@@ -44,7 +44,11 @@ async function recoverPendingImageCaches(tasks: ReturnType<typeof getServerWorks
   const ids = new Set(tasks.map((task) => task.id));
   const pending = listTasks({ mode: 'image' }).filter((task) => ids.has(task.id));
   for (const task of pending.slice(0, 8)) {
-    await recoverPendingImageTaskOutputCache(task.id).catch(() => null);
+    // Recover both in-flight cache retries and terminal cache failures where
+    // a previous write won a race with the task status update.
+    if (task.status === 'processing' || (task.status === 'failed' && task.error === 'image_output_cache_failed')) {
+      await recoverPendingImageTaskOutputCache(task.id).catch(() => null);
+    }
   }
 }
 
