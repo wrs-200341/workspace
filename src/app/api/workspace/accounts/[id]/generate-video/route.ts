@@ -5,7 +5,7 @@ import { normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderEr
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
-import { publishAssetReference } from '@/lib/workspace/referenceBridge';
+import { publishAssetReferences } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getVideoCapability, validateVideoCapability } from '@/lib/workspace/production/video-capabilities';
 import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
@@ -88,42 +88,45 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const promptWithSummary = productSummary
       ? `${input.prompt.trim()}\n\n商品资料（来自 Excel）\n标题：${productSummary.title}\n描述：${productSummary.description}`.trim()
       : input.prompt.trim();
-    const tasks = [];
-    for (let index = 0; index < count; index += 1) {
-      const publishedImages = isProviderLiveEnabled(provider) ? orderedReferenceAssetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['image'] })) : [];
-      const publishedProductImages = isProviderLiveEnabled(provider) ? orderedProductImageAssetIds.map((assetId) => publishProductImageReference(assetId, id)) : [];
-      const publishedVideos = isProviderLiveEnabled(provider) ? referenceVideoAssetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['inventory-video'] })) : [];
-      const publishedAudios = isProviderLiveEnabled(provider) ? referenceAudioAssetIds.map((assetId) => publishAssetReference({ accountId: id, assetId, allowedKinds: ['audio'] })) : [];
-      const publishedImageUrls = new Map<string, string>();
-      orderedReferenceAssetIds.forEach((assetId, assetIndex) => { const item = publishedImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
-      orderedProductImageAssetIds.forEach((assetId, assetIndex) => { const item = publishedProductImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
-      const referenceImages = [...rawReferenceImages, ...orderedImageAssets.map((item) => publishedImageUrls.get(item.id)).filter((value): value is string => Boolean(value))];
-      const referenceImageTokens = orderedImageAssets.map((item) => {
-        if (item.kind === 'image') {
-          const index = orderedReferenceAssetIds.indexOf(item.id);
-          return publishedImages[index]?.token;
-        }
-        const index = orderedProductImageAssetIds.indexOf(item.id);
-        return publishedProductImages[index]?.token;
-      }).filter((value): value is string => Boolean(value));
-      const referenceVideos = [...rawReferenceVideos, ...publishedVideos.map((item) => item.url)];
-      const referenceAudios = [...rawReferenceAudios, ...publishedAudios.map((item) => item.url)];
-      const referenceFiles = provider === 'oairegbox-omni'
-        ? orderedImageAssets.map((item) => item.kind === 'image'
-          ? (() => {
-            const record = readAssetFile(id, item.id);
-            if (!record) throw new Error('reference_asset_not_found');
-            return { bytes: new Uint8Array(record.bytes), mimeType: record.asset.mimeType || 'application/octet-stream', fileName: record.asset.name };
-          })()
-          : (() => {
-            const product = listProductImageAssets().find((candidate) => candidate.id === item.id);
-            if (!product) throw new Error('reference_asset_not_found');
-            return { bytes: new Uint8Array(fs.readFileSync(getProductImageAbsolutePath(item.id))), mimeType: product.mimeType, fileName: product.name };
-          })())
-        : undefined;
-      if (provider === 'oairegbox-omni' && rawReferenceImages.length > 0 && !referenceFiles?.length) throw new Error('reference_files_required');
-      const normalized = validateGenerationRequest({ provider, model, duration, aspectRatio, resolution, referenceImages, referenceVideos, referenceAudios });
-      if (provider === 'wan3-video' || provider === 'grok-video' || provider === 'mgrouter-grok-video' || provider === 'minimax-h3' || provider === 'quality-v4' || provider === 'oairegbox-omni') {
+    // Publish/validate reference media once per request. Previously this work
+    // ran inside the count loop, duplicating filesystem copies and registry
+    // writes for every output in a batch and making queue submission appear
+    // to hang for tens of seconds.
+    const live = isProviderLiveEnabled(provider);
+    const publishedImages = live ? publishAssetReferences(orderedReferenceAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['image'] as const }))) : [];
+    const publishedProductImages = live ? orderedProductImageAssetIds.map((assetId) => publishProductImageReference(assetId, id)) : [];
+    const publishedVideos = live ? publishAssetReferences(referenceVideoAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['inventory-video'] as const }))) : [];
+    const publishedAudios = live ? publishAssetReferences(referenceAudioAssetIds.map((assetId) => ({ accountId: id, assetId, allowedKinds: ['audio'] as const }))) : [];
+    const publishedImageUrls = new Map<string, string>();
+    orderedReferenceAssetIds.forEach((assetId, assetIndex) => { const item = publishedImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
+    orderedProductImageAssetIds.forEach((assetId, assetIndex) => { const item = publishedProductImages[assetIndex]; if (item) publishedImageUrls.set(assetId, item.url); });
+    const referenceImages = [...rawReferenceImages, ...orderedImageAssets.map((item) => publishedImageUrls.get(item.id)).filter((value): value is string => Boolean(value))];
+    const referenceImageTokens = orderedImageAssets.map((item) => {
+      if (item.kind === 'image') {
+        const index = orderedReferenceAssetIds.indexOf(item.id);
+        return publishedImages[index]?.token;
+      }
+      const index = orderedProductImageAssetIds.indexOf(item.id);
+      return publishedProductImages[index]?.token;
+    }).filter((value): value is string => Boolean(value));
+    const referenceVideos = [...rawReferenceVideos, ...publishedVideos.map((item) => item.url)];
+    const referenceAudios = [...rawReferenceAudios, ...publishedAudios.map((item) => item.url)];
+    const referenceFiles = provider === 'oairegbox-omni'
+      ? orderedImageAssets.map((item) => item.kind === 'image'
+        ? (() => {
+          const record = readAssetFile(id, item.id);
+          if (!record) throw new Error('reference_asset_not_found');
+          return { bytes: new Uint8Array(record.bytes), mimeType: record.asset.mimeType || 'application/octet-stream', fileName: record.asset.name };
+        })()
+        : (() => {
+          const product = listProductImageAssets().find((candidate) => candidate.id === item.id);
+          if (!product) throw new Error('reference_asset_not_found');
+          return { bytes: new Uint8Array(fs.readFileSync(getProductImageAbsolutePath(item.id))), mimeType: product.mimeType, fileName: product.name };
+        })())
+      : undefined;
+    if (provider === 'oairegbox-omni' && rawReferenceImages.length > 0 && !referenceFiles?.length) throw new Error('reference_files_required');
+    const normalized = validateGenerationRequest({ provider, model, duration, aspectRatio, resolution, referenceImages, referenceVideos, referenceAudios });
+    if (provider === 'wan3-video' || provider === 'grok-video' || provider === 'mgrouter-grok-video' || provider === 'minimax-h3' || provider === 'quality-v4' || provider === 'oairegbox-omni') {
         const capability = getVideoCapability(provider, model);
         validateVideoCapability(capability, {
           duration: normalized.duration!,
@@ -133,11 +136,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
           referenceVideoCount: referenceVideos.length,
           referenceAudioCount: referenceAudios.length,
         });
-      }
+    }
+    const tasks = [];
+    for (let index = 0; index < count; index += 1) {
       const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt: promptWithSummary, status: 'queued', progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), sequence: index + 1, execution: 'pending', modelId: typeof input.modelId === 'string' ? input.modelId : model, supplierId: typeof input.supplierId === 'string' ? input.supplierId : provider, promptMode: typeof input.promptMode === 'string' ? input.promptMode : 'manual', promptModel: typeof input.promptModel === 'string' ? input.promptModel : undefined, templateId: typeof input.templateId === 'string' ? input.templateId : undefined, childPrompt: typeof input.childPrompt === 'string' ? input.childPrompt : undefined, finalPrompt: promptWithSummary, originalPrompt: typeof input.originalPrompt === 'string' ? input.originalPrompt : input.prompt, suffixEnabled: input.suffixEnabled === true, count, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, duration: normalized.duration, assetIds, referenceAssetIds, referenceVideoAssetIds, referenceAudioAssetIds, productImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, referenceVideos, referenceTokens: referenceImageTokens, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(rawReferenceImages.length ? { externalReferenceImages: [...rawReferenceImages] } : {}), ...(rawReferenceVideos.length ? { externalReferenceVideos: [...rawReferenceVideos] } : {}), ...(rawReferenceAudios.length ? { externalReferenceAudios: [...rawReferenceAudios] } : {}), ...(typeof input.pid === 'string' && input.pid.trim() ? { pid: input.pid.trim() } : {}) } });
       tasks.push(task);
       enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'video', model, run: () => submitVideoTask({ taskId: task.id, provider, model, prompt: promptWithSummary, duration: normalized.duration!, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution!, referenceImages, referenceFiles, referenceAudios, referenceVideos }) });
-      continue;
     }
     const first = tasks[0];
     return NextResponse.json({ success: true, data: { taskId: first.id, taskIds: tasks.map((task) => task.id), count: tasks.length, accountId: id, status: first.status, provider: first.provider, execution: 'pending', model: first.model, providerTaskId: first.providerTaskId, progress: first.progress } }, { status: 202 });

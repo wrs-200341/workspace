@@ -26,12 +26,13 @@ type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskI
 type QueueTab = 'all' | 'active' | 'completed' | 'failed';
 
 const labels: Record<string, string> = {
+  retrying: '重试中',
   queued: '排队中', prompting: '提示词中', submitting: '提交中', submitted: '已提交',
   processing: '生成中', running: '处理中', completed: '已完成', failed: '失败',
   paused: '已暂停', cancelled: '已取消', draft: '草稿',
 };
-const ACTIVE_STATUSES = ['draft', 'queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'paused'] as const;
-const ACTIONABLE_ACTIVE_STATUSES = ['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'paused'] as const;
+const ACTIVE_STATUSES = ['draft', 'queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying', 'paused'] as const;
+const ACTIONABLE_ACTIVE_STATUSES = ['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying', 'paused'] as const;
 const isActive = (status: string) => ACTIVE_STATUSES.includes(status as (typeof ACTIVE_STATUSES)[number]);
 
 function today() {

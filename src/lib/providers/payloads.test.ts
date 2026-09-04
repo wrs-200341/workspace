@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
 
 describe('provider payload contracts', () => {
+  it('uses documented Origin/Junze image contracts and preserves portrait ratios', () => {
+    expect(buildOpenAIImagePayload({ model: 'gpt-image-2', prompt: 'cat', aspectRatio: '9:16', resolution: '4k' })).toMatchObject({ model: 'gpt-image-2', size: '1152x2048', quality: 'high', response_format: 'url' });
+    expect(buildOpenAIImagePayload({ model: 'grok-imagine-image-2.0', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' })).toMatchObject({ size: '9:16', quality: 'medium' });
+    expect(buildOriginNanoChatPayload('nano-banana-pro', 'cat')).toEqual({ model: 'nano-banana-pro', messages: [{ role: 'user', content: 'cat' }], max_tokens: 64 });
+    expect(buildGeminiNativeImagePayload({ model: 'gemini-3-pro-image-preview', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' })).toMatchObject({ generationConfig: { responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '9:16', imageSize: '1K' } } });
+  });
   it('builds native Grok payloads with the historical reference image split', () => {
     expect(buildGrokVideoPayload({ model: 'grok-imagine-video-1.5（按次）', prompt: 'demo', duration: 10, aspectRatio: '9:16', resolution: '720p', referenceImages: [] })).toEqual({ model: 'grok-imagine-video-1.5（按次）', prompt: 'demo', duration: 10, extra: { aspect_ratio: '9:16', resolution: '720p' } });
     expect(buildGrokVideoPayload({ model: 'grok-imagine-video-1.5（按次）', prompt: 'demo', duration: 10, aspectRatio: '9:16', resolution: '720p', referenceImages: ['https://assets.example/a.jpg'] })).toHaveProperty('input_reference', 'https://assets.example/a.jpg');

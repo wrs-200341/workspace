@@ -10,7 +10,7 @@ function isMockTask(task: ProviderTask): boolean {
 }
 
 function isProcessableStatus(status: ProviderTaskStatus): boolean {
-  return status === 'draft' || status === 'queued' || status === 'prompting' || status === 'submitting' || status === 'submitted' || status === 'processing' || status === 'running';
+  return status === 'draft' || status === 'queued' || status === 'prompting' || status === 'submitting' || status === 'submitted' || status === 'processing' || status === 'running' || status === 'retrying';
 }
 
 function patchMetadata(task: ProviderTask, extra: Record<string, unknown>): Record<string, unknown> {

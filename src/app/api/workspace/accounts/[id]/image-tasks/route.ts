@@ -6,7 +6,7 @@ import { businessDate } from '@/lib/workspace/tasks';
 import { isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } from '@/lib/providers/client';
 import { updateProviderTask } from '@/lib/providers/taskStore';
-import { pumpProviderTasks } from '@/lib/providers/concurrency';
+import { pumpProviderTasks, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
 import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls } from '@/lib/workspace/imageInventory';
 
 const SYNC_THROTTLE_MS = 10_000;
@@ -68,18 +68,20 @@ async function runLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTask
           ? localImageOutputUrls(task.accountId, { ...task, outputUrls: status.outputUrls, outputBase64: status.outputBase64 })
           : status.outputUrls;
         const outputBase64 = cache?.ready && cache.expected > 0 ? [] : status.outputBase64;
-        updateProviderTask(task.id, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls, outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
+        const updated = updateProviderTask(task.id, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls, outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
+        if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
       } catch (error) {
         const providerResponse = providerResponseSnapshot(error);
         const statusCode = typeof providerResponse.status === 'number' ? providerResponse.status : 0;
         const terminal = statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429;
-        updateProviderTask(task.id, {
+        const updated = updateProviderTask(task.id, {
           status: terminal ? 'failed' : task.status,
           progress: terminal ? 100 : task.progress,
           error: sanitizeProviderError(error instanceof Error ? error.message : 'provider_request_failed'),
           providerResponse,
         });
+        if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'image');
       }
     })();

@@ -9,7 +9,7 @@ import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
 import { cacheVideoTaskOutputsBeforeCompletion, listVideoTaskInventoryAssets, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
 import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
-import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask } from '@/lib/providers/concurrency';
+import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
 
 const DETAIL_SYNC_THROTTLE_MS = 10_000;
 const detailSyncInFlight = new Map<string, Promise<void>>();
@@ -51,11 +51,13 @@ function queueDetailProviderSync(taskId: string, task: NonNullable<ReturnType<ty
       const cache = normalizedStatus === 'completed' ? await cacheVideoTaskOutputsBeforeCompletion(task.accountId, cacheTask) : null;
       const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
       const updated = updateProviderTask(taskId, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
+      if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
       pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
     } catch (error) {
       const message = error instanceof Error ? error.message : '';
       if (message.startsWith('provider_')) {
-        updateProviderTask(taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(message), providerResponse: providerResponseSnapshot(error) });
+        const updated = updateProviderTask(taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(message), providerResponse: providerResponseSnapshot(error) });
+        if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
       }
     }

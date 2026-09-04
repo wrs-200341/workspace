@@ -91,7 +91,7 @@ function outputCount(task: WorkspaceTask): number {
 }
 
 function isRunning(status: WorkspaceTask['status']): boolean {
-  return ['prompting', 'submitting', 'submitted', 'processing', 'running'].includes(status);
+  return ['prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying'].includes(status);
 }
 
 /** Aggregate production counters from persisted tasks without mutating them. */
@@ -106,7 +106,7 @@ export function aggregateProductionTaskStats(tasks: readonly WorkspaceTask[], no
     if (businessDate(task.createdAt) === today) activeAccounts.add(task.accountId);
     return {
       total: summary.total + 1,
-      queued: summary.queued + (task.status === 'queued' ? 1 : 0),
+      queued: summary.queued + (task.status === 'queued' || task.status === 'retrying' ? 1 : 0),
       running: summary.running + (isRunning(task.status) ? 1 : 0),
       completed: summary.completed + (task.status === 'completed' ? 1 : 0),
       failed: summary.failed + (task.status === 'failed' ? 1 : 0),

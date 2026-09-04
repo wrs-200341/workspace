@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { generateGeminiPrompt, generateGPTPrompt } from '@/lib/providers/client';
+import { generateGeminiPrompt, generateGPTPrompt, generateBigSnakePrompt } from '@/lib/providers/client';
 import { getProviderConfig, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask } from '@/lib/providers/taskStore';
 
@@ -39,9 +39,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
 
   // `gpt-2999` is the UI alias.  Also accept a concrete GPT model id so a
   // future UI can pass one directly; all other values must be Gemini models.
+  const isBigSnake = requestedPromptModel === 'bigsnake' || requestedPromptModel.startsWith('bigsnake:');
   const isGpt = requestedPromptModel === 'gpt-2999' || /^gpt[-_]/i.test(requestedPromptModel);
   const isGemini = /^gemini[-_]/i.test(requestedPromptModel);
-  if (!isGpt && !isGemini) {
+  if (!isGpt && !isGemini && !isBigSnake) {
     return NextResponse.json({ success: false, error: 'prompt_model_invalid' }, { status: 400 });
   }
 
@@ -52,7 +53,14 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let generatedText: string;
     let source: 'live' | 'mock';
 
-    if (isGpt) {
+    if (isBigSnake) {
+      provider = 'bigsnake-prompt';
+      const config = getProviderConfig(provider);
+      model = requestedPromptModel.startsWith('bigsnake:') ? requestedPromptModel.slice('bigsnake:'.length) : config.model;
+      const generated = await generateBigSnakePrompt({ model, prompt: generationPrompt });
+      generatedText = generated.text;
+      source = generated.mode;
+    } else if (isGpt) {
       provider = 'gpt-2999-prompt';
       const config = getProviderConfig(provider);
       // The alias selects the GPT provider; the configured model is the one

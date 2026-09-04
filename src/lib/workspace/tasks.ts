@@ -1,4 +1,4 @@
-export type WorkspaceTaskStatus = 'draft' | 'queued' | 'prompting' | 'submitting' | 'submitted' | 'processing' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+export type WorkspaceTaskStatus = 'draft' | 'queued' | 'prompting' | 'submitting' | 'submitted' | 'processing' | 'running' | 'retrying' | 'completed' | 'failed' | 'cancelled' | 'paused';
 
 export type WorkspaceTask = {
   id: string;
@@ -69,8 +69,8 @@ export function isCompletedNotInInventory(task: WorkspaceTask, now: Date | strin
 export function summarizeWorkspaceTasks(tasks: readonly WorkspaceTask[], now: Date | string | number = new Date()): WorkspaceTaskSummary {
   return tasks.reduce<WorkspaceTaskSummary>((summary, task) => ({
     total: summary.total + 1,
-    queued: summary.queued + (task.status === 'queued' ? 1 : 0),
-    running: summary.running + (task.status === 'running' ? 1 : 0),
+    queued: summary.queued + (task.status === 'queued' || task.status === 'retrying' ? 1 : 0),
+    running: summary.running + (task.status === 'running' || task.status === 'retrying' ? 1 : 0),
     completed: summary.completed + (task.status === 'completed' ? 1 : 0),
     failed: summary.failed + (task.status === 'failed' ? 1 : 0),
     paused: summary.paused + (task.status === 'paused' ? 1 : 0),

@@ -7,10 +7,10 @@ export function applyTaskAction(task: WorkspaceTask, action: TaskAction, now = n
   if (action === 'retry' && (task.status === 'failed' || task.status === 'cancelled')) {
     return { ...next, status: 'queued', progress: 0, error: undefined, providerTaskId: undefined, outputUrls: undefined, outputBase64: undefined };
   }
-  if (action === 'cancel' && ['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'paused'].includes(task.status)) {
+  if (action === 'cancel' && ['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying', 'paused'].includes(task.status)) {
     return { ...next, status: 'cancelled' };
   }
-  if (action === 'pause' && ['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running'].includes(task.status)) {
+  if (action === 'pause' && ['queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying'].includes(task.status)) {
     return { ...next, status: 'paused' };
   }
   if (action === 'resume' && task.status === 'paused') {

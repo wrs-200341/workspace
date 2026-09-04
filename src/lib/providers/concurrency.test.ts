@@ -125,4 +125,53 @@ describe('production concurrency scheduler', () => {
     await tick();
     expect(getProviderTask(imageTask.id)?.status).toBe('completed');
   });
+
+  it('automatically retries failed jobs twice and exposes retrying state', async () => {
+    const task = seed('auto-retry', 'video', 'retry-model');
+    let attempts = 0;
+    enqueueProviderTask({
+      taskId: task.id,
+      ownerId: 'operator-a',
+      mode: 'video',
+      model: 'retry-model',
+      run: async () => {
+        attempts += 1;
+        if (attempts < 3) {
+          updateProviderTask(task.id, { status: 'failed', progress: 100, error: `failure-${attempts}` });
+          return;
+        }
+        updateProviderTask(task.id, { status: 'completed', progress: 100 });
+      },
+    });
+    await tick();
+    expect(getProviderTask(task.id)?.status).toBe('retrying');
+    expect(getProviderTask(task.id)?.metadata?.schedulerRetryCount).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    await tick();
+    expect(getProviderTask(task.id)?.status).toBe('retrying');
+    expect(getProviderTask(task.id)?.metadata?.schedulerRetryCount).toBe(2);
+    await new Promise((resolve) => setTimeout(resolve, 900));
+    await tick();
+    expect(attempts).toBe(3);
+    expect(getProviderTask(task.id)?.status).toBe('completed');
+  });
+
+  it('marks a task failed after the two automatic retries are exhausted', async () => {
+    const task = seed('auto-retry-failed', 'image', 'retry-model');
+    let attempts = 0;
+    enqueueProviderTask({
+      taskId: task.id,
+      ownerId: 'operator-a',
+      mode: 'image',
+      model: 'retry-model',
+      run: async () => {
+        attempts += 1;
+        updateProviderTask(task.id, { status: 'failed', progress: 100, error: 'persistent_failure' });
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 2200));
+    expect(attempts).toBe(3);
+    expect(getProviderTask(task.id)?.status).toBe('failed');
+    expect(getProviderTask(task.id)?.metadata?.schedulerRetryCount).toBe(2);
+  });
 });

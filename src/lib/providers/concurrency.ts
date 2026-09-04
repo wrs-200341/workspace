@@ -1,4 +1,5 @@
 import { getProviderTask, listProviderTasks, updateProviderTask, type ProviderTask, type ProviderTaskMode, type ProviderTaskStatus } from './taskStore';
+import { workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 
 /**
  * Workspace production concurrency policy.
@@ -30,6 +31,10 @@ const ACTIVE_STATUSES: readonly ProviderTaskStatus[] = ['prompting', 'submitting
 const WAITING_STATE = 'waiting';
 const PROVIDER_ACTIVE_STATE = 'provider-active';
 const DISPATCHING_STATE = 'dispatching';
+/** Every production task gets two automatic retries after its first failure. */
+export const DEFAULT_MAX_RETRIES = 2;
+const RETRYING_STATUS: ProviderTaskStatus = 'retrying';
+const RETRY_BACKOFF_MS = 300;
 
 /** Jobs are process-local, while task state remains persisted on D:. */
 const pendingJobs: SchedulerJob[] = [];
@@ -59,6 +64,12 @@ export function schedulerState(task: Pick<ProviderTask, 'metadata'>): string | u
 
 export function taskOwnerId(task: Pick<ProviderTask, 'accountId' | 'metadata'>): string {
   const owner = task.metadata?.ownerId;
+  const expected = workspaceOwnerIdForAccount(task.accountId);
+  // Persisted owner metadata is an optimization for queue filtering, not an
+  // authority. When the account store knows the owner, always prefer that
+  // server-side mapping so a malformed task cannot escape its concurrency
+  // lane. Synthetic/test accounts retain their explicit metadata owner.
+  if (expected?.trim()) return expected.trim();
   return typeof owner === 'string' && owner.trim() ? owner.trim() : task.accountId;
 }
 
@@ -130,6 +141,15 @@ function markDispatching(job: SchedulerJob): void {
 function markFinishedState(taskId: string): void {
   const current = getProviderTask(taskId);
   if (!current) return;
+  if (current.status === RETRYING_STATUS) {
+    updateProviderTask(taskId, {
+      metadata: {
+        ...(current.metadata ?? {}),
+        schedulerState: WAITING_STATE,
+      },
+    });
+    return;
+  }
   const active = ACTIVE_STATUSES.includes(current.status) || (current.status === 'queued' && Boolean(current.providerTaskId));
   updateProviderTask(taskId, {
     metadata: {
@@ -138,6 +158,53 @@ function markFinishedState(taskId: string): void {
       ...(active ? {} : { schedulerFinishedAt: new Date().toISOString() }),
     },
   });
+}
+
+function retryCount(task: ProviderTask): number {
+  const value = task.metadata?.schedulerRetryCount;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0;
+}
+
+function maxRetries(task: ProviderTask): number {
+  const value = task.metadata?.maxRetries;
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : DEFAULT_MAX_RETRIES;
+}
+
+/**
+ * Mark a failed dispatch as retrying and put it back in the local queue. The
+ * task keeps its original id and all request metadata; only the persisted
+ * retry counter changes. This makes retries visible as one logical task.
+ */
+function scheduleRetry(job: SchedulerJob, task: ProviderTask): boolean {
+  const attempts = retryCount(task);
+  const limit = maxRetries(task);
+  if (attempts >= limit) return false;
+  const nextRetry = attempts + 1;
+  const updated = updateProviderTask(task.id, {
+    status: RETRYING_STATUS,
+    // Keep the task in the active/visible portion of the queue without
+    // pretending that a provider request is currently running.
+    progress: Math.min(95, Math.max(1, task.progress)),
+    error: undefined,
+    metadata: {
+      ...(task.metadata ?? {}),
+      schedulerRetryCount: nextRetry,
+      maxRetries: limit,
+      lastRetryAt: new Date().toISOString(),
+      schedulerState: WAITING_STATE,
+      retrying: true,
+    },
+  });
+  if (!updated) return false;
+  // Defer re-enqueueing very briefly to avoid a tight failure loop and to let
+  // the queue poller render the explicit “retrying” state first.
+  setTimeout(() => {
+    const latest = getProviderTask(job.taskId);
+    if (!latest || latest.status !== RETRYING_STATUS) return;
+    if (!pendingJobs.some((candidate) => candidate.taskId === job.taskId)) pendingJobs.push(job);
+    void pumpScope({ ownerId: job.ownerId, mode: job.mode });
+  }, RETRY_BACKOFF_MS * Math.max(1, nextRetry));
+  return true;
 }
 
 async function pumpScope(scope: Scope): Promise<void> {
@@ -162,17 +229,33 @@ async function pumpScope(scope: Scope): Promise<void> {
       void (async () => {
         try {
           await job.run();
-        } catch {
+        } catch (error) {
           const current = getProviderTask(job.taskId);
-          if (current && ['submitting', 'queued'].includes(current.status)) {
-            updateProviderTask(job.taskId, { status: 'failed', progress: 100, error: 'scheduler_dispatch_failed' });
+          if (current && !['completed', 'cancelled', 'failed'].includes(current.status)) {
+            updateProviderTask(job.taskId, {
+              status: 'failed',
+              progress: 100,
+              error: error instanceof Error && error.message ? error.message : 'scheduler_dispatch_failed',
+            });
           }
         } finally {
           const finished = getProviderTask(job.taskId);
-          if (finished?.status === 'completed') registeredJobs.delete(job.taskId);
+          // Provider adapters generally persist failures and resolve their
+          // promise. Inspect the task after run() so both rejected promises
+          // and persisted failed statuses receive the same retry treatment.
+          const retryScheduled = finished?.status === 'failed' ? scheduleRetry(job, finished) : false;
+          if (finished?.status === 'completed') {
+            updateProviderTask(job.taskId, {
+              metadata: {
+                ...(finished.metadata ?? {}),
+                retrying: false,
+              },
+            });
+          }
+          if (finished?.status === 'completed' || (finished?.status === 'failed' && !retryScheduled)) registeredJobs.delete(job.taskId);
           markFinishedState(job.taskId);
           reservations.delete(job.taskId);
-          void pumpScope(scope);
+          if (!retryScheduled) void pumpScope(scope);
         }
       })();
     }
@@ -220,9 +303,30 @@ export function requeueProviderTask(taskId: string): boolean {
   const retryableStatus = current.status === 'failed' || current.status === 'cancelled' || (current.status === 'queued' && !current.providerTaskId);
   if (!retryableStatus) return false;
   pendingJobs.push(job);
-  updateProviderTask(taskId, { status: 'queued', progress: 0, metadata: { ...(current.metadata ?? {}), schedulerState: WAITING_STATE } });
+  const resetRetries = current.status === 'failed';
+  updateProviderTask(taskId, {
+    status: 'queued',
+    progress: 0,
+    metadata: {
+      ...(current.metadata ?? {}),
+      schedulerState: WAITING_STATE,
+      ...(resetRetries ? { schedulerRetryCount: 0, retrying: false, maxRetries: DEFAULT_MAX_RETRIES } : {}),
+    },
+  });
   void pumpScope({ ownerId: job.ownerId, mode: job.mode });
   return true;
+}
+
+/**
+ * Apply the automatic retry policy to a task whose provider poll reported a
+ * failure. This is used by the background queue synchronizers, where the
+ * scheduler job itself is not the code that observed the failed response.
+ */
+export function retryProviderTaskOnFailure(taskId: string): boolean {
+  const job = registeredJobs.get(taskId);
+  const current = getProviderTask(taskId);
+  if (!job || !current || current.status !== 'failed') return false;
+  return scheduleRetry(job, current);
 }
 
 export function forgetProviderTask(taskId: string): void {

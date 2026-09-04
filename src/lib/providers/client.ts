@@ -1,4 +1,4 @@
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
@@ -43,6 +43,10 @@ export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' 
   if (id === 'pomoai-gemini-image') return `${base}/v1beta/models/${encodeURIComponent(getProviderConfig(id, env).model)}:generateContent`;
   if (id === 'gpt-2999-prompt') return `${base}/v1/responses`;
   if (id === 'oairegbox-omni') return operation === 'create' ? `${base}/videos` : `${base}/videos/{id}` + (operation === 'content' ? '/content' : '');
+  if (id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'junze-gpt-image') return operation === 'create' ? `${base}/images/generations` : `${base}/images/{id}`;
+  if (id === 'origin-nano-image') return operation === 'create' ? `${base}/chat/completions` : `${base}/chat/completions`;
+  if (id === 'junze-gemini-image') return `${base.replace(/\/v1\/?$/i, '')}/v1beta/models/${encodeURIComponent(getProviderConfig(id, env).model)}:generateContent`;
+  if (id === 'bigsnake-prompt') return `${base}/responses`;
   return `${base}/v1beta/models/${encodeURIComponent(env.GEMINI_PROMPT_MODEL || 'gemini-2.5-flash')}:generateContent`;
 }
 
@@ -269,7 +273,7 @@ export function normalizeProviderResponse(_provider: ProviderId, payload: unknow
     .filter((url) => _provider === 'quality-v4' ? /^https?:\/\//i.test(url) : /^https:\/\//i.test(url))
     .map((url) => _provider === 'quality-v4' ? normalizeQualityV4Url(url) : url)
     .filter(Boolean);
-  const outputBase64 = collectBase64(root);
+  const outputBase64 = [...collectBase64(root), ...collectInlineImageData(root)];
   // Image providers commonly return a successful data envelope without a
   // task status (for example Gemini inlineData or OpenAI b64_json). Treat a
   // validated output as completed so the workspace does not leave finished
@@ -407,6 +411,18 @@ function collectBase64(value: unknown, output: string[] = []): string[] {
       else collectBase64(item, output);
     }
   } else if (Array.isArray(value)) value.forEach((item) => collectBase64(item, output));
+  return output;
+}
+
+/** Origin Nano may return Markdown containing a data:image URI. Convert it
+ * into the same data URI contract consumed by the local image cache. */
+function collectInlineImageData(value: unknown, output: string[] = []): string[] {
+  if (typeof value === 'string') {
+    const pattern = /data:(image\/[A-Za-z0-9.+-]+);base64,([A-Za-z0-9+/=\r\n\t ]{32,})/gi;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(value))) output.push(`data:${match[1].toLowerCase()};base64,${match[2].replace(/[\r\n\t ]+/g, '')}`);
+  } else if (Array.isArray(value)) value.forEach((item) => collectInlineImageData(item, output));
+  else if (value && typeof value === 'object') Object.values(value as Record<string, unknown>).forEach((item) => collectInlineImageData(item, output));
   return output;
 }
 
@@ -667,6 +683,62 @@ export async function generatePomoAIImage(input: { model: string; prompt: string
   return { mode: 'live', provider: 'pomoai-gemini-image', response };
 }
 
+export async function generateOpenAICompatibleImage(
+  provider: Extract<ProviderId, 'origin-gpt-image' | 'origin-grok-image' | 'junze-gpt-image'>,
+  input: { model: string; prompt: string; aspectRatio?: string; resolution?: string },
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
+): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
+  const env = dependencies.env ?? process.env;
+  const config = getProviderConfig(provider, env);
+  const genericPayload = buildOpenAIImagePayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high' });
+  const payload = provider === 'junze-gpt-image'
+    ? { ...genericPayload, size: input.aspectRatio === '9:16' ? '9:16' : '1024x1024', quality: 'low' }
+    : genericPayload;
+  if (!config.apiKey) {
+    if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
+    return { mode: 'mock', provider, response: { id: `mock_${provider}_${Date.now()}`, status: 'queued', payload } };
+  }
+  const endpoint = providerEndpoint(provider, 'create', env);
+  return { mode: 'live', provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, endpoint, config.apiKey, payload, IMAGE_GENERATION_TIMEOUT_MS) };
+}
+
+export async function generateGeminiNativeImage(
+  provider: Extract<ProviderId, 'origin-nano-image' | 'junze-gemini-image'>,
+  input: { model: string; prompt: string; aspectRatio?: string; resolution?: string; references?: Array<{ mimeType: string; dataBase64: string }> },
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
+): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
+  const env = dependencies.env ?? process.env;
+  const config = getProviderConfig(provider, env);
+  const payload = buildGeminiNativeImagePayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: provider === 'origin-nano-image' ? undefined : input.resolution, references: input.references });
+  if (!config.apiKey) {
+    if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
+    return { mode: 'mock', provider, response: { id: `mock_${provider}_${Date.now()}`, status: 'queued', payload } };
+  }
+  const nativeBase = provider === 'origin-nano-image' || provider === 'junze-gemini-image'
+    ? config.baseUrl.replace(/\/v1\/?$/i, '')
+    : config.baseUrl.replace(/\/$/, '');
+  const endpoint = `${nativeBase}/v1beta/models/${encodeURIComponent(input.model)}:generateContent`;
+  return { mode: 'live', provider, response: await fetcherRequest(dependencies.fetch ?? fetch, endpoint, config.apiKey, payload, false, IMAGE_GENERATION_TIMEOUT_MS) };
+}
+
+export async function generateOriginNanoImage(
+  input: { model: string; prompt: string; aspectRatio?: string; resolution?: string },
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
+): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
+  const env = dependencies.env ?? process.env;
+  const provider: ProviderId = 'origin-nano-image';
+  const config = getProviderConfig(provider, env);
+  // The chat-compatible route is reliable for square output. Portrait output
+  // must use Gemini native generateContent to preserve the requested ratio.
+  if ((input.aspectRatio ?? '1:1') === '9:16') return generateGeminiNativeImage(provider, input, dependencies);
+  const payload = buildOriginNanoChatPayload(input.model, input.prompt);
+  if (!config.apiKey) {
+    if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
+    return { mode: 'mock', provider, response: { id: `mock_origin_nano_${Date.now()}`, status: 'queued', payload } };
+  }
+  return { mode: 'live', provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, providerEndpoint(provider, 'create', env), config.apiKey, payload, IMAGE_GENERATION_TIMEOUT_MS) };
+}
+
 export async function generateGPTPrompt(input: { model: string; messages: readonly { role: 'user' | 'assistant' | 'system'; content: string }[]; attachments?: readonly GPTPromptAttachment[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; text: string; response: unknown }> {
   const env = dependencies.env ?? process.env;
   const payload = buildGPTResponsesPayload(input.model, input.messages, input.attachments ?? []);
@@ -679,6 +751,20 @@ export async function generateGPTPrompt(input: { model: string; messages: readon
   const response = await fetcherRequest(dependencies.fetch ?? fetch, `${base}/v1/responses`, env.GPT_PROMPT_API_KEY!.trim(), payload, true, PROMPT_GENERATION_TIMEOUT_MS);
   const text = normalizeGPTResponsesResponse(response);
   return { mode: 'live', provider: 'gpt-2999-prompt', text, response };
+}
+
+/** BigSnake's Responses endpoint is used for child/sub-prompt generation. */
+export async function generateBigSnakePrompt(input: { model: string; prompt: string }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; text: string; response: unknown }> {
+  const env = dependencies.env ?? process.env;
+  const provider: ProviderId = 'bigsnake-prompt';
+  const config = getProviderConfig(provider, env);
+  const payload = { model: input.model, input: input.prompt.trim(), max_output_tokens: 2_800 };
+  if (!config.apiKey) {
+    if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
+    return { mode: 'mock', provider, text: '', response: { id: `mock_bigsnake_${Date.now()}`, status: 'queued', payload } };
+  }
+  const response = await fetcherRequest(dependencies.fetch ?? fetch, providerEndpoint(provider, 'create', env), config.apiKey, payload, true, PROMPT_GENERATION_TIMEOUT_MS);
+  return { mode: 'live', provider, text: normalizeGPTResponsesResponse(response), response };
 }
 
 async function fetcherRequest(fetcher: typeof fetch, endpoint: string, apiKey: string, payload: Record<string, unknown>, bearer: boolean, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {

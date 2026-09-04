@@ -11,7 +11,7 @@ import { publishAssetReference } from '@/lib/workspace/referenceBridge';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
 import { getDefaultProductionAspectRatio, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
-import { pumpProviderTasks } from '@/lib/providers/concurrency';
+import { pumpProviderTasks, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 
 const SYNC_THROTTLE_MS = 10_000;
@@ -76,17 +76,19 @@ async function runLiveVideoTasks(tasks: ReturnType<typeof getServerWorkspaceTask
         const cache = normalizedStatus === 'completed' && cacheTask ? await cacheVideoTaskOutputsBeforeCompletion(task.accountId, cacheTask) : null;
         const cachePending = normalizedStatus === 'completed' && cache && !cache.ready;
         const updated = updateProviderTask(task.id, { status: cachePending ? 'processing' : normalizedStatus, progress: cachePending ? 99 : status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, error: status.error, providerResponse: status.status === 'failed' ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
+        if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
       } catch (error) {
         const providerResponse = providerResponseSnapshot(error);
         const statusCode = typeof providerResponse.status === 'number' ? providerResponse.status : 0;
         const terminal = statusCode >= 400 && statusCode < 500 && statusCode !== 408 && statusCode !== 429;
-        updateProviderTask(task.id, {
+        const updated = updateProviderTask(task.id, {
           status: terminal ? 'failed' : task.status,
           progress: terminal ? 100 : task.progress,
           error: sanitizeProviderError(error instanceof Error ? error.message : 'provider_request_failed'),
           providerResponse,
         });
+        if (updated?.status === 'failed') retryProviderTaskOnFailure(task.id);
         pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
       }
     })();

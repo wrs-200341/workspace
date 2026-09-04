@@ -52,6 +52,46 @@ export type GPTPromptAttachment = { name?: string; mimeType: string; dataBase64?
 export type MultipartReference = { bytes: Uint8Array; mimeType: string; fileName: string };
 export type YuanAIImageEditInput = { model: string; prompt: string; size: string; quality?: 'low' | 'high'; n?: number; references: readonly MultipartReference[] };
 export type OAIRegboxInput = { model: string; prompt: string; duration: number; aspectRatio: string; references?: readonly MultipartReference[] };
+export type OpenAIImageInput = { model: string; prompt: string; aspectRatio?: string; resolution?: string; quality?: 'low' | 'medium' | 'high'; n?: number };
+
+/** OpenAI-compatible image generation payloads used by OriginGateway/Junze. */
+export function buildOpenAIImagePayload(input: OpenAIImageInput): Record<string, unknown> {
+  const ratio = input.aspectRatio?.trim() || '1:1';
+  const resolution = input.resolution?.trim().toLowerCase() || '1k';
+  const isGrok = input.model.toLowerCase().includes('grok');
+  const size = isGrok
+    ? (ratio === '9:16' ? '9:16' : '1024x1024')
+    : ratio === '9:16'
+      ? '1152x2048'
+      : ratio === '16:9'
+        ? (resolution === '4k' ? '3840x2160' : resolution === '2k' ? '2730x1536' : '1536x864')
+        : resolution === '4k' ? '2048x2048' : resolution === '2k' ? '2048x2048' : '1024x1024';
+  return {
+    model: input.model,
+    prompt: input.prompt.trim(),
+    n: input.n ?? 1,
+    size,
+    quality: isGrok ? (input.quality === 'low' ? 'low' : 'medium') : (input.quality === 'medium' ? 'high' : input.quality ?? 'high'),
+    response_format: 'url',
+  };
+}
+
+/** Gemini native image request shared by PomoAI and Junze/Origin Nano. */
+export function buildGeminiNativeImagePayload(input: PomoAIImageInput): Record<string, unknown> {
+  const referenceParts = (input.references ?? []).map((reference) => ({ inlineData: { mimeType: reference.mimeType, data: reference.dataBase64 } }));
+  const imageConfig = input.aspectRatio || input.resolution
+    ? { imageConfig: { ...(input.aspectRatio ? { aspectRatio: input.aspectRatio } : {}), ...(input.resolution ? { imageSize: input.resolution.toUpperCase() } : {}) } }
+    : {};
+  return {
+    contents: [{ role: 'user', parts: [...referenceParts, { text: input.prompt.trim() }] }],
+    generationConfig: { responseModalities: ['IMAGE'], ...imageConfig },
+  };
+}
+
+/** OriginGateway Nano Banana square/chat compatibility request. */
+export function buildOriginNanoChatPayload(model: string, prompt: string): Record<string, unknown> {
+  return { model, messages: [{ role: 'user', content: prompt.trim() }], max_tokens: 64 };
+}
 
 export function buildPomoAIImagePayload(input: PomoAIImageInput): Record<string, unknown> {
   const referenceParts = (input.references ?? []).map((reference) => ({
@@ -335,4 +375,4 @@ export function buildYuanAIImagePayload(input: YuanAIImageInput): Record<string,
     ...(input.referenceImages.length ? { images: input.referenceImages } : {}),
   };
 }
-export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'pomoai-gemini-image') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'gpt-2999-prompt') return 'prompt'; return 'video'; }
+export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'pomoai-gemini-image' || id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image' || id === 'junze-gpt-image' || id === 'junze-gemini-image') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'gpt-2999-prompt' || id === 'bigsnake-prompt') return 'prompt'; return 'video'; }

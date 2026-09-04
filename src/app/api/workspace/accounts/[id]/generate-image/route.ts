@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { generateMGRouterImage, generateYuanAIImage, generatePomoAIImage, normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError } from '@/lib/providers/client';
+import { generateMGRouterImage, generateYuanAIImage, generatePomoAIImage, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
-import { publishAssetReference, assertAssetReference } from '@/lib/workspace/referenceBridge';
+import { publishAssetReference, publishAssetReferences, assertAssetReference } from '@/lib/workspace/referenceBridge';
 import { getWorkspacePath } from '@/lib/storagePaths';
 import fs from 'node:fs';
 import { processMockProviderTask } from '@/lib/providers/taskProcessor';
@@ -15,7 +15,7 @@ import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/li
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { enqueueProviderTask } from '@/lib/providers/concurrency';
 
-const IMAGE_PROVIDERS: readonly ProviderId[] = ['mgrouter-grok-image', 'yuanai-image', 'pomoai-gemini-image'];
+const IMAGE_PROVIDERS: readonly ProviderId[] = ['mgrouter-grok-image', 'yuanai-image', 'pomoai-gemini-image', 'origin-gpt-image', 'origin-grok-image', 'origin-nano-image', 'junze-gpt-image', 'junze-gemini-image'];
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -45,10 +45,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     const ownerId = workspaceOwnerIdForAccount(id);
     const referenceImageName = firstReferenceImageName({ accountId: id, assetIds: orderedImageAssets.filter((item) => item.kind === 'image').map((item) => item.id), productImageAssetIds: orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id), rawReferenceImages: rawImages });
-    const publishedReferences = isProviderLiveEnabled(provider) && provider !== 'yuanai-image' && provider !== 'pomoai-gemini-image'
-      ? orderedImageAssets.filter((item) => item.kind === 'image').map((item) => publishAssetReference({ accountId: id, assetId: item.id, allowedKinds: ['image'] }))
+    const publishedReferences = isProviderLiveEnabled(provider) && provider === 'mgrouter-grok-image'
+      ? publishAssetReferences(orderedImageAssets.filter((item) => item.kind === 'image').map((item) => ({ accountId: id, assetId: item.id, allowedKinds: ['image'] as const })))
       : [];
-    const publishedProductReferences = isProviderLiveEnabled(provider) && provider !== 'yuanai-image' && provider !== 'pomoai-gemini-image'
+    const publishedProductReferences = isProviderLiveEnabled(provider) && provider === 'mgrouter-grok-image'
       ? orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => publishProductImageReference(item.id, id))
       : [];
     const publishedByAssetId = new Map<string, string>();
@@ -72,7 +72,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const referenceTokens = orderedImageAssets.map((item) => publishedTokensByAssetId.get(item.id)).filter((value): value is string => Boolean(value));
     const images = [...rawImages, ...orderedImageAssets.map((item) => publishedByAssetId.get(item.id)).filter((value): value is string => Boolean(value))];
     const normalized = validateGenerationRequest({ provider, aspectRatio, resolution, referenceImages: images, referenceAudios: [] });
-    const localImageAssets = (provider === 'yuanai-image' || provider === 'pomoai-gemini-image') && orderedImageAssets.length > 0
+    const localImageAssets = (provider === 'yuanai-image' || provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image') && orderedImageAssets.length > 0
       ? orderedImageAssets.map((item) => item.kind === 'image'
         ? (() => {
           const asset = assertAssetReference(id, item.id, ['image']);
@@ -89,12 +89,12 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     if (localImageAssets && localImageAssets.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
     if (localImageAssets && localImageAssets.some((asset) => !isImageBytes(asset.bytes))) throw new Error('reference_image_invalid');
     const yuanReferenceFiles = provider === 'yuanai-image' ? localImageAssets : undefined;
-    const pomoReferences = provider === 'pomoai-gemini-image' && localImageAssets
+    const pomoReferences = (provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image') && localImageAssets
       ? localImageAssets.map((reference) => ({ mimeType: reference.mimeType, dataBase64: Buffer.from(reference.bytes).toString('base64') }))
       : [];
     const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
     const promptText = body.prompt.trim();
-    const tasks = Array.from({ length: count }, (_, index) => createProviderTask({ accountId: id, mode: 'image', provider, model, prompt: promptText, status: 'queued', progress: 0, metadata: { ...baseMetadata, sequence: index + 1 } }));
+    const tasks = Array.from({ length: count }, (_, index) => createProviderTask({ accountId: id, mode: 'image', provider, model, prompt: promptText, status: 'queued', progress: 0, metadata: { ...baseMetadata, maxRetries: 2, sequence: index + 1 } }));
     tasks.forEach((task) => enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'image', model, run: () => submitImageTask({ accountId: id, taskId: task.id, provider, model, prompt: promptText, normalized, images, assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, yuanReferenceFiles, pomoReferences }) }));
     const first = tasks[0];
     return NextResponse.json({ success: true, data: { accountId: id, taskId: first.id, taskIds: tasks.map((task) => task.id), count: tasks.length, status: first.status, provider: first.provider, execution: 'pending', model: first.model, progress: first.progress } }, { status: 202 });
@@ -139,7 +139,7 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
       lastError = error;
       const current = getProviderTask(input.taskId);
       updateProviderTask(input.taskId, {
-        status: attempt + 1 < maxYuanAttempts ? 'submitting' : 'failed',
+        status: attempt + 1 < maxYuanAttempts ? 'retrying' : 'failed',
         progress: attempt + 1 < maxYuanAttempts ? 8 : 100,
         error: attempt + 1 < maxYuanAttempts ? undefined : sanitizeProviderError(error instanceof Error ? error.message : ''),
         providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }),
@@ -197,6 +197,9 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
 async function submitImageProvider(provider: ProviderId, model: string, prompt: string, normalized: { aspectRatio?: string; resolution?: string }, images: string[], yuanReferenceFiles: ImageSubmissionInput['yuanReferenceFiles'], pomoReferences: ImageSubmissionInput['pomoReferences']) {
   if (provider === 'yuanai-image') return generateYuanAIImage({ model, prompt, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution as '1k' | '2k' | '4k', referenceImages: yuanReferenceFiles?.length ? [] : images, referenceFiles: yuanReferenceFiles });
   if (provider === 'pomoai-gemini-image') return generatePomoAIImage({ model, prompt, references: pomoReferences, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution });
+  if (provider === 'origin-gpt-image' || provider === 'origin-grok-image' || provider === 'junze-gpt-image') return generateOpenAICompatibleImage(provider, { model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution });
+  if (provider === 'origin-nano-image') return generateOriginNanoImage({ model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution });
+  if (provider === 'junze-gemini-image') return generateGeminiNativeImage(provider, { model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, references: pomoReferences });
   return generateMGRouterImage({ model, prompt, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution as '1k' | '2k', referenceImages: images });
 }
 

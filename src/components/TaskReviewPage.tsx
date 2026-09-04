@@ -195,7 +195,7 @@ export function TaskReviewPage({ accountId, taskId, mode, readOnly = false }: { 
   return <div className={`task-review-page ${mode === 'video' ? 'video-task-review' : 'image-task-review'} ${readOnly ? 'read-only-review' : ''}`}>
     <div className="task-review-topbar">
       <Link href={queueHref} className="panel-meta task-review-back"><ArrowLeft size={13} /> 返回生产工作区</Link>
-      <span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status ?? 'unknown'}</span>
+      <span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status === 'retrying' ? '重试中' : task?.status ?? 'unknown'}</span>
     </div>
     {message && <div className="workspace-alert task-review-alert" role="status"><CircleAlert size={16} /><div><strong>{message}</strong></div></div>}
     {task?.error && <div className="workspace-alert task-review-alert" role="alert"><CircleAlert size={16} /><div><strong>供应商返回错误</strong><span>{task.error}</span></div></div>}

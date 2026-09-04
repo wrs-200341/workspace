@@ -6,7 +6,7 @@ import { getProviderCatalog, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
 export type ProviderTaskMode = 'image' | 'video' | 'prompt';
-export type ProviderTaskStatus = 'draft' | 'queued' | 'prompting' | 'submitting' | 'submitted' | 'processing' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+export type ProviderTaskStatus = 'draft' | 'queued' | 'prompting' | 'submitting' | 'submitted' | 'processing' | 'running' | 'retrying' | 'completed' | 'failed' | 'cancelled' | 'paused';
 
 export type ProviderTask = {
   id: string;
@@ -62,7 +62,7 @@ const TASKS_FILE = 'tasks.json';
 const MAX_TEXT_LENGTH = 32_000;
 const MAX_ARRAY_ITEMS = 64;
 const VALID_MODES: readonly ProviderTaskMode[] = ['image', 'video', 'prompt'];
-const VALID_STATUSES: readonly ProviderTaskStatus[] = ['draft', 'queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'completed', 'failed', 'cancelled', 'paused'];
+const VALID_STATUSES: readonly ProviderTaskStatus[] = ['draft', 'queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying', 'completed', 'failed', 'cancelled', 'paused'];
 const VALID_PROVIDERS = new Set<ProviderId>(getProviderCatalog().map((entry) => entry.id));
 
 /** Returns the only path used by this store. It is confined by storagePaths. */

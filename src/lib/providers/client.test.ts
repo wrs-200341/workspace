@@ -1,10 +1,49 @@
 import { describe, expect, it, vi } from 'vitest';
-import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, submitVideo, downloadProviderVideoContent, generateMGRouterImage } from './client';
+import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, downloadProviderVideoContent, generateMGRouterImage } from './client';
 
 describe('provider client helpers', () => {
   it('normalizes Gemini candidate text', () => {
     expect(normalizeGeminiResponse({ candidates: [{ content: { parts: [{ text: 'first' }, { text: 'second' }] } }] })).toBe('first\nsecond');
     expect(normalizeGeminiResponse({ candidates: [] })).toBe('');
+  });
+
+  it('normalizes Origin Nano markdown data images and exposes new endpoints', () => {
+    const encoded = 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=';
+    expect(normalizeProviderResponse('origin-nano-image', { choices: [{ message: { content: `![image](data:image/jpeg;base64,${encoded})` } }] })).toMatchObject({ status: 'completed', outputBase64: [`data:image/jpeg;base64,${encoded}`] });
+    expect(providerEndpoint('origin-gpt-image', 'create')).toBe('https://origingateway.com/v1/images/generations');
+    expect(providerEndpoint('origin-nano-image', 'create')).toBe('https://origingateway.com/v1/chat/completions');
+    expect(providerEndpoint('junze-gemini-image', 'create')).toContain('/v1beta/models/');
+    expect(providerEndpoint('bigsnake-prompt', 'create')).toBe('https://api.bigsnake.xyz/v1/responses');
+  });
+
+  it('uses Junze GPT Image ratio-string requests on its OpenAI route', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject({ model: 'gpt-image-2', size: '9:16', quality: 'low', response_format: 'url' });
+      return new Response(JSON.stringify({ data: [{ url: 'https://img2.junze.me/generated.png' }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    await generateOpenAICompatibleImage('junze-gpt-image', { model: 'gpt-image-2', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', JUNZE_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes Origin Nano portrait requests through Gemini native generateContent', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://origingateway.com/v1beta/models/nano-banana-pro:generateContent');
+      const body = JSON.parse(String(init?.body));
+      expect(body.generationConfig).toEqual({ responseModalities: ['IMAGE'], imageConfig: { aspectRatio: '9:16' } });
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/jpeg', data: 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=' } }] } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    await generateOriginNanoImage({ model: 'nano-banana-pro', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', ORIGIN_NANO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('calls BigSnake Responses for child prompt generation', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-5.5', input: 'make a hook', max_output_tokens: 2800 });
+      return new Response(JSON.stringify({ output_text: 'hook result' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    });
+    const result = await generateBigSnakePrompt({ model: 'gpt-5.5', prompt: 'make a hook' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', BIGSNAKE_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result.text).toBe('hook result');
   });
 
   it('rejects local or non-https reference URLs', () => {

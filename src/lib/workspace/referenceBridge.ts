@@ -25,6 +25,7 @@ const CACHE_DIRECTORY = 'reference-bridge/cache';
 const REGISTRY_FILE = 'reference-bridge/registry.json';
 const DEFAULT_TTL_MS = 60 * 60 * 1000;
 const MAX_TTL_MS = 24 * 60 * 60 * 1000;
+const MAX_BATCH_REFERENCES = 64;
 const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const BINARY_KINDS: readonly AssetKind[] = ['image', 'inventory-video', 'audio'];
 
@@ -170,6 +171,46 @@ export function publishAssetReference(input: {
   const entries = readRegistry().filter((candidate) => candidate.expiresAt > now && candidate.token !== token);
   writeRegistry([...entries, entry]);
   return clone(entry);
+}
+
+/** Publish several account assets in one registry transaction. The previous
+ * per-item API rewrote registry.json for every image/audio/video, which made
+ * a batch production submission needlessly slow on large workspaces. */
+export function publishAssetReferences(inputs: ReadonlyArray<{
+  accountId: string;
+  assetId: string;
+  ttlMs?: number;
+  allowedKinds?: readonly AssetKind[];
+}>): PublishedAssetReference[] {
+  if (inputs.length === 0) return [];
+  if (inputs.length > MAX_BATCH_REFERENCES) throw new Error('reference_batch_too_large');
+  const now = Date.now();
+  const base = publicBaseUrl();
+  ensureDirectories();
+  const active = readRegistry().filter((candidate) => candidate.expiresAt > now);
+  const published: RegistryEntry[] = [];
+  try {
+    for (const input of inputs) {
+      const accountId = input.accountId.trim();
+      const assetId = input.assetId.trim();
+      if (!accountId || !assetId) throw new Error('reference_asset_not_found');
+      const asset = assertAssetReference(accountId, assetId, input.allowedKinds ?? BINARY_KINDS);
+      const source = validateAssetFile(asset, accountId, input.allowedKinds ?? BINARY_KINDS);
+      const ttl = typeof input.ttlMs === 'number' && Number.isFinite(input.ttlMs) ? Math.max(1, Math.min(MAX_TTL_MS, Math.round(input.ttlMs))) : DEFAULT_TTL_MS;
+      const token = crypto.randomBytes(32).toString('base64url');
+      const cacheFile = `${token}${extensionFor(asset)}`;
+      const destination = safeCachePath(cacheFile);
+      fs.copyFileSync(source, destination);
+      published.push({ token, url: `${base}/api/workspace/references/${token}`, accountId, assetId, mimeType: asset.mimeType || 'application/octet-stream', expiresAt: now + ttl, cacheFile, createdAt: now });
+    }
+  } catch (error) {
+    for (const entry of published) {
+      try { fs.rmSync(safeCachePath(entry.cacheFile), { force: true }); } catch { /* best effort rollback */ }
+    }
+    throw error;
+  }
+  writeRegistry([...active, ...published]);
+  return published.map(clone);
 }
 
 /** Publishes a validated file already stored under the workspace data root. */
