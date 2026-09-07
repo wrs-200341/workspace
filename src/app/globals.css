@@ -521,7 +521,7 @@ td strong { color:var(--ink); font-weight:600; }
 .product-cover-placeholder { display:grid; place-items:center; color:#9a9488; }
 .product-gallery-card > span { color:#4c4942; font-size:12px; }
 .product-gallery-card > small { color:#9a9488; font-size:10px; line-height:1.4; }
-.product-pid-search-modal { width:min(920px, calc(100vw - 32px)); max-height:min(86vh, 860px); overflow:auto; }
+.product-pid-search-modal { width:min(80vw, 1200px); height:min(80vh, 900px); max-width:calc(100vw - 32px); max-height:calc(100vh - 32px); overflow:auto; }
 .product-pid-search-form { margin:0 20px 12px; min-width:0; }
 .product-pid-file-dropzone { display:grid; gap:4px; margin:0 20px 12px; padding:12px; border:1px dashed #b7c9c2; border-radius:8px; color:#4c4942; background:#f8fbf9; cursor:pointer; }
 .product-pid-file-dropzone:hover,.product-pid-file-dropzone:focus-within { border-color:#2e7a6c; background:#eef7f3; }

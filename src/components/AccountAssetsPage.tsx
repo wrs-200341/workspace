@@ -89,6 +89,6 @@ function ImageAssets({ accountId, tab, assets, readOnly }: { accountId: string; 
       <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/images?tab=materials`} role="tab" aria-selected={tab === 'materials'} className={`asset-secondary-tab ${tab === 'materials' ? 'active' : ''}`}>素材图片<span>本地上传</span></Link>
       <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/images?tab=products`} role="tab" aria-selected={tab === 'products'} className={`asset-secondary-tab ${tab === 'products' ? 'active' : ''}`}>商品图片<span>8765 PID</span></Link>
     </nav>
-    {tab === 'products' ? <><AccountAssetLibrary accountId={accountId} section="image" initialAssets={assets} readOnly={readOnly} /><ProductImageAssets accountId={accountId} readOnly={readOnly} /></> : <AccountAssetLibrary accountId={accountId} section="image" initialAssets={assets} readOnly={readOnly} />}
+    {tab === 'products' ? <ProductImageAssets accountId={accountId} readOnly={readOnly} /> : <AccountAssetLibrary accountId={accountId} section="image" initialAssets={assets} readOnly={readOnly} />}
   </div>;
 }
