@@ -3,7 +3,6 @@ import path from 'node:path';
 import * as XLSX from 'xlsx';
 import { getWorkspacePath } from '../storagePaths';
 
-const DEFAULT_SUMMARY_PATH = 'C:\\Users\\EDY\\Downloads\\product_summary汇总_3.xlsx';
 const SUMMARY_DIR = 'product-summaries';
 const MAX_DESCRIPTION_LENGTH = 8_000;
 const MAX_WORKBOOK_BYTES = 50 * 1024 * 1024;
@@ -77,7 +76,7 @@ export function productPidFromReferenceName(referenceName: string | undefined): 
   return pid || undefined;
 }
 
-export function lookupProductSummary(referenceName: string | undefined, filePath = process.env.WORKSPACE_PRODUCT_SUMMARY_PATH?.trim() || DEFAULT_SUMMARY_PATH): ProductSummary | null {
+export function lookupProductSummary(referenceName: string | undefined, filePath = process.env.WORKSPACE_PRODUCT_SUMMARY_PATH?.trim() || ''): ProductSummary | null {
   const pid = productPidFromReferenceName(referenceName);
   if (!pid) return null;
   try {
@@ -94,7 +93,9 @@ export function lookupProductSummary(referenceName: string | undefined, filePath
 export function productSummaryPathForAccount(accountId: string): string {
   const accountPath = accountSummaryPath(accountId);
   if (fs.existsSync(accountPath)) return accountPath;
-  return process.env.WORKSPACE_PRODUCT_SUMMARY_PATH?.trim() || '';
+  // Uploaded workbooks are account-scoped. Do not silently fall back to a
+  // global/template workbook and leak another account's product metadata.
+  return '';
 }
 
 /** Look up a product using the workbook uploaded for the current account. */

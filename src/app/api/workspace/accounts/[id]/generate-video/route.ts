@@ -85,7 +85,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     const count = typeof input.count === 'number' && Number.isFinite(input.count) ? Math.min(4, Math.max(1, Math.round(input.count))) : 1;
     const ownerId = workspaceOwnerIdForAccount(id);
-    const referenceImageName = firstReferenceImageName({ accountId: id, referenceAssetIds: orderedReferenceAssetIds, assetIds, productImageAssetIds: orderedProductImageAssetIds, rawReferenceImages });
+    const referenceImageName = firstReferenceImageName({ accountId: id, referenceAssetIds: orderedReferenceAssetIds, assetIds, productImageAssetIds: orderedProductImageAssetIds, referenceAssetOrder: safeReferenceAssetOrder, rawReferenceImages });
     const accountLookup = (productSummaryModule as typeof productSummaryModule & { lookupProductSummaryForAccount?: typeof lookupProductSummary }).lookupProductSummaryForAccount;
     const productSummary = typeof accountLookup === 'function' ? accountLookup(id, referenceImageName) : lookupProductSummary(referenceImageName);
     const promptWithSummary = appendProductSummary(input.prompt, productSummary);
@@ -288,6 +288,8 @@ function readPromptReferences(accountId: string, referenceAssetIds: readonly str
   for (const assetId of productImageAssetIds) {
     const product = products.find((candidate) => candidate.id === assetId);
     if (!product) throw new Error('reference_asset_not_found');
+    const owner = product.id.split(':')[1];
+    if (owner !== 'shared' && owner !== accountId) throw new Error('reference_asset_not_found');
     let bytes: Buffer;
     try { bytes = fs.readFileSync(getProductImageAbsolutePath(assetId)); } catch { throw new Error('reference_asset_not_found'); }
     totalBytes += bytes.byteLength;

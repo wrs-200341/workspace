@@ -44,7 +44,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const count = typeof body.count === 'number' && Number.isFinite(body.count) ? Math.min(4, Math.max(1, Math.round(body.count))) : 1;
   try {
     const ownerId = workspaceOwnerIdForAccount(id);
-    const referenceImageName = firstReferenceImageName({ accountId: id, assetIds: orderedImageAssets.filter((item) => item.kind === 'image').map((item) => item.id), productImageAssetIds: orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id), rawReferenceImages: rawImages });
+    const referenceImageName = firstReferenceImageName({ accountId: id, assetIds: orderedImageAssets.filter((item) => item.kind === 'image').map((item) => item.id), productImageAssetIds: orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id), referenceAssetOrder: orderedImageAssets, rawReferenceImages: rawImages });
     // OriginGateway's Grok image edit endpoint accepts JSON only (the
     // screenshot error was a 415 caused by sending multipart/form-data).  For
     // Grok, publish local account assets through the reference bridge first so

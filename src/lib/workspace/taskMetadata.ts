@@ -19,8 +19,18 @@ export function firstReferenceImageName(input: {
   referenceAssetIds?: readonly string[];
   assetIds?: readonly string[];
   productImageAssetIds?: readonly string[];
+  referenceAssetOrder?: readonly { id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' }[];
   rawReferenceImages?: readonly string[];
 }): string | undefined {
+  for (const item of input.referenceAssetOrder ?? []) {
+    if (item.kind === 'product-image') {
+      const product = readProductImageAsset(item.id);
+      if (product?.pid) return `${product.pid}_001.jpg`;
+    } else if (item.kind === 'image') {
+      const record = readAssetFile(input.accountId, item.id);
+      if (record?.asset.kind === 'image' && record.asset.name.trim()) return record.asset.name.trim();
+    }
+  }
   const accountAssetIds = [...(input.referenceAssetIds ?? []), ...(input.assetIds ?? [])];
   for (const assetId of accountAssetIds) {
     const record = readAssetFile(input.accountId, assetId);
