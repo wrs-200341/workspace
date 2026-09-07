@@ -13,9 +13,7 @@ export async function GET(request: NextRequest) {
   const category = request.nextUrl.searchParams.get('category') as WorkspaceCategory | null;
   if (category && !categories.includes(category)) return NextResponse.json({ success: false, error: 'invalid_category' }, { status: 400 });
   const recoveredOperators = getWorkspaceOperators();
-  const ownOperator = auth.role === 'workspace'
-    ? (recoveredOperators.find((operator) => operator.id === 'operator-chenxi') ?? recoveredOperators[1])
-    : getWorkspaceOperatorForUser(auth.username, auth.displayName);
+  const ownOperator = auth.role === 'admin' ? undefined : getWorkspaceOperatorForUser(auth.username, auth.displayName);
   const operators = auth.role === 'admin' || auth.role === 'operator' ? recoveredOperators : ownOperator ? [ownOperator] : [];
   if (auth.role === 'operator' && queryOwner && !recoveredOperators.some((operator) => operator.id === queryOwner)) {
     return NextResponse.json({ success: false, error: 'workspace_owner_not_found' }, { status: 404 });
@@ -34,11 +32,7 @@ export async function POST(request: NextRequest) {
   if (auth instanceof Response) return auth;
   const body = await request.json().catch(() => ({})) as { ownerId?: unknown; ownerName?: unknown; name?: unknown; category?: unknown; strategy?: unknown };
   const operators = getWorkspaceOperators();
-  const own = auth.role === 'admin'
-    ? operators[0]
-    : auth.role === 'workspace'
-      ? (operators.find((operator) => operator.id === 'operator-chenxi') ?? operators[1])
-      : getWorkspaceOperatorForUser(auth.username, auth.displayName);
+  const own = auth.role === 'admin' ? operators[0] : getWorkspaceOperatorForUser(auth.username, auth.displayName);
   const owner = auth.role === 'admin' && typeof body.ownerId === 'string' ? operators.find((operator) => operator.id === body.ownerId) : own;
   const category = body.category === 'remix' ? 'remix' : 'featured';
   if (!owner || typeof body.name !== 'string' || !body.name.trim()) return NextResponse.json({ success: false, error: 'account_name_required' }, { status: 400 });

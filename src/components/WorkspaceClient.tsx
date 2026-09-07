@@ -28,17 +28,14 @@ export function WorkspaceClient({ user, initialAccounts, initialTasks }: Props) 
     const recovered = getWorkspaceOperators();
     if (user.role === 'admin') return recovered;
     if (user.role === 'workspace') {
-      const current = recovered.find((operator) => operator.id === 'operator-chenxi') ?? recovered[1];
-      return current ? [current] : [];
+      return [getWorkspaceOperatorForUser(user.username, user.displayName)];
     }
     const own = getWorkspaceOperatorForUser(user.username, user.displayName);
     return recovered.some((operator) => operator.id === own.id) ? recovered : [...recovered, own];
   }, [user.displayName, user.role, user.username]);
   const initialOwner = user.role === 'admin'
     ? operators[0]?.id
-    : user.role === 'workspace'
-      ? 'operator-chenxi'
-      : getWorkspaceOperatorForUser(user.username, user.displayName).id;
+    : getWorkspaceOperatorForUser(user.username, user.displayName).id;
   const [ownerId, setOwnerId] = useState(initialOwner);
   const [liveAccounts, setLiveAccounts] = useState<WorkspaceAccount[]>(() => initialAccounts.map((account) => ({ ...account })));
   const [category, setCategory] = useState<WorkspaceCategory>('featured');
@@ -46,12 +43,21 @@ export function WorkspaceClient({ user, initialAccounts, initialTasks }: Props) 
   const [planDraft, setPlanDraft] = useState('');
   const [accountEditor, setAccountEditor] = useState<{ id?: string; name: string; strategy: string; category: WorkspaceCategory } | null>(null);
   const [refreshedAt, setRefreshedAt] = useState(() => new Date());
-  const owner = operators.find((item) => item.id === ownerId) ?? operators[0];
   const ownOwnerId = getWorkspaceOperatorForUser(user.username, user.displayName).id;
-  const canEditSelectedOwner = canEditWorkspaceOwner(user.role, ownerId, ownOwnerId);
-  const accounts = useMemo(() => filterWorkspaceAccounts(liveAccounts, ownerId, category), [liveAccounts, ownerId, category]);
-  const accountCountFor = (item: WorkspaceCategory) => countWorkspaceAccounts(liveAccounts, ownerId, item);
-  const ownerTasks = useMemo(() => initialTasks.filter((task) => task.owner === ownerId).map((task) => ({ ...task, outputUrls: task.outputUrls ? [...task.outputUrls] : undefined, outputBase64: task.outputBase64 ? [...task.outputBase64] : undefined })), [initialTasks, ownerId]);
+  // Keep the workspace role pinned to its own owner lane even when a browser
+  // preserves component state during a hot refresh or restores an older
+  // session snapshot. This prevents stale Chenxi/operator state from
+  // resurfacing in a workbench account.
+  const effectiveOwnerId = user.role === 'workspace' ? ownOwnerId : ownerId;
+  const owner = operators.find((item) => item.id === effectiveOwnerId) ?? operators[0];
+  const canEditSelectedOwner = canEditWorkspaceOwner(user.role, effectiveOwnerId, ownOwnerId);
+  const accounts = useMemo(() => filterWorkspaceAccounts(liveAccounts, effectiveOwnerId, category), [liveAccounts, effectiveOwnerId, category]);
+  const accountCountFor = (item: WorkspaceCategory) => countWorkspaceAccounts(liveAccounts, effectiveOwnerId, item);
+  const ownerTasks = useMemo(() => initialTasks.filter((task) => task.owner === effectiveOwnerId).map((task) => ({ ...task, outputUrls: task.outputUrls ? [...task.outputUrls] : undefined, outputBase64: task.outputBase64 ? [...task.outputBase64] : undefined })), [initialTasks, effectiveOwnerId]);
+
+  useEffect(() => {
+    if (user.role === 'workspace' && ownerId !== ownOwnerId) setOwnerId(ownOwnerId);
+  }, [ownerId, ownOwnerId, user.role]);
   const summary = useMemo(() => ownerTasks.reduce((result, task) => {
     const outputs = taskOutputCount(task);
     return {
@@ -65,7 +71,7 @@ export function WorkspaceClient({ user, initialAccounts, initialTasks }: Props) 
       failed: result.failed + (task.status === 'failed' ? 1 : 0),
     };
   }, { inventorySavedToday: 0, completedNotInInventory: 0, running: 0, queued: 0, failed: 0 }), [ownerTasks]);
-  const selectedAccount = planAccountId ? liveAccounts.find((account) => account.id === planAccountId && account.ownerId === ownerId) : undefined;
+  const selectedAccount = planAccountId ? liveAccounts.find((account) => account.id === planAccountId && account.ownerId === effectiveOwnerId) : undefined;
 
   useEffect(() => {
     if (canEditSelectedOwner) return;

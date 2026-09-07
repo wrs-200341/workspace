@@ -27,9 +27,8 @@ export function canEditWorkspaceOwner(
   role: Role,
   selectedOwnerId: string | undefined,
   ownOwnerId: string,
-  workspaceOwnerId = 'operator-chenxi',
 ): boolean {
   return role === 'admin'
     || (role === 'operator' && selectedOwnerId === ownOwnerId)
-    || (role === 'workspace' && selectedOwnerId === workspaceOwnerId);
+    || (role === 'workspace' && selectedOwnerId === ownOwnerId);
 }

@@ -29,4 +29,9 @@ describe('workspace account selection', () => {
     expect(canEditWorkspaceOwner('operator', 'operator-chenxi', 'operator-qing')).toBe(false);
     expect(canEditWorkspaceOwner('admin', 'operator-chenxi', 'operator-qing')).toBe(true);
   });
+
+  it('keeps a workspace login writable only in its own lane', () => {
+    expect(canEditWorkspaceOwner('workspace', 'operator-test', 'operator-test')).toBe(true);
+    expect(canEditWorkspaceOwner('workspace', 'operator-chenxi', 'operator-test')).toBe(false);
+  });
 });

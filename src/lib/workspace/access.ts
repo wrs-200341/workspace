@@ -6,7 +6,9 @@ type WorkspaceIdentity = Pick<AuthUser, 'role' | 'username'> & { displayName?: s
 
 export function workspaceOwnerIdForUser(user: WorkspaceIdentity): string | undefined {
   if (user.role === 'admin') return undefined;
-  if (user.role === 'workspace') return 'operator-chenxi';
+  // Workbench users are isolated by their own login identity. Never map every
+  // workspace role to a historical operator (such as Chenxi), otherwise a
+  // test/workbench account can read or mutate that operator's data.
   return getWorkspaceOperatorForUser(user.username, user.displayName ?? user.username).id;
 }
 
