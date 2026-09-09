@@ -231,6 +231,19 @@ const CAPABILITIES: Record<string, VideoCapability> = {
     referenceVideos: imageRefs(5),
     referenceAudios: imageRefs(5),
   },
+  // 808relay Wan 3 / wan-3 contract. The provider documents 2-30 second
+  // integer outputs and 480p/720p/1080p resolution tiers.
+  'wan-3-nsfw:wan-3': {
+    duration: { min: 2, max: 30, values: Array.from({ length: 29 }, (_, index) => index + 2) },
+    aspectRatios: ['16:9', '9:16'],
+    defaultAspectRatio: '9:16',
+    resolutions: ['480p', '720p', '1080p'],
+    defaultResolution: '720p',
+    defaultDuration: 5,
+    referenceImages: imageRefs(10),
+    referenceVideos: imageRefs(5),
+    referenceAudios: imageRefs(5),
+  },
   'wan3-video:wan3.0-prime-t2v': {
     duration: { min: 5, max: 15, values: [5, 8, 10, 15] },
     aspectRatios: ['9:16', '16:9', '1:1'],

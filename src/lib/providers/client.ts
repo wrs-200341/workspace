@@ -1,4 +1,4 @@
-import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildSeedreamImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, isProviderLiveEnabled, POMOAI_PROMPT_FALLBACK_MODELS, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
@@ -47,6 +47,19 @@ export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' 
     // never emit the invalid /v1/v1/... variant.
     const wanBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
     return operation === 'create' ? `${wanBase}/videos/generations` : `${wanBase}/videos/tasks/{id}`;
+  }
+  if (id === 'wan-3-nsfw') {
+    const relayBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
+    if (operation === 'create') return `${relayBase}/videos`;
+    if (operation === 'content') return `${relayBase}/videos/{id}/content`;
+    return `${relayBase}/videos/{id}`;
+  }
+  if (id === 'seedream') {
+    // NewAPI exposes Seedream through the synchronous OpenAI-compatible image
+    // endpoint. There is no provider task/status/content endpoint for this
+    // contract; status resolves to the same route for type compatibility and
+    // is never polled after a successful generation response.
+    return `${base}/v1/images/generations`;
   }
   if (id === 'minimax-h3' || id === 'miku-minimax') {
     // MiniMax H3 uses secure-skill's OpenAI-compatible async video contract.
@@ -522,6 +535,38 @@ async function readJsonLimited(response: Response): Promise<unknown> {
   }
 }
 
+async function readBinaryLimited(response: Response, maxBytes: number): Promise<Uint8Array> {
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > maxBytes) throw new Error('provider_response_too_large');
+  if (!response.body) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maxBytes) throw new Error('provider_response_too_large');
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const next = await reader.read();
+      if (next.done) break;
+      if (!next.value?.byteLength) continue;
+      total += next.value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error('provider_response_too_large');
+      }
+      chunks.push(next.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+  return bytes;
+}
+
 function truncateUtf8(value: string, maxBytes: number): string {
   if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value;
   let result = value.slice(0, maxBytes);
@@ -582,10 +627,24 @@ export async function syncProviderTask(provider: ProviderId, providerTaskId: str
   const config = getProviderConfig(provider, env);
   if (!config.apiKey) throw new Error('provider_not_configured');
   const endpoint = providerEndpoint(provider, 'status', env).replace('{id}', encodeURIComponent(providerTaskId));
-  const response = await fetcher(endpoint, { method: 'GET', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), cache: 'no-store' });
+  const response = await fetcher(endpoint, { method: 'GET', headers: { accept: provider === 'seedream' ? 'application/json, image/*' : 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), cache: 'no-store' });
+  // apiaw uses 404 as a transient "not ready" response for Seedream image
+  // requests. Preserve the task id and let the normal queue poll again.
+  if (provider === 'seedream' && response.status === 404) {
+    const pending = { request_id: providerTaskId, status: 'queued' };
+    return { ...normalizeProviderResponse(provider, pending), providerTaskId, response: pending };
+  }
   if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'GET' });
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() || '';
+  if (provider === 'seedream' && contentType.startsWith('image/')) {
+    const bytes = await readBinaryLimited(response, MAX_RESPONSE_BYTES);
+    if (!bytes.length) throw new Error('provider_image_content_invalid');
+    const dataUrl = `data:${contentType};base64,${Buffer.from(bytes).toString('base64')}`;
+    const payload = { request_id: providerTaskId, status: 'completed', image: dataUrl };
+    return { providerTaskId, status: 'completed', progress: 100, outputUrls: [], outputBase64: [dataUrl], response: payload };
+  }
   const payload = await readJsonLimited(response);
-  return { ...normalizeProviderResponse(provider, payload), ...(provider === 'yuanai-grok-video' ? { providerTaskId } : {}), response: payload };
+  return { ...normalizeProviderResponse(provider, payload), ...(provider === 'yuanai-grok-video' || provider === 'seedream' ? { providerTaskId } : {}), response: payload };
 }
 
 /**
@@ -600,7 +659,7 @@ export async function downloadProviderVideoContent(
   providerTaskId: string,
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
 ): Promise<{ bytes: Uint8Array; mimeType: string }> {
-  if (provider !== 'grok-video' && provider !== 'yuanai-grok-video' && provider !== 'mgrouter-grok-video' && provider !== 'oairegbox-omni' && provider !== 'minimax-h3' && provider !== 'miku-minimax') throw new Error('provider_content_unsupported');
+  if (provider !== 'grok-video' && provider !== 'yuanai-grok-video' && provider !== 'mgrouter-grok-video' && provider !== 'oairegbox-omni' && provider !== 'minimax-h3' && provider !== 'miku-minimax' && provider !== 'wan-3-nsfw') throw new Error('provider_content_unsupported');
   const env = dependencies.env ?? process.env;
   const fetcher = dependencies.fetch ?? fetch;
   const config = getProviderConfig(provider, env);
@@ -649,7 +708,7 @@ export async function downloadProviderVideoContent(
   return { bytes, mimeType };
 }
 
-export type SubmitVideoInput = { provider: Extract<ProviderId, 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni'>; model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; referenceImages?: string[]; referenceFiles?: MultipartReference[]; referenceAudios?: string[]; referenceVideos?: string[]; media?: Array<{ type: 'reference_image' | 'reference_video' | 'audio'; url: string }> };
+export type SubmitVideoInput = { provider: Extract<ProviderId, 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni'>; model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; referenceImages?: string[]; referenceFiles?: MultipartReference[]; referenceAudios?: string[]; referenceVideos?: string[]; media?: Array<{ type: 'reference_image' | 'reference_video' | 'audio'; url: string }> };
 
 export async function submitVideo(input: SubmitVideoInput, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
   const env = dependencies.env ?? process.env;
@@ -658,6 +717,7 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   const isMiniMax = input.provider === 'minimax-h3';
   const isMiku = input.provider === 'miku-minimax';
   const isPro666 = input.provider === 'pro666-video';
+  const isWanRelay = input.provider === 'wan-3-nsfw';
   const config = getProviderConfig(input.provider, env);
   if (input.provider === 'mgrouter-grok-video' && (input.referenceAudios?.length || input.media?.some((item) => item.type === 'audio'))) {
     throw new Error('mgrouter_reference_audio_unsupported');
@@ -674,6 +734,11 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   if (isPro666 && (input.referenceFiles?.length || input.referenceVideos?.length || input.media?.some((item) => item.type === 'reference_video'))) {
     throw new Error('pro666_reference_video_unsupported');
   }
+  if (isWanRelay && (input.referenceAudios?.length ?? 0) > 0
+    && (input.referenceImages?.length ?? 0) === 0
+    && (input.referenceVideos?.length ?? 0) === 0) {
+    throw new Error('wan_reference_audio_requires_visual');
+  }
   if (input.provider === 'oairegbox-omni' && (input.referenceImages ?? []).length > 0 && !(input.referenceFiles?.length)) throw new Error('reference_files_required');
   const sdMediaReferences = isSdMini && (!input.referenceImages || input.referenceImages.length === 0)
     ? (input.media ?? []).filter((item) => item.type === 'reference_image').map((item) => item.url)
@@ -683,7 +748,9 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
     ? validateQualityV4References(rawReferenceImages)
     : isSdMini ? validateHttpReferenceUrls(rawReferenceImages) : validateReferenceUrls(input.referenceImages ?? []);
   const hasOaiFiles = input.provider === 'oairegbox-omni' && Boolean(input.referenceFiles?.length);
-  const body = input.provider === 'quality-v4'
+  const body = isWanRelay
+    ? buildWanRelayVideoPayload({ model: input.model, prompt: input.prompt.trim(), seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+    : input.provider === 'quality-v4'
     ? buildQualityV4VideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, resolution: input.resolution, size: input.aspectRatio, referenceImages: references, referenceVideos: validateQualityV4References(input.referenceVideos ?? []), referenceAudios: validateQualityV4References(input.referenceAudios ?? []) })
     : input.provider === 'oairegbox-omni'
     ? (hasOaiFiles
@@ -1084,6 +1151,21 @@ export async function generateGeminiPrompt(input: { prompt: string; model?: stri
   if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
   const payload = await readJsonLimited(response);
   return { mode: 'live', text: normalizeGeminiResponse(payload), response: payload };
+}
+
+/** Submit an asynchronous Seedream image request. Completion is handled by
+ * the existing image-task polling route via `syncProviderTask`. */
+export async function generateSeedreamImage(input: { model: string; prompt: string; aspectRatio?: string; resolution?: string; referenceImages?: string[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
+  const env = dependencies.env ?? process.env;
+  const fetcher = dependencies.fetch ?? fetch;
+  const config = getProviderConfig('seedream', env);
+  const references = validateReferenceUrls(input.referenceImages ?? []);
+  const body = buildSeedreamImagePayload({ model: input.model || config.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, n: 1 });
+  if (!config.apiKey) {
+    if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
+    return { mode: 'mock', provider: 'seedream', response: { id: `mock_seedream_${Date.now()}`, status: 'queued', payload: body } };
+  }
+  return { mode: 'live', provider: 'seedream', response: await requestProviderWithFetcher(fetcher, providerEndpoint('seedream', 'create', env), config.apiKey, { ...body, response_format: 'b64_json' }, IMAGE_GENERATION_TIMEOUT_MS) };
 }
 
 export async function generateMGRouterImage(input: { model: string; prompt: string; aspectRatio: string; resolution: '1k' | '2k'; referenceImages?: string[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {

@@ -22,6 +22,27 @@ export type SdMiniVideoInput = {
 export type MGRouterImageInput = { model: string; prompt: string; aspectRatio: string; resolution: '1k' | '2k'; referenceImages: string[] };
 export type MGRouterVideoInput = { model: string; prompt: string; aspectRatio: string; resolution: string; duration: number; referenceImages: string[]; referenceAudios: string[] };
 export type WanVideoInput = { model: string; prompt: string; ratio: string; resolution: string; duration: number; media: Array<{ type: 'reference_image' | 'reference_video' | 'audio'; url: string }> };
+/** 808relay Wan 3 contract. The provider uses standard top-level fields. */
+export type WanRelayVideoInput = {
+  model: string;
+  prompt: string;
+  seconds: number;
+  resolution: string;
+  aspectRatio: string;
+  referenceImages?: readonly string[];
+  referenceVideos?: readonly string[];
+  referenceAudios?: readonly string[];
+  soundEffects?: boolean;
+};
+/** apiaw Seedream 5 asynchronous image contract. */
+export type SeedreamImageInput = {
+  model: string;
+  prompt: string;
+  aspectRatio?: string;
+  resolution?: string;
+  referenceImages?: readonly string[];
+  n?: number;
+};
 /** MiniMax H3 gateway contract recovered from the historical production desk. */
 export type MiniMaxVideoInput = {
   model: string;
@@ -623,6 +644,52 @@ export function buildWanVideoPayload(input: WanVideoInput): Record<string, unkno
   };
 }
 
+/** Convert the workspace controls to a Seedream canvas size. The measured
+ * 1086x1448 canvas is sent verbatim; other choices use the documented 1K
+ * ratio presets. */
+export function seedreamImageSize(aspectRatio = '9:16', resolution = '1k'): string {
+  const ratio = aspectRatio.trim() || '9:16';
+  const requestedResolution = resolution.trim().toLowerCase();
+  if (requestedResolution === '1086x1448') return '1086x1448';
+  const sizes: Record<string, Record<string, string>> = {
+    '9:16': { '1k': '1024x1536' },
+    '16:9': { '1k': '1536x1024' },
+    '1:1': { '1k': '1024x1024' },
+  };
+  return sizes[ratio]?.['1k'] ?? sizes['9:16']['1k'];
+}
+
+export function buildSeedreamImagePayload(input: SeedreamImageInput): Record<string, unknown> {
+  const references = [...(input.referenceImages ?? [])];
+  return {
+    model: input.model,
+    prompt: input.prompt.trim(),
+    size: seedreamImageSize(input.aspectRatio, input.resolution),
+    n: input.n ?? 1,
+    response_format: 'b64_json',
+    ...(references.length ? { image: references.length === 1 ? references[0] : references } : {}),
+  };
+}
+
+export function buildWanRelayVideoPayload(input: WanRelayVideoInput): Record<string, unknown> {
+  const references = (input.referenceImages ?? []).map((url) => url.trim()).filter(Boolean);
+  const videos = (input.referenceVideos ?? []).map((url) => url.trim()).filter(Boolean);
+  const audios = (input.referenceAudios ?? []).map((url) => url.trim()).filter(Boolean);
+  return {
+    model: input.model.trim() || 'wan-3',
+    prompt: input.prompt.trim(),
+    seconds: input.seconds,
+    resolution: input.resolution.trim().toLowerCase() || '720p',
+    aspect_ratio: input.aspectRatio.trim() || '16:9',
+    ...(references.length ? { reference_images: references } : {}),
+    ...(videos.length ? { reference_videos: videos } : {}),
+    ...(audios.length ? { reference_audios: audios } : {}),
+    // 808relay documents sound_effects for Seedance, not Wan. Only include
+    // it when a future caller explicitly opts in; normal Wan requests omit it.
+    ...(input.soundEffects !== undefined ? { sound_effects: input.soundEffects } : {}),
+  };
+}
+
 export function buildYuanAIImagePayload(input: YuanAIImageInput): Record<string, unknown> {
   return {
     model: input.model,
@@ -633,4 +700,4 @@ export function buildYuanAIImagePayload(input: YuanAIImageInput): Record<string,
     ...(input.referenceImages.length ? { images: input.referenceImages } : {}),
   };
 }
-export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'aicloud-gpt-image' || id === 'pomoai-gemini-image' || id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image' || id === 'junze-gpt-image' || id === 'junze-gemini-image') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'pomoai-gpt-prompt' || id === 'oairegbox-gpt-prompt' || id === 'gpt-2999-prompt' || id === 'bigsnake-prompt') return 'prompt'; return 'video'; }
+export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'aicloud-gpt-image' || id === 'pomoai-gemini-image' || id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image' || id === 'junze-gpt-image' || id === 'junze-gemini-image' || id === 'seedream') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'pomoai-gpt-prompt' || id === 'oairegbox-gpt-prompt' || id === 'gpt-2999-prompt' || id === 'bigsnake-prompt') return 'prompt'; return 'video'; }

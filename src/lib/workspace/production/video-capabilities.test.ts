@@ -102,6 +102,17 @@ describe('recovered video production capabilities', () => {
     expect(wan.referenceAudios.max).toBeGreaterThan(0);
   });
 
+  it('exposes the 808relay Wan 3 duration range and references', () => {
+    const capability = getVideoCapability('wan-3-nsfw', 'wan-3');
+    expect(capability.duration.min).toBe(2);
+    expect(capability.duration.max).toBe(30);
+    expect(capability.duration.values).toEqual(Array.from({ length: 29 }, (_, index) => index + 2));
+    expect(capability.resolutions).toEqual(['480p', '720p', '1080p']);
+    expect(capability.referenceImages.max).toBe(10);
+    expect(capability.referenceVideos.max).toBe(5);
+    expect(capability.referenceAudios.max).toBe(5);
+  });
+
   it('derives deterministic defaults from capability rather than hard-coded UI values', () => {
     const capability = getVideoCapability('wan3-video', 'wan3.0-r2v');
     expect(getVideoDurationOptions(capability)).toEqual([5, 8, 10, 15]);

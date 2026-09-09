@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { POMOAI_PROMPT_FALLBACK_MODELS } from './config';
-import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateGeminiPrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, submitVideoWithFallback, syncProviderTask, downloadProviderVideoContent, generateMGRouterImage, generateResponsesPrompt, generatePromptWithFallback } from './client';
+import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateSeedreamImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateGeminiPrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, submitVideoWithFallback, syncProviderTask, downloadProviderVideoContent, generateMGRouterImage, generateResponsesPrompt, generatePromptWithFallback } from './client';
 
 describe('provider client helpers', () => {
   it('normalizes Gemini candidate text', () => {
@@ -241,6 +241,11 @@ describe('provider client helpers', () => {
     expect(providerEndpoint('mgrouter-grok-video', 'content')).toBe('https://raw.mgrouter.com/v1/videos/{id}/content');
     expect(providerEndpoint('wan3-video', 'create')).toBe('https://api.manjuai.top/v1/videos/generations');
     expect(providerEndpoint('wan3-video', 'create', { WAN_BASE_URL: 'https://api.manjuai.top/v1' })).toBe('https://api.manjuai.top/v1/videos/generations');
+    expect(providerEndpoint('wan-3-nsfw', 'create')).toBe('https://va.808relay.com/v1/videos');
+    expect(providerEndpoint('wan-3-nsfw', 'status')).toBe('https://va.808relay.com/v1/videos/{id}');
+    expect(providerEndpoint('wan-3-nsfw', 'content')).toBe('https://va.808relay.com/v1/videos/{id}/content');
+    expect(providerEndpoint('seedream', 'create')).toBe('https://newapi.apiaw.com/v1/images/generations');
+    expect(providerEndpoint('seedream', 'status')).toBe('https://newapi.apiaw.com/v1/images/generations');
     expect(providerEndpoint('pomoai-gemini-image', 'create')).toBe('https://www.pomoai.ai/v1beta/models/gemini-3.1-flash-image:generateContent');
     expect(providerEndpoint('gpt-2999-prompt', 'create')).toBe('https://2999api.com/v1/responses');
     expect(providerEndpoint('oairegbox-omni', 'create')).toBe('https://newapi-2.oairegbox.cc/v1/videos');
@@ -250,6 +255,36 @@ describe('provider client helpers', () => {
     expect(providerEndpoint('pro666-video', 'create')).toBe('https://api.pro666.top/v1/videos');
     expect(providerEndpoint('pro666-video', 'status')).toBe('https://api.pro666.top/v1/videos/{id}');
     expect(sanitizeProviderError('Bearer secret-token: provider failed')).toBe('provider request failed');
+  });
+
+  it('submits 808relay Wan 3 with the documented wire model and fields', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://va.808relay.com/v1/videos');
+      expect(JSON.parse(String(init?.body))).toEqual({ model: 'wan-3', prompt: 'portrait', seconds: 5, resolution: '720p', aspect_ratio: '9:16' });
+      return Response.json({ id: 'wan-relay-task', status: 'queued' });
+    });
+    const result = await submitVideo({ provider: 'wan-3-nsfw', model: 'wan-3', prompt: 'portrait', duration: 5, aspectRatio: '9:16', resolution: '720p' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', WAN_3_NSFW_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ mode: 'live', provider: 'wan-3-nsfw' });
+  });
+
+  it('requires Wan 3 reference audio to include a visual reference', async () => {
+    await expect(submitVideo({
+      provider: 'wan-3-nsfw', model: 'wan-3', prompt: 'portrait', duration: 5,
+      aspectRatio: '9:16', resolution: '720p', referenceAudios: ['https://assets.example/a.wav'],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', WAN_3_NSFW_API_KEY: 'test-key' }, fetch: vi.fn() as typeof fetch })).rejects.toThrow('wan_reference_audio_requires_visual');
+  });
+
+  it('submits Seedream through the synchronous OpenAI-compatible endpoint', async () => {
+    const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(40, 1), Buffer.from([0xff, 0xd9])]).toString('base64');
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://newapi.apiaw.com/v1/images/generations');
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'dola-seedream-5-0-pro-260628-ep', size: '1024x1536', response_format: 'b64_json' });
+      return Response.json({ data: [{ b64_json: jpeg }] });
+    });
+    const result = await generateSeedreamImage({ model: 'dola-seedream-5-0-pro-260628-ep', prompt: 'portrait', aspectRatio: '9:16', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', SEEDREAM_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    const normalized = normalizeProviderResponse('seedream', result.response);
+    expect(normalized).toMatchObject({ status: 'completed', progress: 100, outputUrls: [] });
+    expect(normalized.outputBase64[0]).toBe(jpeg);
   });
 
   it('retains the bounded raw supplier response for a rejected request', async () => {

@@ -1,7 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditFormData, aicloudImageSize, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildSeedreamImagePayload, seedreamImageSize, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditFormData, aicloudImageSize, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
 
 describe('provider payload contracts', () => {
+  it('builds Seedream async image payloads and the 808relay Wan 3 payload', () => {
+    expect(seedreamImageSize('9:16', '1k')).toBe('1024x1536');
+    expect(seedreamImageSize('16:9', '1k')).toBe('1536x1024');
+    expect(seedreamImageSize('1:1', '1k')).toBe('1024x1024');
+    expect(seedreamImageSize('3:4', '1086x1448')).toBe('1086x1448');
+    expect(seedreamImageSize('9:16', '1086x1448')).toBe('1086x1448');
+    expect(buildSeedreamImagePayload({ model: 'dola-seedream-5-0-pro-260628-ep', prompt: 'custom size', aspectRatio: '3:4', resolution: '1086x1448' })).toMatchObject({ size: '1086x1448' });
+    expect(buildSeedreamImagePayload({ model: 'dola-seedream-5-0-pro-260628-ep', prompt: ' replace outfit ', aspectRatio: '9:16', resolution: '1k', referenceImages: ['https://assets.example/style.png'] })).toEqual({
+      model: 'dola-seedream-5-0-pro-260628-ep', prompt: 'replace outfit', size: '1024x1536', n: 1, response_format: 'b64_json', image: 'https://assets.example/style.png',
+    });
+    expect(buildWanRelayVideoPayload({ model: 'wan-3', prompt: 'demo', seconds: 5, resolution: '720p', aspectRatio: '9:16', referenceImages: ['https://assets.example/a.png'], referenceVideos: ['https://assets.example/a.mp4'], referenceAudios: ['https://assets.example/a.wav'] })).toEqual({
+      model: 'wan-3', prompt: 'demo', seconds: 5, resolution: '720p', aspect_ratio: '9:16', reference_images: ['https://assets.example/a.png'], reference_videos: ['https://assets.example/a.mp4'], reference_audios: ['https://assets.example/a.wav'],
+    });
+  });
   it('builds Aicloud GPT Image portrait sizes for each model tier', () => {
     expect(aicloudImageSize('9:16', '1k')).toBe('1024x1536');
     expect(aicloudImageSize('9:16', '2k')).toBe('2048x3072');

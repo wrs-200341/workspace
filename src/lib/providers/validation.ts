@@ -65,6 +65,9 @@ export function validateGenerationRequest(input: GenerationValidationInput): Gen
   if (referenceImages.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
   if (referenceVideos.length > (config.supports.referenceVideos ?? 0)) throw new Error('too_many_reference_videos');
   if (referenceAudios.length > config.supports.referenceAudios) throw new Error('too_many_reference_audios');
+  if (input.provider === 'wan-3-nsfw' && referenceAudios.length > 0 && referenceImages.length === 0 && referenceVideos.length === 0) {
+    throw new Error('wan_reference_audio_requires_visual');
+  }
   const isSdMini = input.provider === 'grok-video' && isSdMiniModel(input.model);
   const isQualityV4 = input.provider === 'quality-v4';
   // sd-mini accepts publicly reachable http(s) image URLs. Other providers

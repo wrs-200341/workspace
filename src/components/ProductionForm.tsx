@@ -34,6 +34,7 @@ const VIDEO_CAPABILITY_KEYS: Partial<Record<ProviderId, string>> = {
   'grok-video': 'grok-video:grok-imagine-video-1.5（按次）',
   'mgrouter-grok-video': 'mgrouter-grok-video:grok-video',
   'wan3-video': 'wan3-video:wan3.0-r2v',
+  'wan-3-nsfw': 'wan-3-nsfw:wan-3',
   'miku-minimax': 'miku-minimax:minimax-h3-max',
   'oairegbox-omni': 'oairegbox:omni',
   'minimax-h3': 'minimax-h3:minimax-h3',
@@ -55,6 +56,7 @@ export function modelIdForVideoProvider(provider: ProviderId, currentModelId?: s
   if (provider === 'wan3-video') {
     return currentModelId?.startsWith('wan3.0-') ? currentModelId : 'wan3.0-r2v';
   }
+  if (provider === 'wan-3-nsfw') return 'wan-3';
   if (provider === 'miku-minimax') return 'minimax-h3-max';
   if (provider === 'minimax-h3') {
     // secure-skill exposes one live MiniMax H3 model. Historical r2v/t2v
@@ -86,6 +88,7 @@ export const VIDEO_MODELS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'sd-mini', label: 'sd-mini（按条 $0.6）' },
   { id: 'omni-fast-no-water', label: 'Omni Fast No Water' },
   { id: 'wan3.0-r2v', label: 'Wan 3.0 R2V' },
+  { id: 'wan-3', label: 'Wan 3 NSFW' },
   // Retired prime ids: kept exported for restore compatibility, hidden from the
   // live supplier selector below.
   { id: 'wan3.0-prime-t2v', label: 'Wan 3.0 Prime T2V (legacy)' },
@@ -106,6 +109,7 @@ const VIDEO_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers:
   { id: 'minimax-h3-max', label: 'H3 Max', providers: ['miku-minimax'] },
   { id: 'sd2-933-mini', label: 'sd2-933-mini', providers: ['pro666-video'] },
   { id: 'wan3.0-r2v', label: 'Wan 3.0', providers: ['wan3-video'] },
+  { id: 'wan-3', label: 'Wan 3 NSFW', providers: ['wan-3-nsfw'] },
   { id: 'quality-v4', label: 'Quality V4', providers: ['quality-v4'] },
   { id: 'seedance', label: 'Seedance', providers: [] },
 ];
@@ -113,6 +117,7 @@ const IMAGE_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers:
   { id: 'grok-image', label: 'Grok', providers: ['mgrouter-grok-image', 'origin-grok-image'] },
   { id: 'gemini-image', label: 'Gemini', providers: ['pomoai-gemini-image', 'origin-nano-image', 'junze-gemini-image'] },
   { id: 'gpt-image', label: 'GPT Image', providers: ['aicloud-gpt-image', 'origin-gpt-image', 'junze-gpt-image', 'yuanai-image'] },
+  { id: 'seedream', label: 'Seedream', providers: ['seedream'] },
 ];
 
 /** Kept as a small pure helper for callers/tests that used the previous form API. */
@@ -543,7 +548,9 @@ export function ProductionForm({ accountId, mode }: Props) {
 
   function selectVideoModel(nextModelId: string) {
     setVideoModelId(nextModelId);
-    const nextProvider = nextModelId === 'minimax-h3-max'
+    const nextProvider = nextModelId === 'wan-3'
+      ? 'wan-3-nsfw'
+      : nextModelId === 'minimax-h3-max'
       ? 'miku-minimax'
       : nextModelId.startsWith('wan3.0-')
       ? 'wan3-video'
@@ -687,7 +694,7 @@ export function ProductionForm({ accountId, mode }: Props) {
         finalPrompt: effectiveFinalPrompt || effectiveChildPrompt || prompt,
         childPrompt: effectiveChildPrompt,
         provider,
-        model: mode === 'video' && (provider === 'wan3-video' || provider === 'grok-video' || provider === 'yuanai-grok-video' || provider === 'mgrouter-grok-video' || provider === 'quality-v4' || provider === 'minimax-h3' || provider === 'pro666-video') ? videoModelId : mode === 'image' ? imageModelId : selectedProvider?.model,
+        model: mode === 'video' && (provider === 'wan3-video' || provider === 'wan-3-nsfw' || provider === 'grok-video' || provider === 'yuanai-grok-video' || provider === 'mgrouter-grok-video' || provider === 'quality-v4' || provider === 'minimax-h3' || provider === 'pro666-video') ? videoModelId : mode === 'image' ? imageModelId : selectedProvider?.model,
         modelId: mode === 'video' ? videoModelId : undefined,
         supplierId: mode === 'video' ? provider : undefined,
         promptMode,
@@ -979,6 +986,7 @@ function providerModelId(provider: ProviderId): string | undefined {
 }
 
 export function providersForVideoModel(providers: ReadonlyArray<ProviderCatalogEntry>, modelId: string) {
+  if (modelId === 'wan-3') return providers.filter((item) => item.id === 'wan-3-nsfw');
   if (modelId === 'minimax-h3-max') return providers.filter((item) => item.id === 'miku-minimax');
   if (modelId.startsWith('wan3.0-')) return providers.filter((item) => item.id === 'wan3-video');
   if (modelId === 'quality-v4') {
@@ -1031,6 +1039,7 @@ export function videoModelsForProvider(provider: ProviderId, currentModelId?: st
       : undefined;
     return [VIDEO_MODELS.find((item) => item.id === 'wan3.0-r2v'), legacy].filter((item): item is { id: string; label: string } => Boolean(item));
   }
+  if (provider === 'wan-3-nsfw') return VIDEO_MODELS.filter((item) => item.id === 'wan-3');
   return VIDEO_MODELS.filter((item) => item.id !== 'sd-mini' && item.id !== 'grok-video');
 }
 

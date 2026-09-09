@@ -92,6 +92,8 @@ function videoProviderName(provider?: string): string {
     'yuanai-grok-video': 'YuanAI',
     'mgrouter-grok-video': 'MGRouter',
     'wan3-video': 'ManjuAI',
+    'wan-3-nsfw': '808relay',
+    seedream: 'apiaw',
     'minimax-h3': 'secure-skill',
     'miku-minimax': 'MikuAPI',
     'pro666-video': 'Pro666',
@@ -169,6 +171,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   const focusAppliedRef = useRef<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const loadingRef = useRef(false);
+  const activeTasksRef = useRef(false);
 
   async function load(options: { silent?: boolean; sync?: boolean } = {}) {
     const silent = options.silent === true;
@@ -208,7 +211,9 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
         };
       });
       const deduped = Array.from(new Map(normalized.map((task) => [task.id, task])).values());
-      setTasks(deduped.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)));
+      const nextTasks = deduped.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      activeTasksRef.current = nextTasks.some((task) => isActive(task.status));
+      setTasks(nextTasks);
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return;
       setLoadError(error instanceof Error ? error.message : '队列加载失败');
@@ -223,7 +228,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
 
   useEffect(() => {
     void load();
-    const timer = window.setInterval(() => void load({ silent: true, sync: true }), 8000);
+    const timer = window.setInterval(() => void load({ silent: true, sync: activeTasksRef.current }), 8000);
     return () => {
       window.clearInterval(timer);
       requestRef.current?.abort();

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { generateMGRouterImage, generateYuanAIImage, generatePomoAIImage, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError } from '@/lib/providers/client';
+import { generateMGRouterImage, generateSeedreamImage, generateYuanAIImage, generatePomoAIImage, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { createProviderTasks, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
@@ -16,7 +16,7 @@ import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { enqueueProviderTask, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
 import { normalizeTaskName, parseTaskNameMode, validateTaskNaming } from '@/lib/workspace/taskNaming';
 
-const IMAGE_PROVIDERS: readonly ProviderId[] = ['mgrouter-grok-image', 'yuanai-image', 'aicloud-gpt-image', 'pomoai-gemini-image', 'origin-gpt-image', 'origin-grok-image', 'origin-nano-image', 'junze-gpt-image', 'junze-gemini-image'];
+const IMAGE_PROVIDERS: readonly ProviderId[] = ['mgrouter-grok-image', 'yuanai-image', 'aicloud-gpt-image', 'pomoai-gemini-image', 'origin-gpt-image', 'origin-grok-image', 'origin-nano-image', 'junze-gpt-image', 'junze-gemini-image', 'seedream'];
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -58,10 +58,10 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // the provider receives regular HTTPS image URLs. GPT Image keeps its
     // local multipart path for 4K edits, while MGRouter continues to use the
     // documented JSON URL payload.
-    const publishedReferences = isProviderLiveEnabled(provider) && (provider === 'mgrouter-grok-image' || provider === 'origin-grok-image')
+    const publishedReferences = isProviderLiveEnabled(provider) && (provider === 'mgrouter-grok-image' || provider === 'origin-grok-image' || provider === 'seedream')
       ? publishAssetReferences(orderedImageAssets.filter((item) => item.kind === 'image').map((item) => ({ accountId: id, assetId: item.id, allowedKinds: ['image'] as const })))
       : [];
-    const publishedProductReferences = isProviderLiveEnabled(provider) && (provider === 'mgrouter-grok-image' || provider === 'origin-grok-image')
+    const publishedProductReferences = isProviderLiveEnabled(provider) && (provider === 'mgrouter-grok-image' || provider === 'origin-grok-image' || provider === 'seedream')
       ? publishProductImageReferences(orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id), id)
       : [];
     const publishedByAssetId = new Map<string, string>();
@@ -225,6 +225,7 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
 }
 
 async function submitImageProvider(provider: ProviderId, model: string, prompt: string, normalized: { aspectRatio?: string; resolution?: string }, images: string[], yuanReferenceFiles: ImageSubmissionInput['yuanReferenceFiles'], originReferenceFiles: ImageSubmissionInput['originReferenceFiles'], pomoReferences: ImageSubmissionInput['pomoReferences']) {
+  if (provider === 'seedream') return generateSeedreamImage({ model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, referenceImages: images });
   if (provider === 'yuanai-image') return generateYuanAIImage({ model, prompt, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution as '1k' | '2k' | '4k', referenceImages: yuanReferenceFiles?.length ? [] : images, referenceFiles: yuanReferenceFiles });
   if (provider === 'pomoai-gemini-image') return generatePomoAIImage({ model, prompt, references: pomoReferences, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution });
   if (provider === 'origin-gpt-image' || provider === 'origin-grok-image' || provider === 'junze-gpt-image' || provider === 'aicloud-gpt-image') return generateOpenAICompatibleImage(provider, { model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, referenceImages: images, referenceFiles: originReferenceFiles });

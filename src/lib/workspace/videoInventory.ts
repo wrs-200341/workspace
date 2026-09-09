@@ -105,7 +105,7 @@ export async function cacheVideoTaskOutputsLocally(accountId: string, task: Prov
 
   // Authenticated content endpoints are more reliable than a public URL and
   // are the only output source for some Grok-compatible providers.
-  const contentProvider = !dependencies.localOnly && !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax'].includes(task.provider);
+  const contentProvider = !dependencies.localOnly && !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax', 'wan-3-nsfw'].includes(task.provider);
   if (contentProvider && urls.length === 0) {
     if (!readStoredVideoOutput(accountId, task.id, 0)) {
       try {
@@ -220,7 +220,7 @@ export function cacheVideoTaskOutputLocally(accountId: string, task: ProviderTas
   const run = (async () => {
     if (readStoredVideoOutput(accountId, task.id, index)) return 1;
     const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
-    const contentProvider = !dependencies.localOnly && !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax'].includes(task.provider);
+    const contentProvider = !dependencies.localOnly && !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax', 'wan-3-nsfw'].includes(task.provider);
     if (contentProvider && urls.length === 0 && index === 0) {
       try {
         const downloaded = await downloadProviderVideoContent(task.provider, task.providerTaskId!);
@@ -297,7 +297,7 @@ export async function saveVideoTaskOutputsToAssets(accountId: string, task: Prov
   await cacheVideoTaskOutputsLocally(accountId, task, dependencies);
   const outputs: Array<{ bytes: Buffer; mimeType: string; index: number }> = [];
   const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
-  const contentProvider = !task.outputBase64.length && urls.length === 0 && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax'].includes(task.provider);
+  const contentProvider = !task.outputBase64.length && urls.length === 0 && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax', 'wan-3-nsfw'].includes(task.provider);
   const contentCached = contentProvider && Boolean(readStoredVideoOutput(accountId, task.id, 0));
   if (contentCached) {
     const local = readStoredVideoOutput(accountId, task.id, 0);

@@ -75,6 +75,10 @@ const TASKS_DIRECTORY = 'providers';
 const TASKS_FILE = 'tasks.json';
 const MAX_TEXT_LENGTH = 32_000;
 const MAX_ARRAY_ITEMS = 64;
+// Keep in-memory updates immediate while coalescing disk writes. A busy
+// provider queue otherwise serializes the entire historical task file for
+// every progress transition and can delay unrelated route responses.
+const PERSIST_DEBOUNCE_MS = Math.max(50, Number(process.env.WORKSPACE_TASK_PERSIST_DEBOUNCE_MS || 250));
 const VALID_MODES: readonly ProviderTaskMode[] = ['image', 'video', 'prompt'];
 const VALID_STATUSES: readonly ProviderTaskStatus[] = ['draft', 'queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying', 'completed', 'failed', 'cancelled', 'paused'];
 const VALID_PROVIDERS = new Set<ProviderId>(getProviderCatalog().map((entry) => entry.id));
@@ -188,7 +192,7 @@ function schedulePersist(): void {
   persistTimer = setTimeout(() => {
     persistTimer = null;
     void flushPersist();
-  }, 25);
+  }, PERSIST_DEBOUNCE_MS);
   persistTimer.unref?.();
 }
 
@@ -200,7 +204,7 @@ async function flushPersist(): Promise<void> {
   const file = providerTasksPath();
   const temporary = `${file}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
   try {
-    await fs.promises.writeFile(temporary, JSON.stringify(snapshot, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await fs.promises.writeFile(temporary, JSON.stringify(snapshot), { encoding: 'utf8', mode: 0o600 });
     await fs.promises.rename(temporary, file);
     try {
       const stat = await fs.promises.stat(file);

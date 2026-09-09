@@ -39,5 +39,5 @@ export function dedupeVideoOutputUrls(provider: string, urls: readonly string[])
 
 export function countVideoOutputs(provider: string, urls: readonly string[], base64: readonly string[], hasProviderTaskId = false): number {
   const count = dedupeVideoOutputUrls(provider, urls).length + base64.filter((value) => value.trim()).length;
-  return count > 0 ? count : hasProviderTaskId && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax', 'pro666-video'].includes(provider) ? 1 : 0;
+  return count > 0 ? count : hasProviderTaskId && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax', 'wan-3-nsfw', 'pro666-video'].includes(provider) ? 1 : 0;
 }
