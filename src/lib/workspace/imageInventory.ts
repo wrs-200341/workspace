@@ -1,7 +1,7 @@
 import dns from 'node:dns/promises';
-import { createUploadedAsset, getAsset, readAssetFile, type WorkspaceAsset } from './assetStore';
+import { createUploadedAsset, getAsset, getAssetFileInfo, type WorkspaceAsset } from './assetStore';
 import { readStoredOutput, storeImageBase64Outputs, storeImageOutput } from '@/lib/providers/outputStore';
-import { getProviderTask, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
+import { getProviderTask, listProviderTasks, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
 import { assertPublicTarget, type LookupAddress } from './externalImageImport';
 import { inventoryFileName } from './inventoryNaming';
 
@@ -9,25 +9,11 @@ const MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
 const CACHE_RETRY_DELAY_MS = 5_000;
 const MAX_CACHE_RETRIES = 5;
-// The LAN's DNS proxy resolves provider media origins to the RFC 2544
-// benchmark range (198.18/15) instead of their public addresses.  The video
-// inventory already accounts for this mapping; image outputs must use the
-// same narrowly-scoped exception or valid YuanAI/MGRouter images are rejected
-// by the SSRF guard and remain stuck at `processing`/`image_output_cache_failed`.
-const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['imgen.x.ai']);
-
-function isTrustedProviderOutputHost(hostname: string): boolean {
-  const normalized = hostname.toLowerCase();
-  // YuanAI/Gemini commonly returns Cloudflare R2 public buckets named
-  // `pub-<32 hex chars>.r2.dev`.  Keep the pattern strict so arbitrary R2
-  // buckets cannot bypass the public-target validator.
-  return TRUSTED_PROVIDER_OUTPUT_HOSTS.has(normalized)
-    || /^pub-[a-f0-9]{32}\.r2\.dev$/i.test(normalized);
-}
 
 export type ImageInventoryDependencies = {
   fetcher?: typeof fetch;
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
+  localOnly?: boolean;
 };
 
 export type ImageOutputCacheResult = {
@@ -76,17 +62,18 @@ async function readOutput(accountId: string, task: ProviderTask, value: string, 
     return stored ? { bytes: stored.bytes, mimeType: stored.mimeType } : null;
   }
   if (!/^https?:\/\//i.test(value)) return null;
+  if (dependencies.localOnly) return null;
   const lookup = dependencies.lookup ?? ((hostname: string) => dns.lookup(hostname, { all: true, verbatim: true }));
   const parsed = new URL(value);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.hash || (parsed.port && parsed.port !== '443')) return null;
   const addresses = await lookup(parsed.hostname);
   const benchmarkMapping = addresses.length > 0 && addresses.every((item) => /^198\.(?:18|19)\./.test(item.address));
-  // Provider media origins are explicit egress allowlist entries.  The
-  // benchmark mapping is accepted only for those exact origins; all other
-  // hosts continue through the normal SSRF validator.
-  const target = isTrustedProviderOutputHost(parsed.hostname) && benchmarkMapping
-    ? parsed
-    : await assertPublicTarget(value, async () => addresses);
+  // The LAN's DNS proxy remaps every provider CDN host into the RFC 2544
+  // benchmark range (198.18/19); a resolution that lands entirely inside that
+  // range is accepted regardless of hostname, so onboarding a new provider
+  // never requires a manual allowlist edit. Any other private resolution
+  // still fails the standard SSRF validator below.
+  const target = benchmarkMapping ? parsed : await assertPublicTarget(value, async () => addresses);
   const response = await (dependencies.fetcher ?? fetch)(target.toString(), { redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
   if (!response.ok) return null;
   const mimeType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
@@ -204,7 +191,7 @@ export function listImageTaskInventoryAssets(accountId: string, task: ProviderTa
     .map((id) => getAsset(accountId, id))
     .filter((asset): asset is WorkspaceAsset => Boolean(asset && asset.accountId === accountId && asset.kind === 'image'))
     .filter((asset) => {
-      try { return Boolean(readAssetFile(accountId, asset.id)); } catch { return false; }
+      try { return Boolean(getAssetFileInfo(accountId, asset.id)); } catch { return false; }
     });
 }
 
@@ -244,4 +231,43 @@ export async function saveImageTaskOutputsToAssets(accountId: string, task: Prov
     assets.push(asset);
   }
   return assets;
+}
+
+let repairInFlight: Promise<number> | null = null;
+
+/** Repair completed image tasks whose saved marker points at missing assets. */
+export function repairSavedImageTaskInventory(accountIds?: readonly string[], dependencies: ImageInventoryDependencies = {}): Promise<number> {
+  if (repairInFlight) return repairInFlight;
+  repairInFlight = (async () => {
+    let repaired = 0;
+    const scope = accountIds ? new Set(accountIds) : null;
+    const assignedAssetIds = new Set<string>();
+    for (const task of listProviderTasks({ mode: 'image' })) {
+      if (scope && !scope.has(task.accountId)) continue;
+      if (task.status !== 'completed' || !task.inventorySavedAt) continue;
+      const declaredIds = Array.isArray(task.metadata?.inventoryAssetIds)
+        ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+        : [];
+      const current = listImageTaskInventoryAssets(task.accountId, task);
+      const hasCrossTaskReuse = declaredIds.some((assetId) => assignedAssetIds.has(`${task.accountId}:${assetId}`));
+      if (!hasCrossTaskReuse && declaredIds.length > 0 && current.length === declaredIds.length) {
+        declaredIds.forEach((assetId) => assignedAssetIds.add(`${task.accountId}:${assetId}`));
+        continue;
+      }
+      const created = await saveImageTaskOutputsToAssets(task.accountId, hasCrossTaskReuse
+        ? { ...task, metadata: { ...(task.metadata ?? {}), inventoryAssetIds: [] } }
+        : task, dependencies);
+      const allAssets = [...(hasCrossTaskReuse ? [] : current), ...created];
+      const ids = Array.from(new Set(allAssets.map((asset) => asset.id)));
+      if (!ids.length) continue;
+      updateProviderTask(task.id, {
+        inventorySavedAt: task.inventorySavedAt,
+        metadata: { ...(task.metadata ?? {}), inventoryAssetIds: ids },
+      });
+      ids.forEach((assetId) => assignedAssetIds.add(`${task.accountId}:${assetId}`));
+      repaired += 1;
+    }
+    return repaired;
+  })().finally(() => { repairInFlight = null; });
+  return repairInFlight;
 }

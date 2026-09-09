@@ -6,18 +6,33 @@ import { getWorkspacePath } from '../storagePaths';
 
 const filePath = () => getWorkspacePath('workspace', 'accounts.json');
 
+type AccountCacheEntry = { mtimeMs: number; size: number; accounts: WorkspaceAccount[] };
+const accountCache = new Map<string, AccountCacheEntry>();
+
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 function read(): WorkspaceAccount[] {
+  const file = filePath();
   try {
-    const parsed = JSON.parse(fs.readFileSync(filePath(), 'utf8')) as unknown;
-    return Array.isArray(parsed) ? parsed as WorkspaceAccount[] : [];
-  } catch { return []; }
+    const stat = fs.statSync(file);
+    const cached = accountCache.get(file);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.accounts;
+    const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+    const accounts = Array.isArray(parsed) ? parsed as WorkspaceAccount[] : [];
+    accountCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, accounts });
+    return accounts;
+  } catch {
+    accountCache.delete(file);
+    return [];
+  }
 }
 function write(accounts: readonly WorkspaceAccount[]): void {
   fs.mkdirSync(path.dirname(filePath()), { recursive: true });
   const tmp = `${filePath()}.${process.pid}.${crypto.randomUUID()}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(accounts, null, 2), { encoding: 'utf8', mode: 0o600 });
   fs.renameSync(tmp, filePath());
+  const file = filePath();
+  const stat = fs.statSync(file);
+  accountCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, accounts: accounts as WorkspaceAccount[] });
 }
 
 export type AccountPatch = Partial<Pick<WorkspaceAccount, 'name' | 'strategy' | 'category' | 'planStatus' | 'promptCount' | 'fileCount' | 'videoCount' | 'publishedCount'>>;

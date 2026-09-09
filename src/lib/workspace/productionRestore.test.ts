@@ -48,6 +48,21 @@ describe('production task configuration restore', () => {
     expect(restored).toMatchObject({ prompt: 'final provider prompt', promptMode: 'manual', count: 1, referenceAssetIds: ['image-1'] });
   });
 
+  it('recovers kind-specific references from the ordered selection for older tasks', () => {
+    const restored = productionRestoreConfig(task({ metadata: {
+      referenceAssetOrder: [
+        { id: 'product-image:account-1:2026-09-03:PID-1:001.jpg', kind: 'product-image' },
+        { id: 'image-1', kind: 'image' },
+        { id: 'video-1', kind: 'inventory-video' },
+        { id: 'audio-1', kind: 'audio' },
+      ],
+    } }));
+    expect(restored.referenceAssetIds).toEqual(['image-1']);
+    expect(restored.referenceVideoAssetIds).toEqual(['video-1']);
+    expect(restored.referenceAudioAssetIds).toEqual(['audio-1']);
+    expect(restored.productImageAssetIds).toEqual(['product-image:account-1:2026-09-03:PID-1:001.jpg']);
+  });
+
   it('builds an encoded account-scoped restore URL', () => {
     expect(productionRestoreHref('account/1', task())).toBe('/workspace/accounts/account%2F1/production?mode=video&restoreTaskId=task%2F1');
   });

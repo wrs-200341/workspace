@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { promptReviewHref, queueStatusLabel, reviewHref } from './ProductionQueue';
+import { generationAttributionLabel, promptAttributionLabel, promptReviewHref, queueStatusLabel, reviewHref } from './ProductionQueue';
 
 describe('production queue navigation', () => {
   it('opens review pages for image and video tasks', () => {
@@ -22,5 +22,16 @@ describe('production queue status labels', () => {
 
   it('makes the automatic prompt phase explicit', () => {
     expect(queueStatusLabel({ status: 'prompting' })).toBe('提示词生成中');
+  });
+});
+
+describe('production queue attribution labels', () => {
+  it('shows the actual video supplier next to its model', () => {
+    expect(generationAttributionLabel({ mode: 'video', provider: 'miku-minimax', model: 'minimax-h3-max' })).toBe('MikuAPI · minimax-h3-max');
+    expect(generationAttributionLabel({ mode: 'video', provider: 'yuanai-grok-video', model: 'grok-imagine-video-1.5-preview' })).toBe('YuanAI · grok-imagine-video-1.5-preview');
+  });
+
+  it('does not repeat the prompt model in the supplier name', () => {
+    expect(promptAttributionLabel({ promptMode: 'asset-template-child-prompt', promptProvider: 'pomoai-gpt-prompt', promptModel: 'gpt-5.5' })).toBe('PomoAI · gpt-5.5');
   });
 });

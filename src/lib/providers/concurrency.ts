@@ -1,21 +1,24 @@
 import crypto from 'node:crypto';
-import { getProviderTask, updateProviderTask, type ProviderTask, type ProviderTaskMode, type ProviderTaskStatus } from './taskStore';
+import { getProviderTask, listProviderTaskSummaries, updateProviderTask, type ProviderTask, type ProviderTaskMode, type ProviderTaskStatus } from './taskStore';
 import * as taskStore from './taskStore';
 import { workspaceOwnerIdForAccount } from '@/lib/workspace/access';
+import { canonicalTaskProgress } from './taskProgress';
 
 /**
  * Workspace production concurrency policy.
  *
- * An operator may run up to 20 image/video jobs combined at the same time.
- * Within that shared pool, one model is capped at five active jobs. The
- * limits can be tuned through environment variables without changing source.
+ * Image and video jobs have separate operator-wide pools. Video gets the
+ * larger lane because it is the main throughput bottleneck in production.
+ * Model limits are also mode-specific so a hot video model cannot starve
+ * image generation.
  */
-export const DEFAULT_MODEL_CONCURRENCY = 5;
+export const DEFAULT_IMAGE_MODEL_CONCURRENCY = 5;
+export const DEFAULT_VIDEO_MODEL_CONCURRENCY = 20;
 export const DEFAULT_IMAGE_CONCURRENCY = 20;
-export const DEFAULT_VIDEO_CONCURRENCY = 20;
+export const DEFAULT_VIDEO_CONCURRENCY = 50;
 
 export type ProductionMode = 'image' | 'video';
-export type ConcurrencyLimits = { model: number; image: number; video: number };
+export type ConcurrencyLimits = { imageModel: number; videoModel: number; image: number; video: number };
 export type SchedulerJob = {
   taskId: string;
   ownerId: string;
@@ -47,6 +50,7 @@ const MAX_REGISTERED_JOBS = 256;
 const MAX_PENDING_JOBS = 1_000;
 const reservations = new Map<string, Scope>();
 const pumpingScopes = new Set<string>();
+const pumpAgainScopes = new Set<string>();
 
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -55,7 +59,8 @@ function positiveInteger(value: string | undefined, fallback: number): number {
 
 export function getConcurrencyLimits(env: Readonly<Record<string, string | undefined>> = process.env): ConcurrencyLimits {
   return {
-    model: positiveInteger(env.WORKSPACE_MODEL_CONCURRENCY, DEFAULT_MODEL_CONCURRENCY),
+    imageModel: positiveInteger(env.WORKSPACE_IMAGE_MODEL_CONCURRENCY, DEFAULT_IMAGE_MODEL_CONCURRENCY),
+    videoModel: positiveInteger(env.WORKSPACE_VIDEO_MODEL_CONCURRENCY, DEFAULT_VIDEO_MODEL_CONCURRENCY),
     image: positiveInteger(env.WORKSPACE_IMAGE_CONCURRENCY, DEFAULT_IMAGE_CONCURRENCY),
     video: positiveInteger(env.WORKSPACE_VIDEO_CONCURRENCY, DEFAULT_VIDEO_CONCURRENCY),
   };
@@ -108,13 +113,11 @@ function modeLimit(mode: ProductionMode, limits: ConcurrencyLimits): number {
   return mode === 'image' ? limits.image : limits.video;
 }
 
-function currentCounts(scope: Scope): { total: number; byModel: Map<string, number> } {
+function currentCounts(scope: Scope, mode: ProductionMode): { total: number; byModel: Map<string, number> } {
   const byModel = new Map<string, number>();
   let total = 0;
-  const listTasks = (taskStore as typeof taskStore & { listProviderTasks?: () => ProviderTask[] }).listProviderTasks;
-  if (typeof listTasks !== 'function') return { total, byModel };
-  for (const task of listTasks()) {
-    if (taskOwnerId(task) !== scope.ownerId || !isPersistedActiveTask(task)) continue;
+  for (const task of listProviderTaskSummaries()) {
+    if (taskOwnerId(task) !== scope.ownerId || task.mode !== mode || !isPersistedActiveTask(task)) continue;
     total += 1;
     const model = taskModelId(task);
     byModel.set(model, (byModel.get(model) ?? 0) + 1);
@@ -124,7 +127,7 @@ function currentCounts(scope: Scope): { total: number; byModel: Map<string, numb
 
 function canStart(job: SchedulerJob, counts: { total: number; byModel: Map<string, number> }, limits: ConcurrencyLimits): boolean {
   if (counts.total >= modeLimit(job.mode, limits)) return false;
-  return (counts.byModel.get(job.model.toLowerCase()) ?? 0) < limits.model;
+  return (counts.byModel.get(job.model.toLowerCase()) ?? 0) < (job.mode === 'image' ? limits.imageModel : limits.videoModel);
 }
 
 function markDispatching(job: SchedulerJob): void {
@@ -137,7 +140,9 @@ function markDispatching(job: SchedulerJob): void {
   const promptGenerationPending = current.status === 'prompting' || current.metadata?.promptGenerationPending === true;
   updateProviderTask(job.taskId, {
     status: promptGenerationPending ? 'prompting' : 'submitting',
-    progress: promptGenerationPending ? Math.max(current.progress, 2) : Math.max(current.progress, 5),
+    progress: promptGenerationPending
+      ? canonicalTaskProgress({ mode: job.mode, status: 'prompting', progress: current.progress, promptGenerationPending: true })
+      : canonicalTaskProgress({ mode: job.mode, status: 'submitting', progress: current.progress }),
     metadata: {
       ...(current.metadata ?? {}),
       schedulerState: DISPATCHING_STATE,
@@ -197,7 +202,7 @@ function scheduleRetry(job: SchedulerJob, task: ProviderTask): boolean {
     status: RETRYING_STATUS,
     // Keep the task in the active/visible portion of the queue without
     // pretending that a provider request is currently running.
-    progress: Math.min(95, Math.max(1, task.progress)),
+    progress: canonicalTaskProgress({ mode: job.mode, status: 'retrying', progress: task.progress }),
     error: undefined,
     // A retry is a new upstream submission.  Clear the previous provider
     // handle and outputs so the stale request cannot be counted as an active
@@ -228,58 +233,68 @@ function scheduleRetry(job: SchedulerJob, task: ProviderTask): boolean {
 
 async function pumpScope(scope: Scope): Promise<void> {
   const key = scopeKey(scope);
-  if (pumpingScopes.has(key)) return;
+  if (pumpingScopes.has(key)) {
+    pumpAgainScopes.add(key);
+    return;
+  }
   pumpingScopes.add(key);
   try {
-    const limits = getConcurrencyLimits();
     for (;;) {
-      const counts = currentCounts(scope);
-      // Image and video jobs share the operator-wide pool. Looking only at
-      // the mode that happened to release a slot can strand jobs from the
-      // other mode indefinitely, so dispatch the first runnable job for the
-      // owner regardless of its media mode.
-      const index = pendingJobs.findIndex((job) => job.ownerId === scope.ownerId && canStart(job, counts, limits));
-      if (index < 0) break;
-      const [job] = pendingJobs.splice(index, 1);
-      const current = getProviderTask(job.taskId);
-      if (!current || ['cancelled', 'failed', 'completed'].includes(current.status)) continue;
-      reservations.set(job.taskId, scope);
-      markDispatching(job);
-      void (async () => {
-        try {
-          await job.run();
-        } catch (error) {
-          const current = getProviderTask(job.taskId);
-          if (current && !['completed', 'cancelled', 'failed'].includes(current.status)) {
-            updateProviderTask(job.taskId, {
-              status: 'failed',
-              progress: 100,
-              error: error instanceof Error && error.message ? error.message : 'scheduler_dispatch_failed',
-            });
+      pumpAgainScopes.delete(key);
+      const limits = getConcurrencyLimits();
+      for (;;) {
+        const countsByMode = {
+          image: currentCounts(scope, 'image'),
+          video: currentCounts(scope, 'video'),
+        } satisfies Record<ProductionMode, { total: number; byModel: Map<string, number> }>;
+        // Dispatch the first runnable job for the owner regardless of its media
+        // mode. Each mode has its own pool, so a saturated video lane no longer
+        // blocks image work and vice versa.
+        const index = pendingJobs.findIndex((job) => job.ownerId === scope.ownerId && canStart(job, countsByMode[job.mode], limits));
+        if (index < 0) break;
+        const [job] = pendingJobs.splice(index, 1);
+        const current = getProviderTask(job.taskId);
+        if (!current || ['cancelled', 'failed', 'completed'].includes(current.status)) continue;
+        reservations.set(job.taskId, scope);
+        markDispatching(job);
+        void (async () => {
+          try {
+            await job.run();
+          } catch (error) {
+            const current = getProviderTask(job.taskId);
+            if (current && !['completed', 'cancelled', 'failed'].includes(current.status)) {
+              updateProviderTask(job.taskId, {
+                status: 'failed',
+                progress: 100,
+                error: error instanceof Error && error.message ? error.message : 'scheduler_dispatch_failed',
+              });
+            }
+          } finally {
+            const finished = getProviderTask(job.taskId);
+            // Provider adapters generally persist failures and resolve their
+            // promise. Inspect the task after run() so both rejected promises
+            // and persisted failed statuses receive the same retry treatment.
+            const retryScheduled = finished?.status === 'failed' ? scheduleRetry(job, finished) : false;
+            if (finished?.status === 'completed') {
+              updateProviderTask(job.taskId, {
+                metadata: {
+                  ...(finished.metadata ?? {}),
+                  retrying: false,
+                },
+              });
+            }
+            if (finished?.status === 'completed' || (finished?.status === 'failed' && !retryScheduled)) registeredJobs.delete(job.taskId);
+            markFinishedState(job.taskId);
+            reservations.delete(job.taskId);
+            if (!retryScheduled) void pumpScope(scope);
           }
-        } finally {
-          const finished = getProviderTask(job.taskId);
-          // Provider adapters generally persist failures and resolve their
-          // promise. Inspect the task after run() so both rejected promises
-          // and persisted failed statuses receive the same retry treatment.
-          const retryScheduled = finished?.status === 'failed' ? scheduleRetry(job, finished) : false;
-          if (finished?.status === 'completed') {
-            updateProviderTask(job.taskId, {
-              metadata: {
-                ...(finished.metadata ?? {}),
-                retrying: false,
-              },
-            });
-          }
-          if (finished?.status === 'completed' || (finished?.status === 'failed' && !retryScheduled)) registeredJobs.delete(job.taskId);
-          markFinishedState(job.taskId);
-          reservations.delete(job.taskId);
-          if (!retryScheduled) void pumpScope(scope);
-        }
-      })();
+        })();
+      }
+      if (!pumpAgainScopes.has(key)) break;
     }
   } finally {
     pumpingScopes.delete(key);
+    pumpAgainScopes.delete(key);
   }
 }
 
@@ -391,22 +406,46 @@ export function recoverOrphanedSchedulerTasks(now = Date.now(), options: { force
   if (process.env.NODE_ENV === 'test' && !options.force) return recovered;
   // Some lightweight route tests mock only the task methods they exercise;
   // keep recovery optional when that read helper is not present.
-  const listTasks = (taskStore as typeof taskStore & { listProviderTasks?: () => ProviderTask[] }).listProviderTasks;
-  if (typeof listTasks !== 'function') return recovered;
-  for (const task of listTasks()) {
-    if (task.providerTaskId || !['queued', 'submitting'].includes(task.status)) continue;
+  for (const task of listProviderTaskSummaries()) {
+    // `retrying` is also process-local. When a process restarts after a
+    // provider/dispatch failure, its retry timer and registered job are gone
+    // even though the persisted task still says "retrying". These tasks have
+    // no upstream id, so converting them to a safe, recoverable failure is
+    // preferable to leaving them in the queue forever.
+    if (task.providerTaskId || !['queued', 'submitting', 'prompting', 'retrying'].includes(task.status)) continue;
     const state = schedulerState(task);
-    if (state !== WAITING_STATE && state !== DISPATCHING_STATE) continue;
+    // `terminal` normally means "nothing left to do", but a task that is still
+    // queued with no provider task id has no way to progress: the scheduler
+    // considers it finished while the queue shows it as waiting. Recover those
+    // too, otherwise they sit in the UI forever.
+    const strandedTerminal = state === 'terminal' && task.status === 'queued';
+    if (state !== WAITING_STATE && state !== DISPATCHING_STATE && !strandedTerminal) continue;
     const runtimeId = task.metadata?.schedulerRuntimeId;
-    if (runtimeId === SCHEDULER_RUNTIME_ID) continue;
+    // A stranded task is already finished from the scheduler's point of view,
+    // so the current runtime having produced it is not a reason to skip it.
+    if (runtimeId === SCHEDULER_RUNTIME_ID && !strandedTerminal) continue;
     const updatedAt = Date.parse(task.updatedAt);
     if (!Number.isFinite(updatedAt) || now - updatedAt < ORPHANED_TASK_AGE_MS) continue;
-    const updated = updateProviderTask(task.id, {
+    // Queue polling and a recovery request can run concurrently. Re-read the
+    // full record immediately before writing so an old summary cannot overwrite
+    // a freshly restored task's metadata and status.
+    const latest = getProviderTask(task.id);
+    if (!latest || latest.updatedAt !== task.updatedAt || latest.status !== task.status || Boolean(latest.providerTaskId) !== Boolean(task.providerTaskId)) continue;
+    const updated = updateProviderTask(latest.id, {
       status: 'failed',
       progress: 100,
-      error: 'scheduler_interrupted',
+      // A prompting task has not reached any provider yet. Keep this distinct
+      // from a real prompt-provider rejection so operators can safely restore
+      // it after a process restart.
+      error: latest.status === 'prompting'
+        ? 'scheduler_prompt_interrupted'
+        : latest.status === 'retrying'
+          ? 'scheduler_retry_interrupted'
+          : strandedTerminal
+            ? 'provider_response_unrecognized'
+            : 'scheduler_interrupted',
       metadata: {
-        ...(task.metadata ?? {}),
+        ...(latest.metadata ?? {}),
         schedulerState: 'terminal',
         schedulerInterruptedAt: new Date(now).toISOString(),
         schedulerRuntimeId: SCHEDULER_RUNTIME_ID,

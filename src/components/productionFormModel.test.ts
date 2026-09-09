@@ -9,6 +9,8 @@ describe('production form historical fields', () => {
     expect(promptProviderLabel(' BigSnake ')).toBe('BigSnake');
     expect(promptProviderLabel('gpt-2999')).toBe('GPT-2999');
     expect(promptProviderLabel('gemini-2.5-flash')).toBe('Gemini');
+    expect(promptProviderLabel('pomoai-gpt')).toContain('PomoAI');
+    expect(promptProviderLabel('oairegbox-gpt')).toContain('OAIRegBox');
   });
 
   it('lists Quality V4 independently and routes sd-mini through snumom Grok', () => {
@@ -126,7 +128,7 @@ describe('production form historical fields', () => {
   });
 
   it('validates references against the selected model capability', () => {
-    const capability = getVideoCapability('wan3-video', 'wan3.0-prime-r2v');
+    const capability = getVideoCapability('wan3-video', 'wan3.0-r2v');
     expect(validateProductionInput('video', {
       prompt: 'demo',
       referenceImages: Array.from({ length: 11 }, (_, index) => `https://assets.example/${index}.jpg`),
@@ -136,5 +138,17 @@ describe('production form historical fields', () => {
       aspectRatio: '9:16',
       resolution: '720P',
     }, capability)).toMatchObject({ code: 'VIDEO_CAPABILITY_INVALID' });
+  });
+
+  it('requires a manual task name when manual naming is selected', () => {
+    expect(validateProductionInput('image', { prompt: 'demo', taskNameMode: 'manual', taskName: '', referenceImages: [], referenceVideos: [], referenceAudios: [] })).toEqual(new Error('task_name_required'));
+  });
+
+  it('requires an image reference when automatic naming is selected', () => {
+    expect(validateProductionInput('video', { prompt: 'demo', taskNameMode: 'auto', referenceImages: [], referenceVideos: [], referenceAudios: [] })).toEqual(new Error('task_name_reference_required'));
+  });
+
+  it('includes task naming fields in generation payloads', () => {
+    expect(buildGenerationPayload('video', { prompt: 'demo', taskNameMode: 'manual', taskName: 'Launch', referenceImages: [] })).toEqual(expect.objectContaining({ taskNameMode: 'manual', taskName: 'Launch' }));
   });
 });

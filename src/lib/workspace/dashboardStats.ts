@@ -1,7 +1,7 @@
 import type { WorkspaceAccount } from './data';
 import { listStoredAccounts } from './accountStore';
 import { withLiveAccountStatsList } from './accountStats';
-import { getServerWorkspaceTasks } from './serverTasks';
+import { getServerWorkspaceTaskSummaries } from './serverTasks';
 import { businessDate, type WorkspaceTask } from './tasks';
 import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 
@@ -112,8 +112,8 @@ export function aggregateProductionTaskStats(tasks: readonly WorkspaceTask[], no
       failed: summary.failed + (task.status === 'failed' ? 1 : 0),
       paused: summary.paused + (task.status === 'paused' ? 1 : 0),
       successfulOutputs: summary.successfulOutputs + (completedWithOutput ? outputs : 0),
-      inventorySavedToday: summary.inventorySavedToday + (savedToday ? outputs : 0),
-      completedNotInInventory: summary.completedNotInInventory + (completedNotInInventory ? outputs : 0),
+      inventorySavedToday: summary.inventorySavedToday + (savedToday ? 1 : 0),
+      completedNotInInventory: summary.completedNotInInventory + (completedNotInInventory ? 1 : 0),
       activeAccountsToday: 0,
     };
   }, { total: 0, queued: 0, running: 0, completed: 0, failed: 0, paused: 0, successfulOutputs: 0, inventorySavedToday: 0, completedNotInInventory: 0, activeAccountsToday: 0 });
@@ -137,7 +137,9 @@ function accountRows(accounts: readonly WorkspaceAccount[]): DashboardAccount[] 
 /** Build the server-side snapshot consumed by the overview and tables. */
 export function getDashboardSnapshot(now: Date | string | number = new Date()): DashboardSnapshot {
   const accounts = accountRows(withLiveAccountStatsList(listStoredAccounts()));
-  const tasks = getServerWorkspaceTasks();
+  // Dashboard counters do not render provider outputs. Use the compact task
+  // projection so this API never clones multi-megabyte output payloads.
+  const tasks = getServerWorkspaceTaskSummaries();
   return {
     accounts,
     totals: { ...EMPTY_TOTALS },

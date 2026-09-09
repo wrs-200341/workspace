@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditFormData, aicloudImageSize, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
 
 describe('provider payload contracts', () => {
+  it('builds Aicloud GPT Image portrait sizes for each model tier', () => {
+    expect(aicloudImageSize('9:16', '1k')).toBe('1024x1536');
+    expect(aicloudImageSize('9:16', '2k')).toBe('2048x3072');
+    expect(aicloudImageSize('9:16', '4k')).toBe('2304x4096');
+    expect(buildAicloudImagePayload({ model: 'gpt-image-2.5', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' })).toEqual({ model: 'gpt-image-2.5', prompt: 'cat', size: '1024x1536', n: 1 });
+    const form = buildAicloudImageEditFormData({ model: 'gpt-image-2.5-plus', prompt: 'edit', aspectRatio: '9:16', resolution: '4k', referenceFiles: [{ bytes: new Uint8Array([1]), mimeType: 'image/png', fileName: 'ref.png' }] });
+    expect(form.get('size')).toBe('2304x4096');
+    expect(form.get('image')).toBeInstanceOf(File);
+  });
   it('uses documented Origin/Junze image contracts and preserves portrait ratios', () => {
     expect(buildOpenAIImagePayload({ model: 'gpt-image-2', prompt: 'cat', aspectRatio: '9:16', resolution: '4k' })).toMatchObject({ model: 'gpt-image-2', size: '1152x2048', quality: 'high', response_format: 'url' });
     expect(buildOpenAIImagePayload({ model: 'grok-imagine-image-2.0', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' })).toMatchObject({ size: '9:16', quality: 'medium' });
@@ -42,6 +51,15 @@ describe('provider payload contracts', () => {
     expect(buildGrokVideoPayload({ model: 'grok-imagine-video-1.5（按次）', prompt: 'demo', duration: 10, aspectRatio: '9:16', resolution: '720p', referenceImages: ['https://assets.example/a.jpg', 'https://assets.example/b.jpg'] })).toEqual(expect.objectContaining({ extra: expect.objectContaining({ reference_images: [{ url: 'https://assets.example/a.jpg', role: 'reference_image' }, { url: 'https://assets.example/b.jpg', role: 'reference_image' }] }) }));
   });
 
+  it('builds the YuanAI Grok preview payload with string seconds and references', () => {
+    expect(buildYuanAIGrokVideoPayload({ model: 'ignored', prompt: ' demo ', duration: 6, aspectRatio: '9:16', resolution: '720p', referenceImages: ['https://assets.example/a.jpg'] })).toEqual({
+      model: 'grok-imagine-video-1.5-preview', prompt: 'demo', seconds: '6', aspect_ratio: '9:16', resolution: '720p', input_reference: 'https://assets.example/a.jpg',
+    });
+    expect(buildYuanAIGrokVideoPayload({ model: 'ignored', prompt: 'demo', duration: 10, aspectRatio: '16:9', resolution: '1080p', referenceImages: ['https://assets.example/a.jpg', 'https://assets.example/b.jpg'] })).toEqual(expect.objectContaining({ reference_images: [{ url: 'https://assets.example/a.jpg' }, { url: 'https://assets.example/b.jpg' }] }));
+    expect(() => buildYuanAIGrokVideoPayload({ model: 'ignored', prompt: 'demo', duration: 5, aspectRatio: '9:16', resolution: '720p' })).toThrow('yuanai_grok_invalid_duration');
+    expect(() => buildYuanAIGrokVideoPayload({ model: 'ignored', prompt: 'demo', duration: 6, aspectRatio: '9:16', resolution: '720p', referenceImages: ['http://assets.example/a.jpg'] })).toThrow('yuanai_grok_reference_urls_must_be_https');
+  });
+
   it('builds the sd-mini payload with top-level fields and image modes', () => {
     expect(buildSdMiniVideoPayload({ model: 'sd-mini', prompt: '  cat jumps  ', seconds: 10 })).toEqual({
       model: 'sd-mini', prompt: 'cat jumps', seconds: '10', resolution: '720p', aspect_ratio: '9:16',
@@ -75,8 +93,8 @@ describe('provider payload contracts', () => {
   it('builds MGRouter and Wan multi-media payloads', () => {
     expect(buildMGRouterImagePayload({ model: 'grok-imagine-image-quality', prompt: 'demo', aspectRatio: '9:16', resolution: '2k', referenceImages: ['https://assets.example/a.jpg'] })).toEqual({ model: 'grok-imagine-image-quality', prompt: 'demo', aspect_ratio: '9:16', resolution: '2k', images: [{ url: 'https://assets.example/a.jpg' }] });
     expect(buildMGRouterVideoPayload({ model: 'grok-video', prompt: 'demo', aspectRatio: '16:9', resolution: '720p', duration: 8, referenceImages: [], referenceAudios: ['https://assets.example/eve.wav'] })).toEqual(expect.objectContaining({ model: 'grok-imagine-video-1.5', aspect_ratio: '16:9', resolution: '720p', duration: 8, reference_audios: [{ url: 'https://assets.example/eve.wav' }] }));
-    expect(buildWanVideoPayload({ model: 'wan3.0-prime-r2v', prompt: 'demo', ratio: '16:9', resolution: '480p', duration: 8, media: [{ type: 'reference_image', url: 'https://assets.example/a.jpg' }, { type: 'audio', url: 'https://assets.example/a.wav' }] })).toEqual(expect.objectContaining({ model: 'wan3.0-prime-r2v', ratio: '16:9', resolution: '480P', duration: 8, media: expect.any(Array) }));
-    expect(buildWanVideoPayload({ model: 'wan3.0-prime-t2v', prompt: 'demo', ratio: '16:9', resolution: '480p', duration: 5, media: [] })).not.toHaveProperty('media');
+    expect(buildWanVideoPayload({ model: 'wan3.0-r2v', prompt: 'demo', ratio: '16:9', resolution: '480p', duration: 8, media: [{ type: 'reference_image', url: 'https://assets.example/a.jpg' }, { type: 'audio', url: 'https://assets.example/a.wav' }] })).toEqual(expect.objectContaining({ model: 'wan3.0-r2v', ratio: '16:9', resolution: '480P', duration: 8, media: expect.any(Array) }));
+    expect(buildWanVideoPayload({ model: 'wan3.0-r2v', prompt: 'demo', ratio: '16:9', resolution: '480p', duration: 5, media: [] })).not.toHaveProperty('media');
   });
 
   it('builds the MiniMax H3 secure-skill payload', () => {
@@ -86,9 +104,18 @@ describe('provider payload contracts', () => {
     });
   });
 
+  it('keeps Miku H3 Max requests under the upstream 2999-character prompt limit', () => {
+    const payload = buildMikuVideoPayload({ model: 'minimax-h3-max', prompt: `prefix-${'x'.repeat(4000)}`, duration: 10, aspectRatio: '9:16', resolution: '768p' });
+    expect(payload.model).toBe('minimax-h3-max');
+    expect(String(payload.prompt)).toHaveLength(2999);
+    expect(String(payload.prompt).startsWith('prefix-')).toBe(true);
+  });
+
   it('keeps provider kinds aligned with production modes', () => {
     expect(providerKind('yuanai-image')).toBe('image');
     expect(providerKind('yuanai-gemini-prompt')).toBe('prompt');
+    expect(providerKind('pomoai-gpt-prompt')).toBe('prompt');
+    expect(providerKind('oairegbox-gpt-prompt')).toBe('prompt');
     expect(providerKind('wan3-video')).toBe('video');
   });
 

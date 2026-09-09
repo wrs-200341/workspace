@@ -69,3 +69,8 @@ export function landingPathForRole(role: Role): string {
   if (role === 'workspace') return '/workspace';
   return '/';
 }
+
+export function safeNextPath(value: string | null, role?: Role): string {
+  if (value && value.startsWith('/') && !value.startsWith('//')) return value;
+  return landingPathForRole(role ?? 'operator');
+}

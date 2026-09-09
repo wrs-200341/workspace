@@ -36,6 +36,9 @@ const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   provider_resume_unsupported: '该任务已提交给供应商，不能本地重复提交；请等待当前任务完成。',
   scheduler_queue_full: '当前运营账号的生产队列已达到安全上限，请稍后再提交。',
   scheduler_interrupted: '服务器重启时中断了尚未提交的任务，请点击恢复配置重新提交。',
+  scheduler_prompt_interrupted: '服务重启导致子提示词生成中断，视频尚未提交给供应商；可以安全恢复。',
+  prompt_provider_timeout: '子提示词模型响应超时，视频尚未提交给供应商；可以稍后安全恢复。',
+  provider_capacity: '供应商当前繁忙或队列已满，本次没有拿到上游任务编号；可以稍后安全恢复。',
   image_output_cache_failed: '图片已生成但本地缓存失败，请重试或重新生成。',
 };
 

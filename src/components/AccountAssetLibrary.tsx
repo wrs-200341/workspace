@@ -37,6 +37,7 @@ const IMAGE_EXTENSIONS = ['png', 'jpg', 'jpeg', 'webp', 'gif', 'avif', 'bmp', 't
 const TEXT_EXTENSIONS = ['txt', 'md', 'markdown', 'json', 'csv'];
 const MAX_FILE_SIZE = 100 * 1024 * 1024;
 const MAX_PROMPT_FILE_SIZE = 2 * 1024 * 1024;
+const ASSET_PAGE_SIZE = 48;
 
 function formatBytes(size?: number): string {
   if (!size) return '本地资产';
@@ -99,7 +100,11 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
+  // Inventory videos are split into published/unpublished so a clip that has
+  // already gone out does not sit mixed in with the ones still to be used.
+  const [publishFilter, setPublishFilter] = useState<'unpublished' | 'published'>('unpublished');
   const [editingName, setEditingName] = useState('');
+  const [visibleLimit, setVisibleLimit] = useState(ASSET_PAGE_SIZE);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -114,25 +119,9 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
   }, [initialAssets]);
 
   useEffect(() => {
-    if (section !== 'inventory-video') return;
-    let cancelled = false;
-    let attempts = 0;
-
-    // Inventory repair runs in the background on the server. Refresh a few
-    // times after mount so repaired videos appear without a manual reload,
-    // while keeping the initial route response non-blocking.
-    const poll = async () => {
-      if (cancelled) return;
-      await refresh().catch(() => undefined);
-      attempts += 1;
-      if (!cancelled && attempts < 4) window.setTimeout(poll, 1500);
-    };
-    const timer = window.setTimeout(poll, 500);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [refresh, section]);
+    setVisibleLimit(ASSET_PAGE_SIZE);
+    setPublishFilter('unpublished');
+  }, [accountId, section]);
 
   const handleFiles = useCallback(async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
@@ -147,6 +136,29 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     setMessage('');
     setUploading(true);
     setUploadState({ total: validFiles.length, completed: 0, succeeded: 0, failed: 0 });
+    // Binary assets use one multipart request so a batch only rewrites the
+    // account asset index once. Prompt files keep their existing per-file
+    // category handling below.
+    if (section !== 'prompt') {
+      try {
+        const form = new FormData();
+        form.set('kind', section);
+        validFiles.forEach((file) => form.append('files', file));
+        const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/files`, { method: 'POST', body: form });
+        const payload = await response.json().catch(() => null) as { success?: boolean; data?: { assets?: WorkspaceAsset[] }; error?: string } | null;
+        if (!response.ok || !payload?.success || !Array.isArray(payload.data?.assets)) throw new Error(payload?.error || '上传失败');
+        const uploadedAssets = payload.data.assets;
+        setAssets((current) => [...current, ...uploadedAssets]);
+        setUploadState((current) => current ? { ...current, completed: validFiles.length, succeeded: uploadedAssets.length } : current);
+        setMessage(`已成功上传 ${uploadedAssets.length} 个文件`);
+      } catch (uploadError) {
+        setError(uploadError instanceof Error ? uploadError.message : '上传失败');
+      } finally {
+        setUploading(false);
+        setUploadState(null);
+      }
+      return;
+    }
     let succeeded = 0;
     let failed = 0;
     for (const file of validFiles) {
@@ -183,7 +195,7 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
       setUploading(false);
       setUploadState(null);
     }
-  }, [accountId, refresh, section, uploading]);
+  }, [accountId, promptTab, refresh, section, uploading]);
 
   const onDrop = (event: React.DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -214,6 +226,25 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
       setMessage('已重命名');
     } catch (renameError) {
       setError(renameError instanceof Error ? renameError.message : '重命名失败');
+    }
+  };
+
+  const togglePublished = async (asset: WorkspaceAsset) => {
+    const next = !asset.publishedAt;
+    if (!next && !window.confirm(`确定把“${asset.name}”标记为未发布吗？`)) return;
+    try {
+      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(asset.id)}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ published: next }),
+      });
+      const payload = await response.json().catch(() => null) as { success?: boolean; data?: WorkspaceAsset; error?: string } | null;
+      if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.error || '标记失败');
+      const saved = payload.data;
+      setAssets((current) => current.map((item) => item.id === saved.id ? saved : item));
+      setMessage(next ? '已标记为已发布' : '已恢复为未发布');
+    } catch (publishError) {
+      setError(publishError instanceof Error ? publishError.message : '标记失败');
     }
   };
 
@@ -268,6 +299,13 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     return '支持 MP3、WAV、OGG、M4A、AAC、FLAC 等音频格式，可一次拖入多个文件。';
   }, [section]);
 
+  const publishedCount = section === 'inventory-video' ? assets.filter((item) => item.publishedAt).length : 0;
+  const unpublishedCount = section === 'inventory-video' ? assets.length - publishedCount : 0;
+  const filteredAssets = section === 'inventory-video'
+    ? assets.filter((item) => (publishFilter === 'published' ? Boolean(item.publishedAt) : !item.publishedAt))
+    : assets;
+  const visibleAssets = filteredAssets.slice(0, visibleLimit);
+
   return <div className={`account-asset-library ${section}`}>
     {!readOnly && <div
       className={`asset-dropzone ${dragging ? 'dragging' : ''} ${uploading ? 'uploading' : ''}`}
@@ -291,9 +329,14 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     {message && <div className="asset-feedback success" role="status"><Check size={14} />{message}</div>}
     {error && <div className="asset-feedback error" role="alert"><X size={14} />{error}</div>}
     {section === 'prompt' && !readOnly && <PromptTemplateEditor accountId={accountId} initialAssets={assets} initialCategory={promptTab} onSaved={refresh} />}
+    {section === 'inventory-video' && assets.length > 0 && <div className="publish-filter-tabs" role="tablist" aria-label="库存视频发布状态">
+      <button type="button" role="tab" aria-selected={publishFilter === 'unpublished'} className={publishFilter === 'unpublished' ? 'active' : ''} onClick={() => setPublishFilter('unpublished')}>未发布 <span>{unpublishedCount}</span></button>
+      <button type="button" role="tab" aria-selected={publishFilter === 'published'} className={publishFilter === 'published' ? 'active' : ''} onClick={() => setPublishFilter('published')}>已发布 <span>{publishedCount}</span></button>
+    </div>}
     {section !== 'prompt' && !assets.length && <div className="asset-empty"><FolderOpen size={18} />还没有{sectionLabel(section)}资产，拖入文件即可开始。</div>}
-    {section !== 'prompt' && assets.length > 0 && <div className={`asset-card-grid ${section === 'image' ? 'image-grid' : 'media-grid'}`}>
-      {assets.map((asset) => {
+    {section === 'inventory-video' && assets.length > 0 && !visibleAssets.length && <div className="asset-empty"><FolderOpen size={18} />{publishFilter === 'published' ? '还没有已发布的视频。' : '没有待发布的视频，全部已发布。'}</div>}
+    {section !== 'prompt' && visibleAssets.length > 0 && <div className={`asset-card-grid ${section === 'image' ? 'image-grid' : 'media-grid'}`}>
+      {visibleAssets.map((asset) => {
         const isEditing = editingId === asset.id;
         return <article className={`asset-card ${section === 'image' ? 'asset-image-card' : 'asset-media-card'}`} key={asset.id}>
           {section === 'image' && <div className="asset-image-preview">{asset.relativePath ? <img src={assetUrl(accountId, asset.id)} alt={asset.name} loading="lazy" /> : <FileImage size={28} />}</div>}
@@ -303,14 +346,17 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
             {isEditing ? <div className="asset-rename-row"><input value={editingName} onChange={(event) => setEditingName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void saveRename(); if (event.key === 'Escape') setEditingId(null); }} autoFocus aria-label="资产名称" /><button type="button" className="asset-card-action" onClick={() => void saveRename()} title="保存命名"><Check size={15} /></button><button type="button" className="asset-card-action" onClick={() => setEditingId(null)} title="取消"><X size={15} /></button></div> : <strong title={asset.name}>{asset.name}</strong>}
             <span>{asset.mimeType ?? sectionLabel(section)} · {formatBytes(asset.size)}</span>
             <small>{new Date(asset.updatedAt || asset.createdAt).toLocaleDateString('zh-CN')}</small>
+            {section === 'inventory-video' && asset.publishedAt && <small className="asset-published-badge"><Check size={12} /> 已发布 · {new Date(asset.publishedAt).toLocaleDateString('zh-CN')}</small>}
           </div>
           <div className="asset-card-actions" aria-label={`${asset.name} 操作`}>
             <button type="button" className="asset-card-action" onClick={() => void downloadAsset(asset)} title="下载" aria-label={`下载 ${asset.name}`}><Download size={15} /></button>
+            {!readOnly && section === 'inventory-video' && <button type="button" className={`asset-card-action asset-publish-action ${asset.publishedAt ? 'is-published' : ''}`} onClick={() => void togglePublished(asset)} title={asset.publishedAt ? '已发布，点击恢复为未发布' : '确认发布'} aria-label={`${asset.publishedAt ? '恢复为未发布' : '确认发布'} ${asset.name}`}><Check size={15} /> {asset.publishedAt ? '已发布' : '确认发布'}</button>}
             {!readOnly && <><button type="button" className="asset-card-action" onClick={() => startRename(asset)} title="重命名" aria-label={`重命名 ${asset.name}`}><Pencil size={15} /></button>
             <button type="button" className="asset-card-action danger" onClick={() => void removeAsset(asset)} title="删除" aria-label={`删除 ${asset.name}`}><Trash2 size={15} /></button></>}
           </div>
         </article>;
       })}
     </div>}
+    {section !== 'prompt' && filteredAssets.length > visibleLimit && <button type="button" className="ghost-button asset-load-more" onClick={() => setVisibleLimit((current) => current + ASSET_PAGE_SIZE)}>加载更多（剩余 {filteredAssets.length - visibleLimit} 个）</button>}
   </div>;
 }

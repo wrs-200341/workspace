@@ -15,9 +15,22 @@ function sessionsPath(): string { return path.join(authDir(), 'sessions.json'); 
 
 function ensureDir(): void { fs.mkdirSync(authDir(), { recursive: true }); }
 
+type JsonCacheEntry = { mtimeMs: number; size: number; value: unknown };
+const jsonCache = new Map<string, JsonCacheEntry>();
+
 function readJson<T>(file: string, fallback: T): T {
   ensureDir();
-  try { return JSON.parse(fs.readFileSync(file, 'utf8')) as T; } catch { return fallback; }
+  try {
+    const stat = fs.statSync(file);
+    const cached = jsonCache.get(file);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.value as T;
+    const value = JSON.parse(fs.readFileSync(file, 'utf8')) as T;
+    jsonCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, value });
+    return value;
+  } catch {
+    jsonCache.delete(file);
+    return fallback;
+  }
 }
 
 function writeJson<T>(file: string, value: T): void {
@@ -26,6 +39,8 @@ function writeJson<T>(file: string, value: T): void {
   try {
     fs.writeFileSync(temp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(temp, file);
+    const stat = fs.statSync(file);
+    jsonCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, value });
   } finally {
     if (fs.existsSync(temp)) fs.rmSync(temp, { force: true });
   }

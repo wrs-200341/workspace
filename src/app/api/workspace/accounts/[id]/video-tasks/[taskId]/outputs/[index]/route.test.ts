@@ -1,21 +1,22 @@
+import fs from 'node:fs';
 import { NextRequest, NextResponse } from 'next/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockReadStoredVideoOutput, mockCacheVideoTaskOutputLocally, mockReadAssetFile } = vi.hoisted(() => ({
+const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockGetStoredVideoOutputFileInfo, mockCacheVideoTaskOutputLocally, mockGetAssetFileInfo } = vi.hoisted(() => ({
   mockRequireApiRole: vi.fn(),
   mockCanAccessWorkspaceAccount: vi.fn(),
   mockGetProviderTask: vi.fn(),
-  mockReadStoredVideoOutput: vi.fn(),
+  mockGetStoredVideoOutputFileInfo: vi.fn(),
   mockCacheVideoTaskOutputLocally: vi.fn(),
-  mockReadAssetFile: vi.fn(),
+  mockGetAssetFileInfo: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
 vi.mock('@/lib/workspace/access', () => ({ canAccessWorkspaceAccount: mockCanAccessWorkspaceAccount }));
 vi.mock('@/lib/providers/taskStore', () => ({ getProviderTask: mockGetProviderTask }));
-vi.mock('@/lib/providers/outputStore', () => ({ readStoredVideoOutput: mockReadStoredVideoOutput }));
+vi.mock('@/lib/providers/outputStore', () => ({ getStoredVideoOutputFileInfo: mockGetStoredVideoOutputFileInfo }));
 vi.mock('@/lib/workspace/videoInventory', () => ({ cacheVideoTaskOutputLocally: mockCacheVideoTaskOutputLocally }));
-vi.mock('@/lib/workspace/assetStore', () => ({ readAssetFile: mockReadAssetFile }));
+vi.mock('@/lib/workspace/assetStore', () => ({ getAssetFileInfo: mockGetAssetFileInfo }));
 
 import { GET } from './route';
 
@@ -24,15 +25,19 @@ const task = {
   status: 'completed', progress: 100, outputUrls: ['https://media.manjuai.top/videos/a.mp4', 'https://media.manjuai.top/downloads/a.mp4'], outputBase64: [],
 };
 const params = { params: Promise.resolve({ id: 'account-1', taskId: 'video-task-1', index: '0' }) };
+const testFilePath = `${process.env.TEMP || process.env.TMP || 'D:/workspace/data'}/workspace-video-route-${process.pid}.mp4`;
+const cachedInfo = { index: 0, relativePath: 'generated/account-1/video-task-1/0.mp4', filePath: testFilePath, mimeType: 'video/mp4', size: 8 };
 
 describe('video output proxy API', () => {
+  afterAll(() => { fs.rmSync(testFilePath, { force: true }); });
   beforeEach(() => {
     mockRequireApiRole.mockReset().mockResolvedValue({ role: 'operator', username: 'operator' });
     mockCanAccessWorkspaceAccount.mockReset().mockReturnValue(true);
     mockGetProviderTask.mockReset().mockReturnValue({ ...task });
-    mockReadStoredVideoOutput.mockReset().mockReturnValue({ bytes: Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]), mimeType: 'video/mp4' });
+    fs.writeFileSync(testFilePath, Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]));
+    mockGetStoredVideoOutputFileInfo.mockReset().mockReturnValue(cachedInfo);
     mockCacheVideoTaskOutputLocally.mockReset();
-    mockReadAssetFile.mockReset().mockReturnValue(null);
+    mockGetAssetFileInfo.mockReset().mockReturnValue(null);
   });
 
   it('serves the cached local video and exposes an attachment filename', async () => {
@@ -44,8 +49,7 @@ describe('video output proxy API', () => {
   });
 
   it('caches a remote output before serving a browser request', async () => {
-    const cached = { bytes: Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]), mimeType: 'video/mp4' };
-    mockReadStoredVideoOutput.mockReturnValueOnce(null).mockReturnValue(cached);
+    mockGetStoredVideoOutputFileInfo.mockReturnValueOnce(null).mockReturnValue(cachedInfo);
     mockCacheVideoTaskOutputLocally.mockResolvedValue(1);
     const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0'), params);
     expect(response.status).toBe(200);
@@ -60,9 +64,9 @@ describe('video output proxy API', () => {
   });
 
   it('serves an inventory video when the generated cache file is missing', async () => {
-    mockReadStoredVideoOutput.mockReturnValue(null);
+    mockGetStoredVideoOutputFileInfo.mockReturnValue(null);
     mockGetProviderTask.mockReturnValue({ ...task, outputUrls: ['/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0'], metadata: { inventoryAssetIds: ['asset-video-1'] } });
-    mockReadAssetFile.mockReturnValue({ asset: { id: 'asset-video-1', accountId: 'account-1', kind: 'inventory-video', mimeType: 'video/mp4' }, bytes: Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]) });
+    mockGetAssetFileInfo.mockReturnValue({ asset: { id: 'asset-video-1', accountId: 'account-1', kind: 'inventory-video', mimeType: 'video/mp4' }, filePath: testFilePath, size: 8 });
     const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0'), params);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('video/mp4');

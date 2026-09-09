@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildProductImagesUrl, normalizeProductImagesPayload, parsePidListText, parsePidRows } from './productImageAssetsModel';
+import { buildProductImagesUrl, groupProductImageFolders, normalizeProductGalleryItems, normalizeProductImagesPayload, parsePidListText, parsePidRows } from './productImageAssetsModel';
 
 describe('product image asset view model', () => {
   it('builds an encoded account endpoint and optional query', () => {
@@ -16,6 +16,60 @@ describe('product image asset view model', () => {
 
   it('returns empty lists for malformed responses', () => {
     expect(normalizeProductImagesPayload({ success: false })).toEqual({ imported: [], gallery: [] });
+  });
+
+  it('deduplicates gallery items by pid and sorts them by pid', () => {
+    expect(normalizeProductGalleryItems([
+      { pid: 'P-10', title: 'ten' },
+      { pid: 'P-2', title: 'two' },
+      { pid: 'P-2', title: 'duplicate should win by last write' },
+      { pid: 'p-1', title: 'lowercase pid' },
+    ])).toEqual([
+      { pid: 'p-1', title: 'lowercase pid' },
+      { pid: 'P-2', title: 'duplicate should win by last write' },
+      { pid: 'P-10', title: 'ten' },
+    ]);
+  });
+
+  it('groups product image folders by account and shared scope', () => {
+    expect(groupProductImageFolders([
+      { id: 'a1', pid: 'P1', name: 'P1/001.jpg' },
+      { id: 'a2', pid: 'P1', name: 'P1/002.jpg' },
+      { id: 's1', pid: 'P1', name: 'shared/001.jpg', shared: true },
+      { id: 'a3', pid: 'P2', name: 'P2/001.jpg' },
+    ], 'account-1')).toEqual([
+      {
+        key: 'account-1:P1',
+        pid: 'P1',
+        shared: false,
+        imageCount: 2,
+        cover: { id: 'a1', pid: 'P1', name: 'P1/001.jpg' },
+        images: [
+          { id: 'a1', pid: 'P1', name: 'P1/001.jpg' },
+          { id: 'a2', pid: 'P1', name: 'P1/002.jpg' },
+        ],
+      },
+      {
+        key: 'account-1:P2',
+        pid: 'P2',
+        shared: false,
+        imageCount: 1,
+        cover: { id: 'a3', pid: 'P2', name: 'P2/001.jpg' },
+        images: [
+          { id: 'a3', pid: 'P2', name: 'P2/001.jpg' },
+        ],
+      },
+      {
+        key: 'shared:P1',
+        pid: 'P1',
+        shared: true,
+        imageCount: 1,
+        cover: { id: 's1', pid: 'P1', name: 'shared/001.jpg', shared: true },
+        images: [
+          { id: 's1', pid: 'P1', name: 'shared/001.jpg', shared: true },
+        ],
+      },
+    ]);
   });
 
   it('parses PID lists from text while removing headers, duplicates, and invalid values', () => {

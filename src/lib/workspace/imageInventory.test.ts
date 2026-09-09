@@ -1,9 +1,9 @@
 import fs from 'node:fs';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUploadedAsset, listAssets } from './assetStore';
-import { cacheImageTaskOutputsBeforeCompletion, recoverPendingImageTaskOutputCache, saveImageTaskOutputsToAssets } from './imageInventory';
+import { cacheImageTaskOutputsBeforeCompletion, recoverPendingImageTaskOutputCache, repairSavedImageTaskInventory, saveImageTaskOutputsToAssets } from './imageInventory';
 import { storeImageOutput } from '@/lib/providers/outputStore';
-import { createProviderTask } from '@/lib/providers/taskStore';
+import { createProviderTask, getProviderTask } from '@/lib/providers/taskStore';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
 const root = `D:\\all_projects\\workspace\\data\\image-inventory-test-${process.pid}`;
@@ -112,5 +112,21 @@ describe('image task inventory persistence', () => {
     const assets = await saveImageTaskOutputsToAssets(accountId, task({ metadata: { inventoryAssetIds: ['asset-missing', existing.id] }, outputBase64: ['data:image/png;base64,aGVsbG8='] }));
     expect(assets).toEqual([]);
     expect(listAssets(accountId, 'image')).toHaveLength(1);
+  });
+
+  it('repairs a saved image task whose asset record is missing', async () => {
+    const persisted = createProviderTask(task({
+      id: undefined,
+      inventorySavedAt: '2026-09-03T01:00:00.000Z',
+      outputBase64: ['data:image/png;base64,aGVsbG8='],
+      metadata: { inventoryAssetIds: ['asset-missing'] },
+    }));
+
+    expect(await repairSavedImageTaskInventory()).toBe(1);
+    const repaired = getProviderTask(persisted.id);
+    expect(repaired?.inventorySavedAt).toBe(persisted.inventorySavedAt);
+    expect(Array.isArray(repaired?.metadata?.inventoryAssetIds)).toBe(true);
+    expect(listAssets(accountId, 'image')).toHaveLength(1);
+    expect(await repairSavedImageTaskInventory()).toBe(0);
   });
 });

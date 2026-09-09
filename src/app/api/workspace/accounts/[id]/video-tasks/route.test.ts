@@ -54,6 +54,22 @@ describe('video task list API', () => {
     expect(mockGetServerWorkspaceTasks).toHaveBeenCalledWith({ accountId: 'account-1', mode: 'video' });
   });
 
+  it('normalizes legacy prompt supplier aliases before exposing queue cards', async () => {
+    mockGetServerWorkspaceTasks.mockReturnValue([
+      {
+        id: 'legacy-prompt', accountId: 'account-1', mode: 'video', createdAt: '2026-09-02T01:00:00.000Z',
+        metadata: { promptProvider: 'pomoai-gpt-prompt', promptModel: 'bigsnake' },
+      },
+    ]);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/workspace/accounts/account-1/video-tasks?date=2026-09-02'),
+      { params: Promise.resolve({ id: 'account-1' }) },
+    );
+    const body = await response.json();
+    expect(body.data[0]).toMatchObject({ promptProvider: 'bigsnake-prompt', promptModel: 'gpt-5.5' });
+  });
+
   it('rejects an account outside the current user scope', async () => {
     mockCanAccessWorkspaceAccount.mockReturnValue(false);
     const response = await GET(

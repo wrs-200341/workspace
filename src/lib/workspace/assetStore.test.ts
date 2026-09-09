@@ -5,11 +5,14 @@ import { getWorkspacePath } from '../storagePaths';
 import {
   createPromptAsset,
   createUploadedAsset,
+  createUploadedAssets,
   deleteAsset,
   getAsset,
+  getAssetFileInfo,
   listAssets,
   readAssetFile,
   renameAsset,
+  setAssetPublished,
   updatePromptAsset,
 } from './assetStore';
 
@@ -57,6 +60,19 @@ describe('workspace asset store', () => {
     expect(fs.readFileSync(storedPath)).toEqual(Buffer.from(bytes));
   });
 
+  it('commits a batch of uploaded images to one account index', () => {
+    const first = new Uint8Array([1, 2, 3]);
+    const second = new Uint8Array([4, 5, 6, 7]);
+    const assets = createUploadedAssets('account-1', 'image', [
+      { name: 'first.png', type: 'image/png', size: first.byteLength, arrayBuffer: first.buffer },
+      { name: 'second.webp', type: 'image/webp', size: second.byteLength, arrayBuffer: second.buffer },
+    ]);
+
+    expect(assets).toHaveLength(2);
+    expect(listAssets('account-1', 'image').map((asset) => asset.name)).toEqual(['first.png', 'second.webp']);
+    expect(assets.every((asset) => fs.existsSync(getWorkspacePath(asset.relativePath!)))).toBe(true);
+  });
+
   it('renames an asset without changing its file path', () => {
     const bytes = new Uint8Array([7, 8, 9]);
     const asset = createUploadedAsset('account-1', 'audio', {
@@ -88,6 +104,25 @@ describe('workspace asset store', () => {
     const moved = updatePromptAsset('account-1', asset.id, { name: 'Updated image', content: 'New image content', category: 'image' });
     expect(moved?.category).toBe('image');
     expect(listAssets('account-1', 'prompt')).toEqual([moved]);
+  });
+
+  it('marks an inventory video published and clears the flag again', () => {
+    const bytes = new Uint8Array([1, 2, 3]);
+    const video = createUploadedAsset('account-1', 'inventory-video', { name: 'clip.mp4', type: 'video/mp4', size: bytes.byteLength, arrayBuffer: bytes.buffer });
+    expect(video.publishedAt).toBeUndefined();
+
+    const published = setAssetPublished('account-1', video.id, true, Date.parse('2026-09-08T02:30:00.000Z'));
+    expect(published?.publishedAt).toBe('2026-09-08T02:30:00.000Z');
+    expect(getAsset('account-1', video.id)?.publishedAt).toBe('2026-09-08T02:30:00.000Z');
+
+    const cleared = setAssetPublished('account-1', video.id, false);
+    expect(cleared?.publishedAt).toBeUndefined();
+    expect(getAsset('account-1', video.id)?.publishedAt).toBeUndefined();
+
+    const prompt = createPromptAsset('account-1', { name: 'Hook', content: 'Lead with the benefit.' });
+    expect(() => setAssetPublished('account-1', prompt.id, true)).toThrow();
+    expect(setAssetPublished('account-1', 'asset-missing', true)).toBeNull();
+    expect(setAssetPublished('account-2', video.id, true)).toBeNull();
   });
 
   it('deletes metadata and the uploaded file for the owning account only', () => {
@@ -122,6 +157,7 @@ describe('workspace asset store', () => {
     const result = readAssetFile('account-1', asset.id);
     expect(result?.asset).toEqual(asset);
     expect(result?.filePath).toBe(getWorkspacePath(asset.relativePath!));
+    expect(getAssetFileInfo('account-1', asset.id)?.size).toBe(bytes.byteLength);
 
     const metadataPath = getWorkspacePath('assets', 'account-1.json');
     fs.writeFileSync(metadataPath, JSON.stringify([{ ...asset, relativePath: '../../outside.txt' }]));

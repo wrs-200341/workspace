@@ -17,9 +17,10 @@ function seed(id: string, mode: 'image' | 'video', model: string, ownerId = 'ope
 describe('production concurrency scheduler', () => {
   beforeEach(() => {
     process.env.WORKSPACE_DATA_ROOT = testRoot;
-    process.env.WORKSPACE_MODEL_CONCURRENCY = '5';
+    process.env.WORKSPACE_IMAGE_MODEL_CONCURRENCY = '5';
+    process.env.WORKSPACE_VIDEO_MODEL_CONCURRENCY = '20';
     process.env.WORKSPACE_IMAGE_CONCURRENCY = '20';
-    process.env.WORKSPACE_VIDEO_CONCURRENCY = '20';
+    process.env.WORKSPACE_VIDEO_CONCURRENCY = '50';
     fs.rmSync(testRoot, { recursive: true, force: true });
     resetSchedulerForTests();
   });
@@ -31,8 +32,8 @@ describe('production concurrency scheduler', () => {
     else process.env.WORKSPACE_DATA_ROOT = previousRoot;
   });
 
-  it('runs at most five same-model jobs while allowing an unlimited waiting queue', async () => {
-    const ids = Array.from({ length: 7 }, (_, index) => `video-${index}`).map((id) => seed(id, 'video', 'grok-model'));
+  it('runs at most twenty same-video-model jobs while allowing an unlimited waiting queue', async () => {
+    const ids = Array.from({ length: 21 }, (_, index) => `video-${index}`).map((id) => seed(id, 'video', 'grok-model'));
     let started = 0;
     let maxStarted = 0;
     const finishers: Array<() => void> = [];
@@ -42,13 +43,12 @@ describe('production concurrency scheduler', () => {
       return new Promise<void>((resolve) => finishers.push(() => { updateProviderTask(task.id, { status: 'completed', progress: 100 }); started -= 1; resolve(); }));
     } }));
     await tick();
-    expect(started).toBe(5);
-    expect(maxStarted).toBe(5);
-    expect(getProviderTask(ids[5].id)?.status).toBe('queued');
-    expect(getProviderTask(ids[6].id)?.status).toBe('queued');
-    finishers.splice(0, 2).forEach((finish) => finish());
+    expect(started).toBe(20);
+    expect(maxStarted).toBe(20);
+    expect(getProviderTask(ids[20].id)?.status).toBe('queued');
+    finishers.splice(0, 5).forEach((finish) => finish());
     await tick();
-    expect(started).toBe(5);
+    expect(started).toBe(16);
     finishers.splice(0).forEach((finish) => finish());
     await tick();
     expect(started).toBe(0);
@@ -80,13 +80,13 @@ describe('production concurrency scheduler', () => {
       }),
     });
     await tick();
-    expect(getProviderTask(task.id)).toMatchObject({ status: 'prompting', progress: 2, metadata: { schedulerState: 'dispatching' } });
+    expect(getProviderTask(task.id)).toMatchObject({ status: 'prompting', progress: 10, metadata: { schedulerState: 'dispatching' } });
     finish();
     await tick();
     expect(getProviderTask(task.id)?.status).toBe('completed');
   });
 
-  it('allocates five model slots independently for each operator', async () => {
+  it('allocates model slots independently for each operator', async () => {
     const operatorA = Array.from({ length: 5 }, (_, index) => seed(`operator-a-omni-${index}`, 'video', 'omni-fast-no-water', 'operator-a'));
     const operatorB = Array.from({ length: 5 }, (_, index) => seed(`operator-b-omni-${index}`, 'video', 'omni-fast-no-water', 'operator-b'));
     const finishers: Array<() => void> = [];
@@ -112,18 +112,72 @@ describe('production concurrency scheduler', () => {
     expect(getProviderTask(task.id)).toMatchObject({ status: 'failed', error: 'scheduler_interrupted', progress: 100 });
   });
 
-  it('caps all media modes at twenty jobs for one operator', async () => {
-    const imageTasks = Array.from({ length: 20 }, (_, index) => seed(`image-${index}`, 'image', 'image-model'));
-    const videoTasks = Array.from({ length: 20 }, (_, index) => seed(`video-${index}`, 'video', 'video-model'));
+  it('recovers queued tasks the scheduler already marked terminal', () => {
+    // A supplier response with no task id used to leave the job queued while
+    // the scheduler recorded it as finished, so it showed as 本地排队中 forever.
+    const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const task = createProviderTask({
+      id: 'stranded-terminal-task',
+      accountId: 'operator-a-account',
+      mode: 'image',
+      provider: 'mgrouter-grok-image',
+      model: 'grok-image',
+      status: 'queued',
+      createdAt: old,
+      metadata: { ownerId: 'operator-a', schedulerState: 'terminal', schedulerFinishedAt: old },
+    });
+    // The age guard is measured from updatedAt, which creation just set to now.
+    const recovered = recoverOrphanedSchedulerTasks(Date.now() + 10 * 60 * 1000, { force: true });
+    expect(recovered.map((item) => item.id)).toContain(task.id);
+    expect(getProviderTask(task.id)).toMatchObject({ status: 'failed', error: 'provider_response_unrecognized', progress: 100 });
+  });
+
+  it('marks orphaned prompting child-prompt jobs as failed so they do not stall forever', () => {
+    const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const task = createProviderTask({
+      id: 'orphaned-prompting-task',
+      accountId: 'operator-a-account',
+      mode: 'video',
+      provider: 'grok-video',
+      model: 'grok-model',
+      status: 'prompting',
+      createdAt: old,
+      metadata: { ownerId: 'operator-a', schedulerState: 'waiting', promptGenerationPending: true, schedulerRuntimeId: 'previous-runtime' },
+    });
+    const recovered = recoverOrphanedSchedulerTasks(Date.now(), { force: true });
+    expect(recovered.map((item) => item.id)).toContain(task.id);
+    expect(getProviderTask(task.id)).toMatchObject({ status: 'failed', error: 'scheduler_prompt_interrupted', progress: 100 });
+  });
+
+  it('marks orphaned retrying jobs as safely recoverable after a restart', () => {
+    const old = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const task = createProviderTask({
+      id: 'orphaned-retrying-task',
+      accountId: 'operator-a-account',
+      mode: 'video',
+      provider: 'grok-video',
+      model: 'grok-model',
+      status: 'retrying',
+      createdAt: old,
+      metadata: { ownerId: 'operator-a', schedulerState: 'waiting', schedulerRuntimeId: 'previous-runtime', schedulerRetryCount: 1, maxRetries: 2 },
+    });
+    const recovered = recoverOrphanedSchedulerTasks(Date.now(), { force: true });
+    expect(recovered.map((item) => item.id)).toContain(task.id);
+    expect(getProviderTask(task.id)).toMatchObject({ status: 'failed', error: 'scheduler_retry_interrupted', progress: 100 });
+  });
+
+  it('caps image and video modes separately for one operator', async () => {
+    const imageTasks = Array.from({ length: 25 }, (_, index) => seed(`image-${index}`, 'image', `image-model-${index}`));
+    const videoTasks = Array.from({ length: 20 }, (_, index) => seed(`video-${index}`, 'video', `video-model-${index}`));
     let imageStarted = 0;
     let videoStarted = 0;
     const finishers: Array<() => void> = [];
-    imageTasks.forEach((task) => enqueueProviderTask({ taskId: task.id, ownerId: 'operator-a', mode: 'image', model: 'image-model', run: () => { imageStarted += 1; return new Promise<void>((resolve) => finishers.push(() => { imageStarted -= 1; updateProviderTask(task.id, { status: 'completed', progress: 100 }); resolve(); })); } }));
-    videoTasks.forEach((task) => enqueueProviderTask({ taskId: task.id, ownerId: 'operator-a', mode: 'video', model: 'video-model', run: () => { videoStarted += 1; return new Promise<void>((resolve) => finishers.push(() => { videoStarted -= 1; updateProviderTask(task.id, { status: 'completed', progress: 100 }); resolve(); })); } }));
+    imageTasks.forEach((task) => enqueueProviderTask({ taskId: task.id, ownerId: 'operator-a', mode: 'image', model: task.model!, run: () => { imageStarted += 1; return new Promise<void>((resolve) => finishers.push(() => { imageStarted -= 1; updateProviderTask(task.id, { status: 'completed', progress: 100 }); resolve(); })); } }));
+    videoTasks.forEach((task) => enqueueProviderTask({ taskId: task.id, ownerId: 'operator-a', mode: 'video', model: task.model!, run: () => { videoStarted += 1; return new Promise<void>((resolve) => finishers.push(() => { videoStarted -= 1; updateProviderTask(task.id, { status: 'completed', progress: 100 }); resolve(); })); } }));
     await tick();
-    expect(imageStarted).toBe(5);
-    expect(videoStarted).toBe(5);
-    expect(finishers.length).toBe(10);
+    expect(imageStarted).toBe(20);
+    expect(videoStarted).toBe(20);
+    expect(finishers.length).toBe(40);
     while (finishers.length) {
       finishers.splice(0).forEach((finish) => finish());
       await tick();
@@ -132,55 +186,23 @@ describe('production concurrency scheduler', () => {
     expect(videoStarted).toBe(0);
   });
 
-  it('keeps queued jobs waiting until an operator-wide slot is free', async () => {
-    const tasks = Array.from({ length: 25 }, (_, index) => seed(`mixed-${index}`, (index % 2 ? 'video' : 'image') as 'image' | 'video', `unique-model-${index}`, 'operator-a'));
+  it('caps video jobs at fifty per operator when models differ', async () => {
+    const tasks = Array.from({ length: 51 }, (_, index) => seed(`video-cap-${index}`, 'video', `unique-model-${index}`, 'operator-a'));
     let started = 0;
     const finishers: Array<() => void> = [];
-    tasks.forEach((task) => enqueueProviderTask({ taskId: task.id, ownerId: 'operator-a', mode: task.mode as 'image' | 'video', model: task.model!, run: () => {
+    tasks.forEach((task) => enqueueProviderTask({ taskId: task.id, ownerId: 'operator-a', mode: 'video', model: task.model!, run: () => {
       started += 1;
       return new Promise<void>((resolve) => finishers.push(() => { started -= 1; updateProviderTask(task.id, { status: 'completed', progress: 100 }); resolve(); }));
     } }));
     await tick();
-    expect(finishers).toHaveLength(20);
-    expect(getProviderTask(tasks[20].id)?.status).toBe('queued');
+    expect(finishers).toHaveLength(50);
+    expect(getProviderTask(tasks[50].id)?.status).toBe('queued');
     finishers.splice(0).forEach((finish) => finish());
     await tick();
-    expect(finishers).toHaveLength(5);
+    expect(started).toBe(1);
     finishers.splice(0).forEach((finish) => finish());
     await tick();
     expect(started).toBe(0);
-  });
-
-  it('wakes the other media mode when a shared slot is released', async () => {
-    const videoTasks = Array.from({ length: 20 }, (_, index) => seed(`video-full-${index}`, 'video', `video-model-${index}`));
-    const imageTask = seed('image-waiting', 'image', 'image-model');
-    const finishers: Array<() => void> = [];
-    videoTasks.forEach((task) => enqueueProviderTask({
-      taskId: task.id,
-      ownerId: 'operator-a',
-      mode: 'video',
-      model: task.model!,
-      run: () => new Promise<void>((resolve) => finishers.push(() => {
-        updateProviderTask(task.id, { status: 'completed', progress: 100 });
-        resolve();
-      })),
-    }));
-    enqueueProviderTask({
-      taskId: imageTask.id,
-      ownerId: 'operator-a',
-      mode: 'image',
-      model: imageTask.model!,
-      run: () => new Promise<void>((resolve) => {
-        updateProviderTask(imageTask.id, { status: 'completed', progress: 100 });
-        resolve();
-      }),
-    });
-    await tick();
-    expect(finishers).toHaveLength(20);
-    expect(getProviderTask(imageTask.id)?.status).toBe('queued');
-    finishers[0]();
-    await tick();
-    expect(getProviderTask(imageTask.id)?.status).toBe('completed');
   });
 
   it('automatically retries failed jobs twice and exposes retrying state', async () => {

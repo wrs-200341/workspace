@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount, workspaceOwnerIdForUser } from '@/lib/workspace/access';
-import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
+import * as serverTasks from '@/lib/workspace/serverTasks';
 import { businessDate } from '@/lib/workspace/tasks';
 import { isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
 import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } from '@/lib/providers/client';
 import { updateProviderTask } from '@/lib/providers/taskStore';
-import * as taskStore from '@/lib/providers/taskStore';
 import { pumpProviderTasks, recoverOrphanedSchedulerTasks, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
 import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls, recoverPendingImageTaskOutputCache } from '@/lib/workspace/imageInventory';
 
@@ -28,27 +27,35 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     : undefined;
   if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
   recoverOrphanedSchedulerTasks();
-  const tasks = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'image' } : { accountId: id, mode: 'image' }).filter((task) => !date || businessDate(task.createdAt) === date);
-  void recoverPendingImageCaches(tasks);
-  // Keep queue reads local and responsive. Provider polling is opt-in and
-  // runs in the background so slow upstreams never block rendering.
-  if (request.nextUrl.searchParams.get('sync') === '1') void syncLiveImageTasks(tasks);
+  const filters = ownerScope ? { ownerId, mode: 'image' as const } : { accountId: id, mode: 'image' as const };
+  const queueReader = Object.prototype.hasOwnProperty.call(serverTasks, 'getServerWorkspaceQueueTasks')
+    ? serverTasks.getServerWorkspaceQueueTasks
+    : serverTasks.getServerWorkspaceTasks;
+  const tasks = queueReader(filters).filter((task) => !date || businessDate(task.createdAt) === date);
+  const needsBackgroundWork = tasks.some((task) => task.status === 'processing' || (task.status === 'failed' && task.error === 'image_output_cache_failed'));
+  // Keep queue reads local and responsive. Provider polling and output cache
+  // recovery run after the lightweight response is prepared.
+  if (needsBackgroundWork || request.nextUrl.searchParams.get('sync') === '1') {
+    void Promise.resolve().then(() => {
+      const fullTasks = serverTasks.getServerWorkspaceTasks(filters).filter((task) => !date || businessDate(task.createdAt) === date);
+      if (needsBackgroundWork) void recoverPendingImageCaches(fullTasks);
+      if (request.nextUrl.searchParams.get('sync') === '1') void syncLiveImageTasks(fullTasks);
+    });
+  }
   const queueTasks = tasks.map(toQueueTask);
   return NextResponse.json({ success: true, data: queueTasks, tasks: queueTasks });
 }
 
-async function recoverPendingImageCaches(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
+async function recoverPendingImageCaches(tasks: ReturnType<typeof serverTasks.getServerWorkspaceTasks>): Promise<void> {
   if (process.env.NODE_ENV === 'test') return;
-  const listTasks = (taskStore as typeof taskStore & { listProviderTasks?: typeof import('@/lib/providers/taskStore').listProviderTasks }).listProviderTasks;
-  if (typeof listTasks !== 'function') return;
-  const ids = new Set(tasks.map((task) => task.id));
-  const pending = listTasks({ mode: 'image' }).filter((task) => ids.has(task.id));
+  const pending = tasks.filter((task) => task.mode === 'image' && (
+    task.status === 'processing'
+    || (task.status === 'failed' && task.error === 'image_output_cache_failed')
+  ));
   for (const task of pending.slice(0, 8)) {
     // Recover both in-flight cache retries and terminal cache failures where
     // a previous write won a race with the task status update.
-    if (task.status === 'processing' || (task.status === 'failed' && task.error === 'image_output_cache_failed')) {
-      await recoverPendingImageTaskOutputCache(task.id).catch(() => null);
-    }
+    await recoverPendingImageTaskOutputCache(task.id).catch(() => null);
   }
 }
 
@@ -60,14 +67,14 @@ function toQueueTask<T extends Record<string, unknown>>(task: T) {
   return schedulerState ? { ...summary, schedulerState } : summary;
 }
 
-function syncLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
+function syncLiveImageTasks(tasks: ReturnType<typeof serverTasks.getServerWorkspaceTasks>): Promise<void> {
   if (liveSyncRunning) return Promise.resolve();
   liveSyncRunning = true;
   const run = runLiveImageTasks(tasks).finally(() => { liveSyncRunning = false; });
   return run.catch(() => undefined);
 }
 
-async function runLiveImageTasks(tasks: ReturnType<typeof getServerWorkspaceTasks>): Promise<void> {
+async function runLiveImageTasks(tasks: ReturnType<typeof serverTasks.getServerWorkspaceTasks>): Promise<void> {
   const active = tasks.filter((task) => task.provider && task.providerTaskId && ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(task.status) && isProviderLiveEnabled(task.provider as ProviderId));
   // A manual refresh should make progress on the visible queue without
   // opening an upstream request for every historical task at once.

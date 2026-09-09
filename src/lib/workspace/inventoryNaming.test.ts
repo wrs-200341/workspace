@@ -27,4 +27,14 @@ describe('inventory task naming', () => {
     expect(inventoryFileName(second, 0, 'png')).toBe('1734636212522550693-3_2026-09-03_2.png');
     expect(inventoryFileName(second, 1, 'png')).toBe('1734636212522550693-3_2026-09-03_2_02.png');
   });
+
+  it('adds the date and sequence to manually named tasks without references', () => {
+    const manual = { ...first, id: 'manual-1', prompt: 'ignored', metadata: { taskNameMode: 'manual', taskName: 'Summer launch', sequence: 1 } };
+    expect(taskNameForInventory(manual, 1)).toBe('Summer launch_2026-09-03_1');
+  });
+
+  it('uses the manual name as the grouping key for repeated submissions', () => {
+    const manual = { ...first, id: 'manual-1', metadata: { taskNameMode: 'manual', taskName: 'Summer launch', sequence: 1 } };
+    expect(taskNameForInventory(manual)).toBe('Summer launch_2026-09-03_1');
+  });
 });

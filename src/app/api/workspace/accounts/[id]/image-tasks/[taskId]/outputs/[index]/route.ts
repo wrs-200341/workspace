@@ -9,12 +9,6 @@ import { readAssetFile } from '@/lib/workspace/assetStore';
 
 const MAX_IMAGE_OUTPUT_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 25_000;
-const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['imgen.x.ai']);
-
-function isTrustedProviderOutputHost(hostname: string): boolean {
-  return TRUSTED_PROVIDER_OUTPUT_HOSTS.has(hostname.toLowerCase())
-    || /^pub-[a-f0-9]{32}\.r2\.dev$/i.test(hostname);
-}
 
 function imageExtension(mimeType: string): string {
   const normalized = mimeType.toLowerCase();
@@ -45,7 +39,8 @@ function isPrivateAddress(address: string): boolean {
     const [a, b] = address.split('.').map(Number);
     return a === 0 || a === 10 || a === 127 || (a === 169 && b === 254)
       || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168)
-      || (a === 100 && b >= 64 && b <= 127) || a >= 224;
+      || (a === 100 && b >= 64 && b <= 127) || (a === 198 && (b === 18 || b === 19))
+      || a >= 224;
   }
   if (family === 6) {
     const lower = address.toLowerCase();
@@ -72,7 +67,11 @@ async function assertPublicImageTarget(value: string): Promise<URL> {
   const addresses = family ? [{ address: hostname }] : await dns.lookup(hostname, { all: true, verbatim: true });
   const benchmarkMapping = !family && addresses.length > 0 && addresses.every((item) => /^198\.(?:18|19)\./.test(item.address));
   const hasPrivateAddress = addresses.some((item) => isPrivateAddress(item.address));
-  if (!addresses.length || (hasPrivateAddress && !(isTrustedProviderOutputHost(hostname) && benchmarkMapping))) throw new Error('image_output_target_blocked');
+  // The LAN's DNS proxy remaps every provider CDN host into the RFC 2544
+  // benchmark range (198.18/19); trust that resolution regardless of
+  // hostname so onboarding a new provider never requires a manual allowlist
+  // edit. Any other private resolution is still blocked.
+  if (!addresses.length || (hasPrivateAddress && !benchmarkMapping)) throw new Error('image_output_target_blocked');
   return parsed;
 }
 

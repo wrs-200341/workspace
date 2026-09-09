@@ -5,7 +5,6 @@ import { listStoredAccounts } from '@/lib/workspace/accountStore';
 import { listAssets, type AssetKind } from '@/lib/workspace/assetStore';
 import { ProductImageAssets } from './ProductImageAssets';
 import { AccountAssetLibrary } from './AccountAssetLibrary';
-import { repairSavedVideoTaskInventory } from '@/lib/workspace/videoInventory';
 
 export type ImageAssetTab = 'materials' | 'products';
 export type PromptAssetTab = 'image' | 'video';
@@ -40,10 +39,6 @@ function sectionDescription(section: AssetKind): string {
 }
 
 export async function AccountAssetsPage({ accountId, section = 'prompt', imageTab = 'materials', promptTab = 'video', readOnly = false }: Props) {
-  // Inventory repair may need to download a provider result. Do not block
-  // route rendering on that remote work; the library's client refresh will
-  // pick up repaired assets once the background pass completes.
-  if (section === 'inventory-video') void repairSavedVideoTaskInventory([accountId]);
   const workspaceAccount = listStoredAccounts().find((item) => item.id === accountId) ?? getWorkspaceAccountById(accountId);
   // Account assets belong to the workspace account store.  Do not fall back
   // to the legacy mock account catalogue: those records contain presentation
@@ -52,7 +47,12 @@ export async function AccountAssetsPage({ accountId, section = 'prompt', imageTa
   // Sidebar counters are scoped to this account's private workspace assets.
   // Shared 8765 product/PID images are shown in the product sub-tab and must
   // not be duplicated into every operator account's image count.
-  const counts = Object.fromEntries(sections.map(({ id }) => [id, listAssets(accountId, id).length])) as Record<AssetKind, number>;
+  // Read the account asset index once per route. Re-reading and cloning the
+  // same JSON file for each sidebar section made large workspaces noticeably
+  // slower, especially when opening the video inventory tab.
+  const allAssets = listAssets(accountId);
+  const assetsByKind = Object.fromEntries(sections.map(({ id }) => [id, allAssets.filter((asset) => asset.kind === id)])) as Record<AssetKind, ReturnType<typeof listAssets>>;
+  const counts = Object.fromEntries(sections.map(({ id }) => [id, assetsByKind[id].length])) as Record<AssetKind, number>;
   const currentLabel = sections.find((item) => item.id === section)?.label ?? '提示词';
 
   return <>
@@ -77,7 +77,7 @@ export async function AccountAssetsPage({ accountId, section = 'prompt', imageTa
           <div><div className="eyebrow">精选账号</div><h2>{currentLabel}</h2><p>{sectionDescription(section)}</p></div>
           <span className="asset-count-badge">{counts[section]} 项</span>
         </div>
-        {section === 'image' ? <ImageAssets accountId={accountId} tab={imageTab} assets={listAssets(accountId, 'image')} readOnly={readOnly} /> : <AccountAssetLibrary accountId={accountId} section={section} initialAssets={listAssets(accountId, section)} promptTab={promptTab} readOnly={readOnly} />}
+        {section === 'image' ? <ImageAssets accountId={accountId} tab={imageTab} assets={assetsByKind.image} readOnly={readOnly} /> : <AccountAssetLibrary accountId={accountId} section={section} initialAssets={assetsByKind[section]} promptTab={promptTab} readOnly={readOnly} />}
       </section>
     </div>
   </>;

@@ -1,5 +1,6 @@
 import type { ProviderId } from '@/lib/providers/config';
 import type { ProviderTask, ProviderTaskMode } from '@/lib/providers/taskStore';
+import type { TaskNameMode } from './taskNaming';
 
 export type ProductionRestoreConfig = {
   taskId: string;
@@ -30,6 +31,8 @@ export type ProductionRestoreConfig = {
   externalReferenceImages: string[];
   externalReferenceVideos: string[];
   externalReferenceAudios: string[];
+  taskNameMode?: TaskNameMode;
+  taskName?: string;
 };
 
 const MAX_RESTORED_REFERENCES = 16;
@@ -76,12 +79,18 @@ function assetOrder(value: unknown): Array<{ id: string; kind: 'image' | 'produc
 export function productionRestoreConfig(task: ProviderTask): ProductionRestoreConfig {
   const metadata = task.metadata ?? {};
   const originalPrompt = text(metadata.originalPrompt) ?? text(task.prompt) ?? '';
-  const referenceAssetIds = stringList(metadata.referenceAssetIds);
-  const referenceVideoAssetIds = stringList(metadata.referenceVideoAssetIds);
-  const referenceAudioAssetIds = stringList(metadata.referenceAudioAssetIds);
-  const productImageAssetIds = stringList(metadata.productImageAssetIds);
+  const explicitReferenceAssetIds = stringList(metadata.referenceAssetIds);
+  const explicitReferenceVideoAssetIds = stringList(metadata.referenceVideoAssetIds);
+  const explicitReferenceAudioAssetIds = stringList(metadata.referenceAudioAssetIds);
+  const explicitProductImageAssetIds = stringList(metadata.productImageAssetIds);
   const legacyAssetIds = stringList(metadata.assetIds);
   const referenceAssetOrder = assetOrder(metadata.referenceAssetOrder);
+  // Some pre-order task records only persisted the ordered selection. Recover
+  // those IDs by kind before falling back to the older generic assetIds field.
+  const orderedReferenceAssetIds = referenceAssetOrder.filter((item) => item.kind === 'image').map((item) => item.id);
+  const orderedReferenceVideoAssetIds = referenceAssetOrder.filter((item) => item.kind === 'inventory-video').map((item) => item.id);
+  const orderedReferenceAudioAssetIds = referenceAssetOrder.filter((item) => item.kind === 'audio').map((item) => item.id);
+  const orderedProductImageAssetIds = referenceAssetOrder.filter((item) => item.kind === 'product-image').map((item) => item.id);
 
   return {
     taskId: task.id,
@@ -104,12 +113,14 @@ export function productionRestoreConfig(task: ProviderTask): ProductionRestoreCo
     ...(text(metadata.aspectRatio) ? { aspectRatio: text(metadata.aspectRatio) } : {}),
     ...(text(metadata.resolution) ? { resolution: text(metadata.resolution) } : {}),
     ...(text(metadata.pid) ? { pid: text(metadata.pid) } : {}),
+    ...(metadata.taskNameMode === 'auto' || metadata.taskNameMode === 'manual' ? { taskNameMode: metadata.taskNameMode } : {}),
+    ...(text(metadata.taskName) ? { taskName: text(metadata.taskName) } : {}),
     // Older image tasks only persisted `assetIds`; retain them as image
     // references while preferring the newer kind-specific fields.
-    referenceAssetIds: unique(referenceAssetIds.length ? referenceAssetIds : legacyAssetIds),
-    referenceVideoAssetIds: unique(referenceVideoAssetIds),
-    referenceAudioAssetIds: unique(referenceAudioAssetIds),
-    productImageAssetIds: unique(productImageAssetIds),
+    referenceAssetIds: unique(explicitReferenceAssetIds.length ? explicitReferenceAssetIds : orderedReferenceAssetIds.length ? orderedReferenceAssetIds : legacyAssetIds),
+    referenceVideoAssetIds: unique(explicitReferenceVideoAssetIds.length ? explicitReferenceVideoAssetIds : orderedReferenceVideoAssetIds),
+    referenceAudioAssetIds: unique(explicitReferenceAudioAssetIds.length ? explicitReferenceAudioAssetIds : orderedReferenceAudioAssetIds),
+    productImageAssetIds: unique(explicitProductImageAssetIds.length ? explicitProductImageAssetIds : orderedProductImageAssetIds),
     referenceAssetOrder,
     externalReferenceImages: unique(stringList(metadata.externalReferenceImages)),
     externalReferenceVideos: unique(stringList(metadata.externalReferenceVideos)),

@@ -1,7 +1,11 @@
+import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
-import { deleteAsset, getAsset, readAssetFile, renameAsset, updatePromptAsset } from '@/lib/workspace/assetStore';
+import { deleteAsset, getAsset, getAssetFileInfo, renameAsset, setAssetPublished, updatePromptAsset } from '@/lib/workspace/assetStore';
+
+export const runtime = 'nodejs';
 
 type Params = { params: Promise<{ id: string; assetId: string }> };
 
@@ -24,17 +28,40 @@ export async function GET(request: NextRequest, { params }: Params) {
       });
       return new Response(asset.content ?? '', { status: 200, headers });
     }
-    const file = readAssetFile(id, assetId);
+    const file = getAssetFileInfo(id, assetId);
     if (!file) return NextResponse.json({ success: false, error: 'asset_file_not_found' }, { status: 404 });
     const encodedName = encodeURIComponent(file.asset.name).replace(/[\\'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
-    const headers = new Headers({
+    const baseHeaders = {
       'content-type': file.asset.mimeType || 'application/octet-stream',
-      'content-length': String(file.bytes.length),
       'content-disposition': `${download ? 'attachment' : 'inline'}; filename*=UTF-8''${encodedName}`,
-      'cache-control': 'private, no-store',
+      // Asset IDs point to immutable uploaded files. A short private cache
+      // keeps preview images/videos from being downloaded again on every
+      // route transition without exposing account data to shared caches.
+      'cache-control': download ? 'private, no-store' : 'private, max-age=300, stale-while-revalidate=3600',
       'x-content-type-options': 'nosniff',
-    });
-    return new Response(new Uint8Array(file.bytes), { status: 200, headers });
+      'accept-ranges': 'bytes',
+    };
+    // Browsers request only a small byte range for video metadata and seek
+    // operations. Returning the complete file here made every card preview
+    // allocate and transfer the full clip, which was the main source of slow
+    // asset-page loads.
+    const range = request.headers.get('range');
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
+      if (!match) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${file.size}` } });
+      const start = match[1] ? Number(match[1]) : Math.max(0, file.size - Number(match[2] || 0));
+      const requestedEnd = match[2] ? Number(match[2]) : file.size - 1;
+      const end = Math.min(file.size - 1, requestedEnd);
+      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= file.size) {
+        return new Response(null, { status: 416, headers: { 'content-range': `bytes */${file.size}` } });
+      }
+      const headers = new Headers({ ...baseHeaders, 'content-length': String(end - start + 1), 'content-range': `bytes ${start}-${end}/${file.size}` });
+      const stream = Readable.toWeb(fs.createReadStream(file.filePath, { start, end })) as ReadableStream;
+      return new Response(stream, { status: 206, headers });
+    }
+    const headers = new Headers({ ...baseHeaders, 'content-length': String(file.size) });
+    const stream = Readable.toWeb(fs.createReadStream(file.filePath)) as ReadableStream;
+    return new Response(stream, { status: 200, headers });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
     const status = message === 'account_id_invalid' || message === 'asset_id_invalid' ? 400 : 404;
@@ -47,8 +74,20 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   if (auth instanceof Response) return auth;
   const { id, assetId } = await params;
   if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
-  const body = await request.json().catch(() => null) as { name?: unknown; content?: unknown; category?: unknown } | null;
-  if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.name !== 'string' || !body.name.trim() || (body.content !== undefined && (typeof body.content !== 'string' || !body.content.trim()))) {
+  const body = await request.json().catch(() => null) as { name?: unknown; content?: unknown; category?: unknown; published?: unknown } | null;
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return NextResponse.json({ success: false, error: 'asset_name_required' }, { status: 400 });
+  // A publish toggle carries no name/content, so it is handled before the
+  // rename validation that every other PATCH body must satisfy.
+  if (body.published !== undefined) {
+    if (typeof body.published !== 'boolean') return NextResponse.json({ success: false, error: 'asset_published_invalid' }, { status: 400 });
+    try {
+      const asset = setAssetPublished(id, assetId, body.published);
+      return asset ? NextResponse.json({ success: true, data: asset }) : NextResponse.json({ success: false, error: 'asset_not_found' }, { status: 404 });
+    } catch (error) {
+      return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'asset_publish_failed' }, { status: 400 });
+    }
+  }
+  if (typeof body.name !== 'string' || !body.name.trim() || (body.content !== undefined && (typeof body.content !== 'string' || !body.content.trim()))) {
     return NextResponse.json({ success: false, error: 'asset_name_required' }, { status: 400 });
   }
   if (body.category !== undefined && body.category !== 'image' && body.category !== 'video') return NextResponse.json({ success: false, error: 'prompt_category_invalid' }, { status: 400 });

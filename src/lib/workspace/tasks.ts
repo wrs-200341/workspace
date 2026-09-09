@@ -16,6 +16,14 @@ export type WorkspaceTask = {
   inventorySavedAt?: string;
   outputCount?: number;
   error?: string;
+  errorInfo?: {
+    code: string;
+    category: string;
+    title: string;
+    message: string;
+    action: string;
+    safeToRetry: boolean;
+  };
   provider?: string;
   providerTaskId?: string;
   outputUrls?: string[];
@@ -74,8 +82,10 @@ export function summarizeWorkspaceTasks(tasks: readonly WorkspaceTask[], now: Da
     completed: summary.completed + (task.status === 'completed' ? 1 : 0),
     failed: summary.failed + (task.status === 'failed' ? 1 : 0),
     paused: summary.paused + (task.status === 'paused' ? 1 : 0),
-    inventorySavedToday: summary.inventorySavedToday + (isInventorySavedToday(task, now) ? (task.outputCount ?? 1) : 0),
-    completedNotInInventory: summary.completedNotInInventory + (isCompletedNotInInventory(task, now) ? (task.outputCount ?? 1) : 0),
+    // These dashboard values represent successful task-level inventory
+    // actions, so one task counts once even when it contains multiple files.
+    inventorySavedToday: summary.inventorySavedToday + (isInventorySavedToday(task, now) ? 1 : 0),
+    completedNotInInventory: summary.completedNotInInventory + (isCompletedNotInInventory(task, now) ? 1 : 0),
   }), { total: 0, queued: 0, running: 0, completed: 0, failed: 0, paused: 0, inventorySavedToday: 0, completedNotInInventory: 0 });
 }
 

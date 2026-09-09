@@ -112,4 +112,11 @@ describe('provider generation capability validation', () => {
     expect(validateGenerationRequest({ provider: 'yuanai-image', referenceImages: [], referenceAudios: [] })).toEqual({ aspectRatio: '9:16', resolution: '4k' });
     expect(validateGenerationRequest({ provider: 'mgrouter-grok-image', referenceImages: [], referenceAudios: [] })).toEqual({ aspectRatio: '9:16', resolution: '2k' });
   });
+
+  it('uses Aicloud model-specific defaults and rejects unsupported tiers', () => {
+    expect(validateGenerationRequest({ provider: 'aicloud-gpt-image', model: 'gpt-image-2.5', referenceImages: [], referenceAudios: [] })).toEqual({ aspectRatio: '9:16', resolution: '1k' });
+    expect(validateGenerationRequest({ provider: 'aicloud-gpt-image', model: 'gpt-image-2.5-plus', referenceImages: [], referenceAudios: [] })).toEqual({ aspectRatio: '9:16', resolution: '4k' });
+    expect(() => validateGenerationRequest({ provider: 'aicloud-gpt-image', model: 'gpt-image-2.5', resolution: '2k', referenceImages: [], referenceAudios: [] })).toThrow('unsupported_resolution');
+    expect(() => validateGenerationRequest({ provider: 'aicloud-gpt-image', model: 'gpt-image-unknown', referenceImages: [], referenceAudios: [] })).toThrow('unsupported_model');
+  });
 });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
-import { assertAssetAccountId, createPromptAsset, createUploadedAsset, listAssets, type AssetKind } from '@/lib/workspace/assetStore';
+import { assertAssetAccountId, createPromptAsset, createUploadedAsset, createUploadedAssets, listAssets, type AssetKind } from '@/lib/workspace/assetStore';
 import { importExternalImageAsset } from '@/lib/workspace/externalImageImport';
 
 const kinds: AssetKind[] = ['prompt', 'image', 'inventory-video', 'audio'];
@@ -37,9 +37,22 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   try {
     if (contentType.includes('multipart/form-data')) {
       const form = await request.formData();
-      const file = form.get('file');
       const kind = form.get('kind');
-      if (!(file instanceof File) || !kinds.includes(kind as AssetKind) || kind === 'prompt') return NextResponse.json({ success: false, error: 'asset_file_required' }, { status: 400 });
+      const batchEntries = form.getAll('files');
+      const legacyFile = form.get('file');
+      const entries = batchEntries.length ? batchEntries : legacyFile ? [legacyFile] : [];
+      if (!entries.length || entries.some((entry) => !(entry instanceof File)) || !kinds.includes(kind as AssetKind) || kind === 'prompt') {
+        return NextResponse.json({ success: false, error: 'asset_file_required' }, { status: 400 });
+      }
+      const files = entries as File[];
+      if (files.length > 50 || files.reduce((total, file) => total + file.size, 0) > 250 * 1024 * 1024) {
+        return NextResponse.json({ success: false, error: 'asset_upload_batch_too_large' }, { status: 413 });
+      }
+      if (batchEntries.length) {
+        const assets = createUploadedAssets(accountId, kind as Exclude<AssetKind, 'prompt'>, await Promise.all(files.map(async (file) => ({ name: file.name, type: file.type, size: file.size, arrayBuffer: await file.arrayBuffer() }))));
+        return NextResponse.json({ success: true, data: { assets } }, { status: 201 });
+      }
+      const file = files[0];
       return NextResponse.json({ success: true, data: createUploadedAsset(accountId, kind as Exclude<AssetKind, 'prompt'>, { name: file.name, type: file.type, size: file.size, arrayBuffer: await file.arrayBuffer() }) }, { status: 201 });
     }
     const body = await request.json().catch(() => ({})) as { kind?: unknown; name?: unknown; content?: unknown; url?: unknown; category?: unknown };
@@ -58,6 +71,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       'image_redirect_limit', 'image_file_too_large', 'image_file_empty', 'image_content_invalid',
       'image_content_type_invalid', 'image_url_required', 'external_asset_auth_required',
       'asset_file_invalid', 'asset_file_type_invalid', 'asset_content_required',
+      'asset_upload_batch_too_large',
     ]);
     const status = message === 'external_asset_auth_required' ? 422 : message === 'image_file_too_large' ? 413 : message === 'asset_file_type_invalid' ? 415 : 400;
     return NextResponse.json({ success: false, error: known.has(message) || message.startsWith('image_source_http_') ? message : 'asset_create_failed' }, { status });

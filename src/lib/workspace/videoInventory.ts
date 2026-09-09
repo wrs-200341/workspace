@@ -1,5 +1,5 @@
 import dns from 'node:dns/promises';
-import { createUploadedAsset, getAsset, listAssets, readAssetFile, type WorkspaceAsset } from './assetStore';
+import { createUploadedAsset, getAsset, getAssetFileInfo, listAssets, type WorkspaceAsset } from './assetStore';
 import { listProviderTasks, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
 import { downloadProviderVideoContent } from '@/lib/providers/client';
 import { readStoredVideoOutput, storeVideoOutput } from '@/lib/providers/outputStore';
@@ -11,12 +11,14 @@ const MAX_OUTPUT_BYTES = 100 * 1024 * 1024;
 const MAX_OUTPUTS_PER_TASK = 4;
 const MAX_TOTAL_OUTPUT_BYTES = 400 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
-const TRUSTED_PROVIDER_OUTPUT_HOSTS = new Set(['media.manjuai.top', 'gogrok.iconmoi.com', 'snumom.com', 'video2.crack.cc.cd', 'token.secure-skill.com', 'video.pro666.top']);
+const CACHE_RETRY_DELAY_MS = 5_000;
+const MAX_CACHE_RETRIES = 5;
 
 export type VideoInventoryDependencies = {
   fetcher?: typeof fetch;
   lookup?: (hostname: string) => Promise<LookupAddress[]>;
   excludeAssetIds?: ReadonlySet<string>;
+  localOnly?: boolean;
 };
 
 export type VideoOutputCacheResult = {
@@ -37,20 +39,25 @@ function decodeBase64(value: string): { bytes: Buffer; mimeType: string } | null
   return { bytes, mimeType: match[1].toLowerCase() || 'video/mp4' };
 }
 
+export function localVideoOutputUrls(accountId: string, taskId: string, count: number): string[] {
+  const safeCount = Math.max(0, Math.min(64, Math.floor(count)));
+  return Array.from({ length: safeCount }, (_, index) => `/api/workspace/accounts/${encodeURIComponent(accountId)}/video-tasks/${encodeURIComponent(taskId)}/outputs/${index}`);
+}
+
 async function readUrl(value: string, dependencies: VideoInventoryDependencies): Promise<{ bytes: Buffer; mimeType: string } | null> {
   if (!/^https:\/\//i.test(value)) return null;
+  if (dependencies.localOnly) return null;
   const lookup = dependencies.lookup ?? ((hostname: string) => dns.lookup(hostname, { all: true, verbatim: true }));
   const parsed = new URL(value);
   if (parsed.username || parsed.password || parsed.hash || (parsed.port && parsed.port !== '443')) return null;
   const addresses = await lookup(parsed.hostname);
   const benchmarkMapping = addresses.length > 0 && addresses.every((item) => /^198\.(?:18|19)\./.test(item.address));
-  // Provider media origins are an explicit egress allowlist. The LAN's DNS
-  // proxy may resolve these exact hosts to the 198.18/19 benchmark range; that
-  // mapping is accepted only for the allowlisted origins. Public resolutions
-  // and every non-provider host still pass the standard SSRF validator.
-  const target = TRUSTED_PROVIDER_OUTPUT_HOSTS.has(parsed.hostname.toLowerCase()) && benchmarkMapping
-    ? parsed
-    : await assertPublicTarget(value, async () => addresses);
+  // The LAN's DNS proxy remaps every provider CDN host into the RFC 2544
+  // benchmark range (198.18/19); a resolution that lands entirely inside that
+  // range is accepted regardless of hostname, so onboarding a new provider
+  // never requires a manual allowlist edit. Any other private resolution
+  // still fails the standard SSRF validator below.
+  const target = benchmarkMapping ? parsed : await assertPublicTarget(value, async () => addresses);
   const response = await (dependencies.fetcher ?? fetch)(target.toString(), { redirect: 'error', signal: AbortSignal.timeout(FETCH_TIMEOUT_MS), cache: 'no-store' });
   if (!response.ok) return null;
   const declaredType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
@@ -98,7 +105,7 @@ export async function cacheVideoTaskOutputsLocally(accountId: string, task: Prov
 
   // Authenticated content endpoints are more reliable than a public URL and
   // are the only output source for some Grok-compatible providers.
-  const contentProvider = !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3'].includes(task.provider);
+  const contentProvider = !dependencies.localOnly && !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax'].includes(task.provider);
   if (contentProvider && urls.length === 0) {
     if (!readStoredVideoOutput(accountId, task.id, 0)) {
       try {
@@ -150,6 +157,59 @@ export async function cacheVideoTaskOutputsBeforeCompletion(accountId: string, t
   return { cached, expected, ready: expected > 0 && cached >= expected };
 }
 
+/**
+ * Recover a video task that was left at processing/99 while its outputs were
+ * still being cached locally. This mirrors the image cache recovery path so a
+ * temporary provider or filesystem race does not strand the queue forever.
+ */
+export async function recoverPendingVideoTaskOutputCache(taskId: string, dependencies: VideoInventoryDependencies = {}): Promise<ProviderTask | null> {
+  const task = listProviderTasks().find((candidate) => candidate.id === taskId) ?? null;
+  const recoverableCacheFailure = task?.status === 'failed' && task.error === 'video_output_cache_failed';
+  if (!task || task.mode !== 'video' || (task.status !== 'processing' && !recoverableCacheFailure)) return task;
+  // A terminal cache failure gets one immediate recovery pass, then remains
+  // terminal so repeat reads do not keep hammering a permanently unavailable
+  // provider URL.
+  if (recoverableCacheFailure && task.metadata?.localCacheExhausted === true) return task;
+  const expected = countVideoOutputs(task.provider, task.outputUrls, task.outputBase64, Boolean(task.providerTaskId));
+  if (expected === 0 || task.metadata?.localOutputReady === true) return task;
+  const lastAttempt = typeof task.metadata?.localCacheLastAttemptAt === 'string'
+    ? Date.parse(task.metadata.localCacheLastAttemptAt)
+    : 0;
+  if (!recoverableCacheFailure && lastAttempt && Date.now() - lastAttempt < CACHE_RETRY_DELAY_MS) return task;
+  const attempts = typeof task.metadata?.localCacheAttempts === 'number' && Number.isFinite(task.metadata.localCacheAttempts)
+    ? Math.max(0, Math.floor(task.metadata.localCacheAttempts))
+    : 0;
+  const nextAttempts = attempts + 1;
+  const cache = await cacheVideoTaskOutputsBeforeCompletion(task.accountId, { ...task, status: 'completed', progress: 100 }, dependencies);
+  const attemptMetadata = {
+    ...(task.metadata ?? {}),
+    localCacheAttempts: nextAttempts,
+    localCacheLastAttemptAt: new Date().toISOString(),
+    localOutputCount: cache.cached,
+    localOutputExpected: cache.expected,
+    localOutputReady: cache.ready,
+  };
+  if (cache.ready) {
+    return updateProviderTask(task.id, {
+      status: 'completed',
+      progress: 100,
+      outputUrls: localVideoOutputUrls(task.accountId, task.id, cache.expected),
+      outputBase64: [],
+      error: undefined,
+      metadata: attemptMetadata,
+    });
+  }
+  if (nextAttempts >= MAX_CACHE_RETRIES) {
+    return updateProviderTask(task.id, {
+      status: 'failed',
+      progress: 100,
+      error: 'video_output_cache_failed',
+      metadata: { ...attemptMetadata, localCacheExhausted: true, schedulerState: 'terminal' },
+    });
+  }
+  return updateProviderTask(task.id, { status: 'processing', progress: 99, metadata: attemptMetadata });
+}
+
 /** Cache only one logical output for the review proxy. Concurrent requests for
  * the same task/index share one provider download. */
 export function cacheVideoTaskOutputLocally(accountId: string, task: ProviderTask, index: number, dependencies: VideoInventoryDependencies = {}): Promise<number> {
@@ -160,7 +220,7 @@ export function cacheVideoTaskOutputLocally(accountId: string, task: ProviderTas
   const run = (async () => {
     if (readStoredVideoOutput(accountId, task.id, index)) return 1;
     const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
-    const contentProvider = !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3'].includes(task.provider);
+    const contentProvider = !dependencies.localOnly && !task.outputBase64.length && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax'].includes(task.provider);
     if (contentProvider && urls.length === 0 && index === 0) {
       try {
         const downloaded = await downloadProviderVideoContent(task.provider, task.providerTaskId!);
@@ -214,7 +274,7 @@ function validInventoryAssets(accountId: string, task: ProviderTask): WorkspaceA
     .map((id) => getAsset(accountId, id))
     .filter((asset): asset is WorkspaceAsset => Boolean(asset && asset.accountId === accountId && asset.kind === 'inventory-video'))
     .filter((asset) => {
-      try { return Boolean(readAssetFile(accountId, asset.id)); } catch { return false; }
+      try { return Boolean(getAssetFileInfo(accountId, asset.id)); } catch { return false; }
     });
 }
 
@@ -237,7 +297,7 @@ export async function saveVideoTaskOutputsToAssets(accountId: string, task: Prov
   await cacheVideoTaskOutputsLocally(accountId, task, dependencies);
   const outputs: Array<{ bytes: Buffer; mimeType: string; index: number }> = [];
   const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
-  const contentProvider = !task.outputBase64.length && urls.length === 0 && Boolean(task.providerTaskId) && ['grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3'].includes(task.provider);
+  const contentProvider = !task.outputBase64.length && urls.length === 0 && Boolean(task.providerTaskId) && ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'oairegbox-omni', 'minimax-h3', 'miku-minimax'].includes(task.provider);
   const contentCached = contentProvider && Boolean(readStoredVideoOutput(accountId, task.id, 0));
   if (contentCached) {
     const local = readStoredVideoOutput(accountId, task.id, 0);
@@ -265,7 +325,7 @@ export async function saveVideoTaskOutputsToAssets(accountId: string, task: Prov
     listAssets(accountId, 'inventory-video')
       .filter((asset) => {
         if (dependencies.excludeAssetIds?.has(asset.id)) return false;
-        try { return Boolean(readAssetFile(accountId, asset.id)); } catch { return false; }
+        try { return Boolean(getAssetFileInfo(accountId, asset.id)); } catch { return false; }
       })
       .map((asset) => [asset.name, asset] as const),
   );

@@ -83,13 +83,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         const assets = await saveImageTaskOutputsToAssets(id, persisted);
         const existing = listImageTaskInventoryAssets(id, persisted);
         const allAssets = [...existing, ...assets].filter((asset, index, all) => all.findIndex((candidate) => candidate.id === asset.id) === index);
-        if (allAssets.length === 0) {
+        const expectedOutputs = persisted.outputUrls.filter((value) => value.trim()).length + persisted.outputBase64.filter((value) => value.trim()).length;
+        if (allAssets.length === 0 || (expectedOutputs > 0 && allAssets.length < expectedOutputs)) {
           return NextResponse.json({ success: false, error: 'image_outputs_unavailable' }, { status: 409 });
         }
         const updated = updateProviderTask(taskId, {
           status: persisted.status,
           progress: persisted.progress,
-          inventorySavedAt: new Date().toISOString(),
+          // Repeated requests are idempotent and must not create a second
+          // inventory event or move an old task into today's counter.
+          inventorySavedAt: persisted.inventorySavedAt ?? new Date().toISOString(),
           metadata: { ...(persisted.metadata ?? {}), inventoryAssetIds: allAssets.map((asset) => asset.id) },
         });
         return NextResponse.json({ success: true, data: updated, assets: allAssets });

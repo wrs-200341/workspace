@@ -18,7 +18,7 @@ describe('workspace task inventory rules', () => {
   it('counts only inventory timestamps, including multiple outputs', () => {
     expect(isInventorySavedToday(tasks[0], now)).toBe(true);
     expect(isInventorySavedToday(tasks[2], now)).toBe(false);
-    expect(summarizeWorkspaceTasks(tasks, now).inventorySavedToday).toBe(2);
+    expect(summarizeWorkspaceTasks(tasks, now).inventorySavedToday).toBe(1);
   });
 
   it('does not count completed tasks until inventory is saved', () => {

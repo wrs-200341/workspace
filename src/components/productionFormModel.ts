@@ -2,6 +2,7 @@ import type { ProviderId } from '@/lib/providers/config';
 import { validateGenerationRequest } from '@/lib/providers/validation';
 import type { VideoCapability } from '@/lib/workspace/production/video-capabilities';
 import { validateVideoCapability } from '@/lib/workspace/production/video-capabilities';
+import { validateTaskNaming, type TaskNameMode } from '@/lib/workspace/taskNaming';
 
 export type PromptMode = 'manual' | 'asset-template-child-prompt';
 export type ProductionAssetSelection = { id: string; kind: 'image' | 'product-image' | 'inventory-video' | 'audio' };
@@ -38,6 +39,8 @@ export type ProductionFormValues = {
   referenceVideoCount?: number;
   referenceAudioCount?: number;
   pid?: string;
+  taskNameMode?: TaskNameMode;
+  taskName?: string;
 };
 
 export function normalizeReferenceList(value: string): string[] {
@@ -46,7 +49,7 @@ export function normalizeReferenceList(value: string): string[] {
 
 export function validateProductionInput(
   mode: 'image' | 'prompt' | 'video',
-  values: Pick<ProductionFormValues, 'prompt' | 'provider' | 'referenceImages' | 'referenceVideos' | 'referenceAudios' | 'duration' | 'aspectRatio' | 'resolution'> & Pick<ProductionFormValues, 'referenceImageCount' | 'referenceVideoCount' | 'referenceAudioCount'>,
+  values: Pick<ProductionFormValues, 'prompt' | 'provider' | 'model' | 'referenceImages' | 'referenceVideos' | 'referenceAudios' | 'duration' | 'aspectRatio' | 'resolution' | 'taskNameMode' | 'taskName'> & Pick<ProductionFormValues, 'referenceImageCount' | 'referenceVideoCount' | 'referenceAudioCount'>,
   capability?: VideoCapability,
 ): Error | null {
   if (!values.prompt.trim()) return new Error(mode === 'prompt' ? '请输入商品上下文或提示词' : '请输入提示词');
@@ -56,6 +59,8 @@ export function validateProductionInput(
   const imageCount = values.referenceImageCount ?? images.length;
   const videoCount = values.referenceVideoCount ?? videos.length;
   const audioCount = values.referenceAudioCount ?? audios.length;
+  const taskNameError = validateTaskNaming(values.taskNameMode, values.taskName?.trim() || undefined, imageCount);
+  if (mode !== 'prompt' && taskNameError) return new Error(taskNameError);
   if (mode === 'video' && capability) {
     try {
       validateVideoCapability(capability, {
@@ -75,6 +80,7 @@ export function validateProductionInput(
     if (mode !== 'prompt' && values.provider) {
       validateGenerationRequest({
         provider: values.provider as ProviderId,
+        model: values.model,
         duration: values.duration,
         aspectRatio: values.aspectRatio,
         resolution: values.resolution,
@@ -119,6 +125,8 @@ export function buildGenerationPayload(mode: 'image' | 'prompt' | 'video', value
     referenceAudioAssetIds: [...(values.referenceAudioAssetIds ?? [])],
     productImageAssetIds: [...(values.productImageAssetIds ?? [])],
     referenceAssetOrder: (values.referenceAssetOrder ?? []).map((item) => ({ id: item.id, kind: item.kind })),
+    taskNameMode: values.taskNameMode,
+    ...(values.taskNameMode === 'manual' && values.taskName?.trim() ? { taskName: values.taskName.trim() } : {}),
     ...(values.pid?.trim() ? { pid: values.pid.trim() } : {}),
   };
 }

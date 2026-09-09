@@ -28,8 +28,8 @@ describe('dashboard production statistics', () => {
       failed: 1,
       paused: 1,
       successfulOutputs: 4,
-      inventorySavedToday: 2,
-      completedNotInInventory: 2,
+      inventorySavedToday: 1,
+      completedNotInInventory: 1,
       activeAccountsToday: 1,
     });
   });

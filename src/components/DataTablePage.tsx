@@ -4,7 +4,7 @@ import { formatCompact } from '@/lib/earningsTrend';
 import { WorkspaceClient } from './WorkspaceClient';
 import type { AuthUser } from '@/lib/auth/policy';
 import { listStoredAccounts } from '@/lib/workspace/accountStore';
-import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
+import { getServerWorkspaceTaskCounters } from '@/lib/workspace/serverTasks';
 import { withLiveAccountStatsList } from '@/lib/workspace/accountStats';
 import { getDashboardSnapshot } from '@/lib/workspace/dashboardStats';
 import { getWorkspaceOperatorForUser } from '@/lib/workspace/data';
@@ -50,7 +50,10 @@ export function AccountsPage() {
 export function WorkspacePage({ user }: { user: AuthUser }) {
   const ownerId = user.role === 'admin' || user.role === 'operator' ? undefined : getWorkspaceOperatorForUser(user.username, user.displayName).id;
   const storedAccounts = listStoredAccounts(ownerId ? { ownerId } : {});
-  return <WorkspaceClient user={user} initialAccounts={withLiveAccountStatsList(storedAccounts)} initialTasks={getServerWorkspaceTasks(ownerId ? { ownerId } : {})} />;
+  // Aggregate the five landing-page counters server-side. Queue/review pages
+  // still use getServerWorkspaceTasks with full output metadata.
+  const initialTaskCounters = getServerWorkspaceTaskCounters(ownerId ? { ownerId } : {});
+  return <WorkspaceClient user={user} initialAccounts={withLiveAccountStatsList(storedAccounts)} initialTaskCounters={initialTaskCounters} />;
 }
 
 function Metric({ label, value, hint }: { label: string; value: string; hint: string }) {

@@ -25,6 +25,16 @@ describe('recovered video production capabilities', () => {
     expect(capability.resolutions).toEqual(['480p', '720p']);
   });
 
+  it('exposes YuanAI Grok preview capabilities and 1080p default', () => {
+    const capability = getVideoCapability('yuanai-grok-video', 'grok-imagine-video-1.5-preview');
+    expect(getVideoDurationOptions(capability)).toEqual([6, 10, 12, 16, 20]);
+    expect(getDefaultVideoDuration(capability)).toBe(10);
+    expect(getDefaultVideoResolution(capability)).toBe('1080p');
+    expect(capability.referenceImages.max).toBe(7);
+    expect(capability.referenceVideos.max).toBe(0);
+    expect(capability.referenceAudios.max).toBe(0);
+  });
+
   it('exposes sd-mini fixed-price duration, ratio, resolution and reference limits', () => {
     const capability = getVideoCapability('grok-video', 'sd-mini');
     expect(capability.duration).toEqual({ min: 5, max: 15, values: [5, 10, 15] });
@@ -49,9 +59,13 @@ describe('recovered video production capabilities', () => {
 
   it('keeps MGRouter file-audio and Wan multimodal limits separate', () => {
     expect(getVideoCapability('mgrouter-grok-video', 'grok').referenceAudios).toEqual({ min: 0, max: 0, required: false });
+    expect(getVideoCapability('wan3-video', 'wan3.0-r2v').referenceImages.max).toBe(10);
+    expect(getVideoCapability('wan3-video', 'wan3.0-r2v').referenceVideos).toEqual({ min: 0, max: 5, required: false });
+    expect(getVideoCapability('wan3-video', 'wan3.0-r2v').referenceAudios).toEqual({ min: 0, max: 5, required: false });
+  });
+
+  it('still resolves retired prime ids so restored tasks keep loading', () => {
     expect(getVideoCapability('wan3-video', 'wan3.0-prime-r2v').referenceImages.max).toBe(10);
-    expect(getVideoCapability('wan3-video', 'wan3.0-prime-r2v').referenceVideos).toEqual({ min: 0, max: 5, required: false });
-    expect(getVideoCapability('wan3-video', 'wan3.0-prime-r2v').referenceAudios).toEqual({ min: 0, max: 5, required: false });
   });
 
   it('uses secure-skill MiniMax H3 limits and rejects reference video', () => {
@@ -83,13 +97,13 @@ describe('recovered video production capabilities', () => {
     expect(mgrouter.referenceAudios.max).toBe(0);
     expect(getVideoCapability('mgrouter-grok-video', 'grok-video').referenceAudios.max).toBe(0);
 
-    const wan = getVideoCapability('wan3-video', 'wan3.0-prime-r2v');
+    const wan = getVideoCapability('wan3-video', 'wan3.0-r2v');
     expect(wan.referenceVideos.max).toBeGreaterThan(0);
     expect(wan.referenceAudios.max).toBeGreaterThan(0);
   });
 
   it('derives deterministic defaults from capability rather than hard-coded UI values', () => {
-    const capability = getVideoCapability('wan3-video', 'wan3.0-prime-r2v');
+    const capability = getVideoCapability('wan3-video', 'wan3.0-r2v');
     expect(getVideoDurationOptions(capability)).toEqual([5, 8, 10, 15]);
     expect(getDefaultVideoDuration(capability)).toBe(10);
     expect(getDefaultVideoAspectRatio(capability.aspectRatios)).toBe('9:16');

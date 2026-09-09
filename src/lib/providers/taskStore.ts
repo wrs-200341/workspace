@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { getWorkspacePath } from '../storagePaths';
 import { getProviderCatalog, type ProviderId } from './config';
-import { dedupeVideoOutputUrls } from './videoOutputUrls';
+import { countVideoOutputs, dedupeVideoOutputUrls } from './videoOutputUrls';
+import { classifyTaskError, type TaskErrorInfo } from './taskErrorInfo';
 
 export type ProviderTaskMode = 'image' | 'video' | 'prompt';
 export type ProviderTaskStatus = 'draft' | 'queued' | 'prompting' | 'submitting' | 'submitted' | 'processing' | 'running' | 'retrying' | 'completed' | 'failed' | 'cancelled' | 'paused';
@@ -27,6 +28,19 @@ export type ProviderTask = {
   metadata?: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+};
+
+/**
+ * Small projection used by overview pages. Keeping this separate from
+ * ProviderTask is important: persisted task metadata may contain prompt
+ * context, provider responses and output payloads that the overview never
+ * renders.
+ */
+export type ProviderTaskSummary = Pick<ProviderTask, 'id' | 'accountId' | 'mode' | 'provider' | 'model' | 'status' | 'progress' | 'providerTaskId' | 'error' | 'inventorySavedAt' | 'createdAt' | 'updatedAt'> & {
+  prompt?: string;
+  outputCount: number;
+  metadata?: Record<string, unknown>;
+  errorInfo?: TaskErrorInfo;
 };
 
 export type CreateProviderTaskInput = {
@@ -74,18 +88,48 @@ function ensureStoreDirectory(): void {
   fs.mkdirSync(path.dirname(providerTasksPath()), { recursive: true });
 }
 
+let cachedMtimeMs = 0;
+let cachedSize = -1;
+let cachedFile = '';
+let cachedTasks: ProviderTask[] = [];
+
 function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+function cloneFast(task: ProviderTask): ProviderTask {
+  return {
+    ...task,
+    outputUrls: task.outputUrls ? [...task.outputUrls] : [],
+    outputBase64: task.outputBase64 ? [...task.outputBase64] : [],
+    metadata: task.metadata ? { ...task.metadata } : undefined,
+    providerResponse: task.providerResponse ? JSON.parse(JSON.stringify(task.providerResponse)) : undefined,
+  };
+}
+
 function readTasks(): ProviderTask[] {
   const file = providerTasksPath();
+  if (file === cachedFile && (pendingPersist || persistInFlight)) return cachedTasks;
   try {
+    const stat = fs.statSync(file);
+    if (file === cachedFile && stat.mtimeMs === cachedMtimeMs && stat.size === cachedSize) {
+      return cachedTasks;
+    }
     const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
     if (!Array.isArray(parsed)) throw new Error('provider_tasks_invalid_store');
-    return parsed.map(normalizeStoredTask);
+    cachedMtimeMs = stat.mtimeMs;
+    cachedSize = stat.size;
+    cachedFile = file;
+    cachedTasks = parsed.map(normalizeStoredTask);
+    return cachedTasks;
   } catch (error) {
-    if (isMissingFile(error)) return [];
+    if (isMissingFile(error)) {
+      cachedMtimeMs = 0;
+      cachedSize = -1;
+      cachedFile = file;
+      cachedTasks = [];
+      return [];
+    }
     if (error instanceof SyntaxError) throw new Error('provider_tasks_invalid_store');
     throw error;
   }
@@ -94,13 +138,108 @@ function readTasks(): ProviderTask[] {
 function writeTasks(tasks: readonly ProviderTask[]): void {
   ensureStoreDirectory();
   const file = providerTasksPath();
+  // Keep unit-test writes deterministic. Production uses the coalesced async
+  // path below so a burst of scheduler updates does not synchronously rewrite
+  // the entire (potentially tens-of-megabytes) task store on every transition.
+  if (process.env.NODE_ENV === 'test') {
+    writeTasksSync(file, tasks);
+    return;
+  }
+  const snapshot = [...tasks];
+  // Make the store path exist immediately for first-run health checks. The
+  // complete snapshot is flushed asynchronously a few milliseconds later.
+  if (!fs.existsSync(file)) fs.writeFileSync(file, '[]', { encoding: 'utf8', mode: 0o600 });
+  cachedMtimeMs = 0;
+  cachedSize = -1;
+  cachedFile = file;
+  cachedTasks = snapshot;
+  pendingPersist = snapshot;
+  schedulePersist();
+}
+
+function writeTasksSync(file: string, tasks: readonly ProviderTask[]): void {
   const temporary = `${file}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
   try {
     fs.writeFileSync(temporary, JSON.stringify(tasks, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(temporary, file);
+    try {
+      const stat = fs.statSync(file);
+      cachedMtimeMs = stat.mtimeMs;
+      cachedSize = stat.size;
+      cachedFile = file;
+      cachedTasks = [...tasks];
+    } catch {
+      cachedMtimeMs = 0;
+      cachedSize = -1;
+      cachedFile = file;
+      cachedTasks = [];
+    }
   } finally {
     if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
   }
+}
+
+let pendingPersist: ProviderTask[] | null = null;
+let persistTimer: ReturnType<typeof setTimeout> | null = null;
+let persistInFlight = false;
+
+function schedulePersist(): void {
+  if (persistTimer || persistInFlight) return;
+  persistTimer = setTimeout(() => {
+    persistTimer = null;
+    void flushPersist();
+  }, 25);
+  persistTimer.unref?.();
+}
+
+async function flushPersist(): Promise<void> {
+  if (persistInFlight || !pendingPersist) return;
+  const snapshot = pendingPersist;
+  pendingPersist = null;
+  persistInFlight = true;
+  const file = providerTasksPath();
+  const temporary = `${file}.${process.pid}.${Date.now()}.${crypto.randomUUID()}.tmp`;
+  try {
+    await fs.promises.writeFile(temporary, JSON.stringify(snapshot, null, 2), { encoding: 'utf8', mode: 0o600 });
+    await fs.promises.rename(temporary, file);
+    try {
+      const stat = await fs.promises.stat(file);
+      // Do not replace a newer in-memory snapshot that arrived while the
+      // previous disk write was in flight.
+      if (!pendingPersist) {
+        cachedMtimeMs = stat.mtimeMs;
+        cachedSize = stat.size;
+        cachedFile = file;
+        cachedTasks = snapshot;
+      }
+    } catch {
+      // The in-memory cache remains authoritative until the next flush.
+    }
+  } catch {
+    // Keep the latest snapshot queued for a later retry; transient disk errors
+    // must not turn a successful provider task into a failed request.
+    pendingPersist = pendingPersist ? [...pendingPersist] : snapshot;
+  } finally {
+    persistInFlight = false;
+    try { if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true }); } catch { /* best effort cleanup */ }
+    if (pendingPersist) schedulePersist();
+  }
+}
+
+/** Flush coalesced task updates before a maintenance process exits. */
+export async function flushProviderTaskStore(): Promise<void> {
+  if (persistTimer) {
+    clearTimeout(persistTimer);
+    persistTimer = null;
+  }
+  for (let attempt = 0; attempt < 200 && (pendingPersist || persistInFlight); attempt += 1) {
+    if (persistInFlight) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      continue;
+    }
+    await flushPersist();
+  }
+  if (pendingPersist || persistInFlight) throw new Error('provider_tasks_flush_failed');
 }
 
 function isMissingFile(error: unknown): boolean {
@@ -233,14 +372,82 @@ export function listProviderTasks(filters: ProviderTaskFilters = {}): ProviderTa
     .filter((task) => !filters.provider || task.provider === filters.provider)
     .filter((task) => !filters.status || task.status === filters.status)
     .filter((task) => !filters.providerTaskId || task.providerTaskId === filters.providerTaskId)
-    .map((task) => clone(task));
+    .map((task) => cloneFast(task));
+}
+
+function summaryMetadata(metadata: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!metadata) return undefined;
+  const result: Record<string, unknown> = {};
+  // These fields are the only metadata consumed by workspace overview
+  // projections (owner, PID/name and inventory output counts).
+  for (const key of [
+    'ownerId', 'pid', 'referenceImageName', 'taskNameMode', 'taskName', 'taskNameSequence', 'sequence',
+    'schedulerState', 'schedulerOwnerId', 'schedulerMode', 'schedulerModel', 'schedulerRuntimeId',
+    'execution', 'promptGenerationPending', 'promptProvider', 'promptModel', 'promptMode',
+    'localOutputReady', 'localOutputCount', 'localOutputExpected',
+  ]) {
+    const value = metadata[key];
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') result[key] = value;
+  }
+  const inventoryIds = metadata.inventoryAssetIds;
+  if (Array.isArray(inventoryIds)) {
+    result.inventoryAssetIds = inventoryIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim())).slice(0, MAX_ARRAY_ITEMS);
+  }
+  const fallbackProviders = metadata.promptFallbackProviders;
+  if (Array.isArray(fallbackProviders)) {
+    result.promptFallbackProviders = fallbackProviders.filter((value): value is string => typeof value === 'string').slice(0, MAX_ARRAY_ITEMS);
+  }
+  return Object.keys(result).length ? result : undefined;
+}
+
+/** Read only the fields needed by overview counters and cards. */
+export function listProviderTaskSummaries(filters: ProviderTaskFilters = {}): ProviderTaskSummary[] {
+  return readTasks()
+    .filter((task) => !filters.accountId || task.accountId === filters.accountId)
+    .filter((task) => !filters.mode || task.mode === filters.mode)
+    .filter((task) => !filters.provider || task.provider === filters.provider)
+    .filter((task) => !filters.status || task.status === filters.status)
+    .filter((task) => !filters.providerTaskId || task.providerTaskId === filters.providerTaskId)
+    .map((task) => {
+      const inventoryIds = Array.isArray(task.metadata?.inventoryAssetIds)
+        ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
+        : [];
+      const outputCount = task.inventorySavedAt && inventoryIds.length > 0
+        ? inventoryIds.length
+        : countTaskOutputs(task);
+      const errorInfo = classifyTaskError(task);
+      return {
+        id: task.id,
+        accountId: task.accountId,
+        mode: task.mode,
+        provider: task.provider,
+        ...(task.model ? { model: task.model } : {}),
+        ...(task.prompt ? { prompt: task.prompt.slice(0, 120) } : {}),
+        status: task.status,
+        progress: task.progress,
+        ...(task.providerTaskId ? { providerTaskId: task.providerTaskId } : {}),
+        ...(task.error ? { error: task.error } : {}),
+        ...(errorInfo ? { errorInfo } : {}),
+        ...(task.inventorySavedAt ? { inventorySavedAt: task.inventorySavedAt } : {}),
+        createdAt: task.createdAt,
+        updatedAt: task.updatedAt,
+        outputCount,
+        ...(summaryMetadata(task.metadata) ? { metadata: summaryMetadata(task.metadata) } : {}),
+      };
+    });
+}
+
+function countTaskOutputs(task: ProviderTask): number {
+  return task.mode === 'video'
+    ? countVideoOutputs(task.provider, task.outputUrls, task.outputBase64, Boolean(task.providerTaskId))
+    : task.outputUrls.filter((value) => value.trim()).length + task.outputBase64.filter((value) => value.trim()).length;
 }
 
 export function getProviderTask(id: string): ProviderTask | null {
   const normalizedId = text(id);
   if (!normalizedId) return null;
   const task = readTasks().find((candidate) => candidate.id === normalizedId);
-  return task ? clone(task) : null;
+  return task ? cloneFast(task) : null;
 }
 
 export function updateProviderTask(id: string, patch: ProviderTaskPatch): ProviderTask | null {

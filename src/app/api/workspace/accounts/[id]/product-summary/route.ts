@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { assertAssetAccountId } from '@/lib/workspace/assetStore';
-import { getProductSummaryWorkbookInfo, saveProductSummaryWorkbook } from '@/lib/workspace/productSummary';
+import { getProductSummaryWorkbookInfo, lookupProductSummaryForAccount, saveProductSummaryWorkbook } from '@/lib/workspace/productSummary';
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -11,7 +11,10 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   let accountId: string;
   try { accountId = assertAssetAccountId(id); } catch { return NextResponse.json({ success: false, error: 'account_id_invalid' }, { status: 400 }); }
   if (!canAccessWorkspaceAccount(auth, accountId)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
-  return NextResponse.json({ success: true, data: getProductSummaryWorkbookInfo(accountId) });
+  const referenceName = _request.nextUrl.searchParams.get('referenceName')?.trim() || '';
+  const info = getProductSummaryWorkbookInfo(accountId);
+  const match = referenceName ? lookupProductSummaryForAccount(accountId, referenceName) : null;
+  return NextResponse.json({ success: true, data: { ...info, match } });
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {

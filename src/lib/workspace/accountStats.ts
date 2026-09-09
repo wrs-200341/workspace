@@ -82,30 +82,16 @@ export function withLiveAccountStats(account: WorkspaceAccount): WorkspaceAccoun
 }
 
 export function withLiveAccountStatsList(accounts: readonly WorkspaceAccount[]): WorkspaceAccount[] {
-  // Read the provider task store once for an account list. Admin workspaces
-  // can contain many accounts, and rereading the same JSON file per card adds
-  // avoidable latency while producing the same result.
-  const videoTasksByAccount = new Map<string, ProviderTask[]>();
-  for (const task of listProviderTasks({ mode: 'video' })) {
-    const current = videoTasksByAccount.get(task.accountId) ?? [];
-    videoTasksByAccount.set(task.accountId, [...current, task]);
-  }
   return accounts.map((account) => {
     const assets = listAssets(account.id);
     const assetCounts: Record<AssetKind, number> = { ...EMPTY_ASSET_COUNTS };
     for (const asset of assets) assetCounts[asset.kind] += 1;
-    const successful = (videoTasksByAccount.get(account.id) ?? [])
-      .map((task) => ({ task, outputs: outputCount(task) }))
-      .filter(({ task, outputs }) => task.status === 'completed' && outputs > 0);
-    const videoCount = assetCounts['inventory-video'];
-    const publishedCount = 0;
-    const successfulVideoOutputCount = successful.reduce((sum, item) => sum + item.outputs, 0);
     return {
       ...account,
       promptCount: assetCounts.prompt,
       fileCount: assetCounts.image,
-      videoCount,
-      publishedCount,
+      videoCount: assetCounts['inventory-video'],
+      publishedCount: 0,
     };
   });
 }

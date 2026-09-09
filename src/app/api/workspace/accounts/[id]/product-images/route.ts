@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
-import { importProductImages, listProductImageFolders, listProductImages, queryProductGallery, scheduleProductImageCleanup } from '@/lib/workspace/productImages';
+import { importProductImages, listProductImageFolders, listProductImages, queryProductGallery, readProductImageFolder, scheduleProductImageCleanup } from '@/lib/workspace/productImages';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -13,15 +13,18 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const query = request.nextUrl.searchParams.get('query')?.trim();
     const limit = boundedInteger(request.nextUrl.searchParams.get('limit'), 50, 1, 100);
     const offset = boundedInteger(request.nextUrl.searchParams.get('offset'), 0, 0, 1_000_000);
+    const pid = request.nextUrl.searchParams.get('pid')?.trim() || '';
     const gallery = query || request.nextUrl.searchParams.has('source')
       ? await queryProductGallery({ query, membership: request.nextUrl.searchParams.get('membership') || undefined, category: request.nextUrl.searchParams.get('category') || undefined, limit, offset })
       : undefined;
     const normalizedGallery = gallery?.map((item) => item.coverUrl
       ? { ...item, coverUrl: `/api/workspace/product-images/remote-preview?pid=${encodeURIComponent(item.pid)}` }
       : item);
-    const imported = listProductImages().filter((item) => item.accountId === 'shared' || item.accountId === id);
-    const folders = listProductImageFolders().filter((item) => item.accountId === 'shared' || item.accountId === id);
-    return NextResponse.json({ success: true, data: { accountId: id, imported, folders, ...(normalizedGallery ? { gallery: normalizedGallery } : {}) } });
+    const imported = listProductImages();
+    // Shared product gallery: folder detail lookups are global, not per-account.
+    const folders = pid ? readProductImageFolder(undefined, pid) : undefined;
+    const folderList = listProductImageFolders(undefined);
+    return NextResponse.json({ success: true, data: { accountId: id, imported, folders: folderList, ...(folders ? { folder: folders } : {}), ...(normalizedGallery ? { gallery: normalizedGallery } : {}) } });
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'product_gallery_failed' }, { status: 502 });
   }

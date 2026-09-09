@@ -3,12 +3,16 @@ import { getProviderCatalog, getProviderConfig, isLiveProviderEnabled, isLivePro
 
 describe('provider configuration safety', () => {
   it('exposes catalog without requiring secrets', () => {
-    expect(getProviderCatalog().map((provider) => provider.id)).toEqual(expect.arrayContaining(['grok-video', 'mgrouter-grok-image', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'pro666-video', 'yuanai-gemini-prompt', 'yuanai-image', 'pomoai-gemini-image', 'gpt-2999-prompt', 'oairegbox-omni']));
+    expect(getProviderCatalog().map((provider) => provider.id)).toEqual(expect.arrayContaining(['grok-video', 'yuanai-grok-video', 'mgrouter-grok-image', 'mgrouter-grok-video', 'wan3-video', 'minimax-h3', 'pro666-video', 'yuanai-gemini-prompt', 'yuanai-image', 'aicloud-gpt-image', 'pomoai-gemini-image', 'pomoai-gpt-prompt', 'oairegbox-gpt-prompt', 'gpt-2999-prompt', 'oairegbox-omni']));
     expect(isLiveProviderEnabled()).toBe(false);
     expect(isLiveProvidersAllowed()).toBe(false);
     expect(isProviderLiveEnabled('grok-video')).toBe(false);
     expect(isProviderLiveEnabled('minimax-h3')).toBe(false);
+    expect(isProviderLiveEnabled('yuanai-grok-video', { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_GROK_VIDEO_API_KEY: 'test-key' })).toBe(true);
     expect(isProviderLiveEnabled('pro666-video')).toBe(false);
+    expect(isProviderLiveEnabled('aicloud-gpt-image', { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', AICLOUD_API_KEY: 'test-key' })).toBe(true);
+    expect(isProviderLiveEnabled('pomoai-gpt-prompt', { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', POMOAI_GPT_PROMPT_API_KEY: 'test-key' })).toBe(true);
+    expect(isProviderLiveEnabled('oairegbox-gpt-prompt', { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', OAIREGBOX_GPT_PROMPT_API_KEY: 'test-key' })).toBe(true);
   });
 
   it('allows only exact provider origins', () => {
@@ -20,6 +24,8 @@ describe('provider configuration safety', () => {
     expect(validateProviderUrl('minimax-h3', 'https://token.secure-skill.com/v1/videos')).toBe(true);
     expect(validateProviderUrl('minimax-h3', 'https://api.manjuai.top/v1/videos/generations')).toBe(false);
     expect(validateProviderUrl('pro666-video', 'https://api.pro666.top/v1/videos')).toBe(true);
+    expect(validateProviderUrl('aicloud-gpt-image', 'https://aiclound.vip/v1/images/generations')).toBe(true);
+    expect(validateProviderUrl('aicloud-gpt-image', 'https://evil.example/v1/images/generations')).toBe(false);
   });
 
   it('returns safe defaults and never exposes keys', () => {
@@ -28,9 +34,15 @@ describe('provider configuration safety', () => {
     expect(config.apiKey).toBeUndefined();
     expect(Object.keys(config)).not.toContain('authorization');
     expect(getProviderConfig('mgrouter-grok-video').model).toBe('grok-imagine-video-1.5');
+    expect(getProviderConfig('yuanai-grok-video').model).toBe('grok-imagine-video-1.5-preview');
     expect(getProviderConfig('minimax-h3').baseUrl).toBe('https://token.secure-skill.com');
     expect(getProviderConfig('minimax-h3').model).toBe('minimax-h3');
     expect(getProviderConfig('pro666-video').baseUrl).toBe('https://api.pro666.top');
     expect(getProviderConfig('pro666-video').model).toBe('sd2-933-mini');
+    expect(getProviderConfig('aicloud-gpt-image').baseUrl).toBe('https://aiclound.vip');
+    expect(getProviderConfig('aicloud-gpt-image').modelOptions).toEqual(['gpt-image-2.5', 'gpt-image-2.5-plus']);
+    expect(getProviderConfig('aicloud-gpt-image').modelResolutions?.['gpt-image-2.5-plus']).toEqual(['2k', '4k']);
+    expect(getProviderConfig('pomoai-gpt-prompt').baseUrl).toBe('https://www.pomoai.ai/v1');
+    expect(getProviderConfig('oairegbox-gpt-prompt').model).toBe('gpt-5.5');
   });
 });

@@ -7,8 +7,8 @@
 // Keep the complete aspect-ratio contract exposed by snumom's sd-mini model.
 // Existing models continue to advertise only the ratios they support via
 // their individual capability entries.
-export const VIDEO_ASPECT_RATIOS = ['9:16', '16:9', '1:1', '21:9', '4:3', '3:4', '9:21', 'auto'] as const;
-export const VIDEO_RESOLUTIONS = ['480p', '720p', '1080p', '1440p', '480P', '720P', '2K'] as const;
+export const VIDEO_ASPECT_RATIOS = ['9:16', '16:9', '1:1', '21:9', '4:3', '3:4', '2:3', '3:2', '9:21', 'auto'] as const;
+export const VIDEO_RESOLUTIONS = ['480p', '720p', '768p', '1080p', '1440p', '480P', '720P', '2K'] as const;
 export type VideoAspectRatio = typeof VIDEO_ASPECT_RATIOS[number];
 export type VideoResolution = typeof VIDEO_RESOLUTIONS[number];
 export const DEFAULT_VIDEO_ASPECT_RATIO: VideoAspectRatio = '9:16';
@@ -35,6 +35,8 @@ export interface VideoCapability {
   resolutions: readonly VideoResolution[];
   /** Optional supplier-specific default; otherwise the highest supported value is used. */
   defaultResolution?: VideoResolution;
+  /** Optional supplier-specific default duration; otherwise 10s (or the highest option). */
+  defaultDuration?: number;
   /** Optional per-duration resolution restrictions (e.g. sd-mini's 720p/10s rule). */
   resolutionByDuration?: Readonly<Record<number, readonly VideoResolution[]>>;
   referenceImages: ReferenceCapability;
@@ -158,6 +160,17 @@ const CAPABILITIES: Record<string, VideoCapability> = {
     referenceVideos: none,
     referenceAudios: none,
   },
+  // YuanAI/Qingfeng Grok Imagine Video 1.5 preview contract.
+  'yuanai-grok-video:grok-imagine-video-1.5-preview': {
+    duration: { min: 6, max: 20, values: [6, 10, 12, 16, 20] },
+    aspectRatios: ['16:9', '9:16', '1:1', '4:3', '3:4', '2:3', '3:2'],
+    defaultAspectRatio: '9:16',
+    resolutions: ['480p', '720p', '1080p'],
+    defaultResolution: '1080p',
+    referenceImages: imageRefs(7),
+    referenceVideos: none,
+    referenceAudios: none,
+  },
   'minimax:minimax-h3': {
     duration: { min: 4, max: 15, values: [4, 6, 8, 10, 12, 15] },
     aspectRatios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'],
@@ -197,8 +210,19 @@ const CAPABILITIES: Record<string, VideoCapability> = {
     referenceVideos: none,
     referenceAudios: none,
   },
-  // ManjuAI Wan 3 prime R2V accepts image/video/audio multimodal references.
-  'wan3-video:wan3.0-prime-r2v': {
+  // MikuAPI MiniMax H3 Max: 5-15s, 480p/768p, wide reference allowance.
+  'miku-minimax:minimax-h3-max': {
+    duration: { min: 5, max: 15, values: [5, 6, 8, 10, 12, 15] },
+    aspectRatios: ['9:16', '16:9', '1:1'],
+    resolutions: ['480p', '768p'],
+    defaultResolution: '768p',
+    defaultDuration: 10,
+    referenceImages: imageRefs(12),
+    referenceVideos: imageRefs(12),
+    referenceAudios: imageRefs(12),
+  },
+  // ManjuAI Wan 3 R2V accepts image/video/audio multimodal references.
+  'wan3-video:wan3.0-r2v': {
     duration: { min: 5, max: 15, values: [5, 8, 10, 15] },
     aspectRatios: ['9:16', '16:9', '1:1'],
     resolutions: ['480P', '720P'],
@@ -235,8 +259,11 @@ CAPABILITIES['grok-video:grok-video-1.5（按秒）'] = CAPABILITIES['grok-video
 CAPABILITIES['grok-video:grok-video-1.5-preview'] = CAPABILITIES['grok-video:grok-video-1.5'];
 CAPABILITIES['mgrouter-grok-video:grok-imagine-video-1.5'] = CAPABILITIES['mgrouter-grok-video:grok'];
 CAPABILITIES['mgrouter-grok-video:grok-video'] = CAPABILITIES['mgrouter-grok-video:grok'];
-CAPABILITIES['manjuai:wan3-prime-r2v'] = CAPABILITIES['wan3-video:wan3.0-prime-r2v'];
-CAPABILITIES['wan3-video:wan3-prime-r2v'] = CAPABILITIES['wan3-video:wan3.0-prime-r2v'];
+CAPABILITIES['manjuai:wan3-prime-r2v'] = CAPABILITIES['wan3-video:wan3.0-r2v'];
+CAPABILITIES['wan3-video:wan3-prime-r2v'] = CAPABILITIES['wan3-video:wan3.0-r2v'];
+// Prime ids are retired from the selector; keep them resolvable so restored
+// historical tasks still load instead of throwing.
+CAPABILITIES['wan3-video:wan3.0-prime-r2v'] = CAPABILITIES['wan3-video:wan3.0-r2v'];
 CAPABILITIES['minimax-h3:minimax-h3'] = CAPABILITIES['minimax:minimax-h3'];
 
 export const VIDEO_CAPABILITY_CONFIGS: Readonly<Record<string, VideoCapability>> = CAPABILITIES;
@@ -259,6 +286,7 @@ export function getVideoDurationOptions(capability: VideoCapability): number[] {
 
 export function getDefaultVideoDuration(capability: VideoCapability): number {
   const options = getVideoDurationOptions(capability);
+  if (capability.defaultDuration !== undefined && options.includes(capability.defaultDuration)) return capability.defaultDuration;
   return options.includes(10) ? 10 : options.at(-1) ?? capability.duration.min;
 }
 
@@ -326,4 +354,3 @@ function cloneCapability(capability: VideoCapability): VideoCapability {
     referenceAudios: { ...capability.referenceAudios },
   };
 }
-

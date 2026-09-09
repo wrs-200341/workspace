@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { generateGeminiPrompt, generateGPTPrompt, generateBigSnakePrompt } from '@/lib/providers/client';
+import { generateGeminiPrompt, generateGPTPrompt, generateBigSnakePrompt, generateOAIRegboxGPTPrompt, generatePromptWithFallback } from '@/lib/providers/client';
 import { providerResponseSnapshot } from '@/lib/providers/client';
 import { getProviderConfig, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask } from '@/lib/providers/taskStore';
@@ -29,9 +29,10 @@ const MAX_REFERENCE_BYTES = 40 * 1024 * 1024;
 /**
  * Generate a child prompt for an account workspace.
  *
- * The production form exposes two prompt engines: the GPT-2999 Responses
- * endpoint and the Gemini generateContent endpoint.  Keep the provider/model
- * recorded on the task in lock-step with the engine that was actually called.
+ * The production form can use the GPT-5.5 Responses fallback chain, the
+ * legacy GPT-2999 Responses endpoint, or the Gemini generateContent endpoint.
+ * Keep the provider/model recorded on the task in lock-step with the engine
+ * that was actually called.
  */
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -48,14 +49,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const description = typeof body.description === 'string' ? body.description.trim() : '';
   const requestedPromptModel = typeof body.promptModel === 'string' && body.promptModel.trim()
     ? body.promptModel.trim()
-    : 'gemini-2.5-flash';
+    : 'pomoai-gpt';
 
   // `gpt-2999` is the UI alias.  Also accept a concrete GPT model id so a
   // future UI can pass one directly; all other values must be Gemini models.
+  const isPomoFallback = requestedPromptModel === 'pomoai-gpt' || requestedPromptModel === 'pomoai-gpt-prompt' || requestedPromptModel.startsWith('pomoai:');
+  const isOAIRegbox = requestedPromptModel === 'oairegbox-gpt' || requestedPromptModel === 'oairegbox-gpt-prompt';
   const isBigSnake = requestedPromptModel === 'bigsnake' || requestedPromptModel.startsWith('bigsnake:');
   const isGpt = requestedPromptModel === 'gpt-2999' || /^gpt[-_]/i.test(requestedPromptModel);
   const isGemini = /^gemini[-_]/i.test(requestedPromptModel);
-  if (!isGpt && !isGemini && !isBigSnake) {
+  if (!isPomoFallback && !isOAIRegbox && !isGpt && !isGemini && !isBigSnake) {
     return NextResponse.json({ success: false, error: 'prompt_model_invalid' }, { status: 400 });
   }
 
@@ -67,7 +70,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // Resolve the provider before entering the generation try/catch.  This
   // lets every failure response identify the supplier that was actually
   // selected, even when the provider throws an unclassified network error.
-  const selectedProvider: ProviderId = isBigSnake
+  const selectedProvider: ProviderId = isPomoFallback
+    ? 'pomoai-gpt-prompt'
+    : isOAIRegbox
+      ? 'oairegbox-gpt-prompt'
+      : isBigSnake
     ? 'bigsnake-prompt'
     : isGpt
       ? 'gpt-2999-prompt'
@@ -76,7 +83,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     ? 'BigSnake'
     : selectedProvider === 'gpt-2999-prompt'
       ? 'GPT-2999'
-      : 'Gemini';
+      : selectedProvider === 'oairegbox-gpt-prompt' ? 'OAIRegBox GPT-5.5' : selectedProvider === 'pomoai-gpt-prompt' ? 'PomoAI GPT-5.5' : 'Gemini';
   let attemptedModel = '';
   try {
     const referenceImageName = firstReferenceImageName({ accountId: id, referenceAssetIds, productImageAssetIds });
@@ -88,8 +95,29 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     let model: string;
     let generatedText: string;
     let source: 'live' | 'mock';
+    let fallbackFrom: ProviderId | undefined;
+    let fallbackProviders: ProviderId[] | undefined;
+    let fallbackModels: string[] | undefined;
 
-    if (isBigSnake) {
+    if (isPomoFallback) {
+      const selectedPomoModel = requestedPromptModel.startsWith('pomoai:') ? requestedPromptModel.slice('pomoai:'.length).trim() : undefined;
+      const generated = await generatePromptWithFallback({ model: selectedPomoModel || undefined, prompt: generationPrompt, attachments: references });
+      provider = generated.provider;
+      model = generated.model;
+      attemptedModel = model;
+      generatedText = generated.text;
+      source = generated.mode;
+      fallbackFrom = generated.fallbackFrom;
+      fallbackProviders = generated.fallbackProviders;
+      fallbackModels = generated.fallbackModels;
+    } else if (isOAIRegbox) {
+      provider = 'oairegbox-gpt-prompt';
+      const generated = await generateOAIRegboxGPTPrompt({ prompt: generationPrompt, attachments: references });
+      model = generated.model;
+      attemptedModel = model;
+      generatedText = generated.text;
+      source = generated.mode;
+    } else if (isBigSnake) {
       provider = 'bigsnake-prompt';
       const config = getProviderConfig(provider);
       model = requestedPromptModel.startsWith('bigsnake:') ? requestedPromptModel.slice('bigsnake:'.length) : config.model;
@@ -131,10 +159,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
       source,
       generatedText,
       requestedPromptModel,
+      promptProvider: provider,
+      promptModel: model,
+      promptGenerationSource: source,
       ...(referenceImageName ? { referenceImageName } : {}),
       ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }),
       ...(references.length ? { referenceImageCount: references.length } : {}),
       ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}),
+      ...(fallbackFrom ? { promptFallbackFrom: fallbackFrom } : {}),
+      ...(fallbackProviders?.length ? { promptFallbackProviders: fallbackProviders } : {}),
+      ...(fallbackModels?.length ? { promptFallbackModels: fallbackModels } : {}),
     };
     const task = createProviderTask({
       accountId: id,
@@ -160,10 +194,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
+    const fallbackDetails = error && typeof error === 'object'
+      ? error as { promptProvider?: unknown; promptModel?: unknown; promptFallbackFrom?: unknown; promptFallbackProviders?: unknown }
+      : {};
     const context = {
       provider: selectedProvider,
       providerName: selectedProviderName,
-      ...(attemptedModel ? { model: attemptedModel } : {}),
+      ...(typeof fallbackDetails.promptModel === 'string' && fallbackDetails.promptModel.trim()
+        ? { model: fallbackDetails.promptModel.trim() }
+        : attemptedModel ? { model: attemptedModel } : {}),
       requestedPromptModel,
     };
     if (message === 'provider_not_configured') {
@@ -211,6 +250,9 @@ function readPromptImageReferences(accountId: string, referenceAssetIds: readonl
   for (const assetId of productImageAssetIds) {
     const product = products.find((candidate) => candidate.id === assetId);
     if (!product) throw new Error('reference_asset_not_found');
+    // Shared product images are workspace-wide assets. Do not require them to
+    // belong to the current account lane here; the preview/import layer already
+    // validated that the asset exists under the local workspace root.
     let bytes: Buffer;
     try {
       bytes = fs.readFileSync(getProductImageAbsolutePath(assetId));

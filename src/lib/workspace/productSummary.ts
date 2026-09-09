@@ -93,8 +93,8 @@ export function lookupProductSummary(referenceName: string | undefined, filePath
 export function productSummaryPathForAccount(accountId: string): string {
   const accountPath = accountSummaryPath(accountId);
   if (fs.existsSync(accountPath)) return accountPath;
-  // Uploaded workbooks are account-scoped. Do not silently fall back to a
-  // global/template workbook and leak another account's product metadata.
+  const defaultPath = accountSummaryPath('default');
+  if (fs.existsSync(defaultPath)) return defaultPath;
   return '';
 }
 
@@ -115,8 +115,10 @@ export type ProductSummaryWorkbookInfo = {
 export function getProductSummaryWorkbookInfo(accountId: string): ProductSummaryWorkbookInfo {
   const accountPath = accountSummaryPath(accountId);
   const accountExists = fs.existsSync(accountPath);
+  const defaultPath = accountSummaryPath('default');
+  const defaultExists = fs.existsSync(defaultPath);
   const fallback = process.env.WORKSPACE_PRODUCT_SUMMARY_PATH?.trim() || '';
-  const filePath = accountExists ? accountPath : fallback && fs.existsSync(fallback) ? fallback : null;
+  const filePath = accountExists ? accountPath : defaultExists ? defaultPath : fallback && fs.existsSync(fallback) ? fallback : null;
   if (!filePath) return { accountId: accountId.trim(), fileName: null, size: 0, updatedAt: null, source: 'none', rowCount: 0 };
   try {
     const stat = fs.statSync(filePath);
@@ -126,12 +128,13 @@ export function getProductSummaryWorkbookInfo(accountId: string): ProductSummary
       const metadata = JSON.parse(fs.readFileSync(accountSummaryMetaPath(accountId), 'utf8')) as { fileName?: unknown };
       if (typeof metadata.fileName === 'string' && metadata.fileName.trim()) originalName = metadata.fileName.trim().slice(0, 120);
     } catch { /* metadata is optional for legacy uploads */ }
+    const source = accountExists ? 'account' : 'default';
     return {
       accountId: accountId.trim(),
       fileName: accountExists ? (originalName || path.basename(filePath)) : path.basename(filePath),
       size: stat.size,
       updatedAt: stat.mtime.toISOString(),
-      source: accountExists ? 'account' : 'default',
+      source,
       rowCount: rows.size,
     };
   } catch {

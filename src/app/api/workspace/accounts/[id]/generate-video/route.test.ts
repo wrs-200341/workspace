@@ -39,6 +39,7 @@ const {
   mockListAssets,
   mockCacheVideoTaskOutputsBeforeCompletion,
   mockProcessMockProviderTask,
+  mockGetDailyQuotaUsage,
 } = vi.hoisted(() => ({
   mockRequireApiRole: vi.fn(),
   mockCanAccessWorkspaceAccount: vi.fn(),
@@ -63,6 +64,7 @@ const {
   mockListAssets: vi.fn(),
   mockCacheVideoTaskOutputsBeforeCompletion: vi.fn(),
   mockProcessMockProviderTask: vi.fn(),
+  mockGetDailyQuotaUsage: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
@@ -88,6 +90,7 @@ vi.mock('@/lib/providers/client', () => ({
   generateGPTPrompt: mockGenerateGPTPrompt,
   generateGeminiPrompt: mockGenerateGeminiPrompt,
   submitVideo: mockSubmitVideo,
+  submitVideoWithFallback: mockSubmitVideo,
   normalizeProviderResponse: mockNormalizeProviderResponse,
   providerResponseSnapshot: mockProviderResponseSnapshot,
   sanitizeProviderError: vi.fn((value: string) => value),
@@ -112,6 +115,7 @@ vi.mock('@/lib/workspace/production/video-capabilities', () => ({
   validateVideoCapability: mockValidateVideoCapability,
 }));
 vi.mock('@/lib/workspace/videoInventory', () => ({ cacheVideoTaskOutputsBeforeCompletion: mockCacheVideoTaskOutputsBeforeCompletion }));
+vi.mock('@/lib/workspace/production/dailyQuota', () => ({ getDailyQuotaUsage: mockGetDailyQuotaUsage }));
 
 import { POST } from './route';
 
@@ -168,6 +172,7 @@ describe('generate-video automatic child prompt queueing', () => {
     mockProviderResponseSnapshot.mockImplementation((error: unknown) => ({ code: error instanceof Error ? error.message : 'provider_error' }));
     mockCacheVideoTaskOutputsBeforeCompletion.mockReset();
     mockProcessMockProviderTask.mockReset();
+    mockGetDailyQuotaUsage.mockReset().mockReturnValue(null);
     mockCreateProviderTasks.mockImplementation((inputs: Array<Record<string, unknown>>) => inputs.map((input, index) => {
       const task: MockTask = {
         id: `task-${index + 1}`,
@@ -197,6 +202,40 @@ describe('generate-video automatic child prompt queueing', () => {
       runs.push(input.run);
       return true;
     });
+  });
+
+  it('rejects automatic naming when no reference image is selected', async () => {
+    const response = await POST(request(baseBody({ taskNameMode: 'auto' })), params);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ success: false, error: 'task_name_reference_required' });
+    expect(mockCreateProviderTasks).not.toHaveBeenCalled();
+  });
+
+  it('rejects manual naming without a task name', async () => {
+    const response = await POST(request(baseBody({ taskNameMode: 'manual', taskName: '   ' })), params);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ success: false, error: 'task_name_required' });
+    expect(mockCreateProviderTasks).not.toHaveBeenCalled();
+  });
+
+  it('rejects a batch that would exceed the operator’s remaining daily quota for a metered model', async () => {
+    mockGetDailyQuotaUsage.mockReturnValue({ model: 'minimax-h3-max', limit: 50, used: 49, remaining: 1, date: '2026-09-08' });
+    const response = await POST(request(baseBody({ modelId: 'minimax-h3-max', count: 2 })), params);
+    expect(response.status).toBe(429);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: 'daily_model_quota_exceeded',
+      data: { model: 'minimax-h3-max', limit: 50, used: 49, remaining: 1, requested: 2 },
+    });
+    expect(mockCreateProviderTasks).not.toHaveBeenCalled();
+    expect(mockSubmitVideo).not.toHaveBeenCalled();
+  });
+
+  it('allows a batch that fits inside the remaining daily quota', async () => {
+    mockGetDailyQuotaUsage.mockReturnValue({ model: 'minimax-h3-max', limit: 50, used: 48, remaining: 2, date: '2026-09-08' });
+    const response = await POST(request(baseBody({ modelId: 'minimax-h3-max', count: 2 })), params);
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ success: true });
   });
 
   it('returns immediately with prompting tasks and defers prompt-provider work', async () => {

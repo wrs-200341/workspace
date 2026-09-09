@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
-import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateGeminiPrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, downloadProviderVideoContent, generateMGRouterImage } from './client';
+import { POMOAI_PROMPT_FALLBACK_MODELS } from './config';
+import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateGeminiPrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, submitVideoWithFallback, syncProviderTask, downloadProviderVideoContent, generateMGRouterImage, generateResponsesPrompt, generatePromptWithFallback } from './client';
 
 describe('provider client helpers', () => {
   it('normalizes Gemini candidate text', () => {
@@ -14,6 +15,8 @@ describe('provider client helpers', () => {
     expect(providerEndpoint('origin-nano-image', 'create')).toBe('https://origingateway.com/v1/chat/completions');
     expect(providerEndpoint('junze-gemini-image', 'create')).toContain('/v1beta/models/');
     expect(providerEndpoint('bigsnake-prompt', 'create')).toBe('https://api.bigsnake.xyz/v1/responses');
+    expect(providerEndpoint('pomoai-gpt-prompt', 'create')).toBe('https://www.pomoai.ai/v1/responses');
+    expect(providerEndpoint('oairegbox-gpt-prompt', 'create')).toBe('https://newapi-2.oairegbox.cc/v1/responses');
   });
 
   it('uses Junze GPT Image ratio-string requests on its OpenAI route', async () => {
@@ -24,6 +27,24 @@ describe('provider client helpers', () => {
     });
     await generateOpenAICompatibleImage('junze-gpt-image', { model: 'gpt-image-2', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', JUNZE_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes Aicloud GPT Image generation and local edits to its v1 endpoints', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toMatch(/^https:\/\/aiclound\.vip\/v1\/images\/(generations|edits)$/);
+      if (init?.body instanceof FormData) {
+        expect(String(url)).toBe('https://aiclound.vip/v1/images/edits');
+        expect(init.body.get('model')).toBe('gpt-image-2.5');
+        expect(init.body.get('size')).toBe('1024x1536');
+      } else {
+        expect(String(url)).toBe('https://aiclound.vip/v1/images/generations');
+        expect(JSON.parse(String(init?.body))).toEqual({ model: 'gpt-image-2.5', prompt: 'cat', size: '1024x1536', n: 1 });
+      }
+      return Response.json({ data: [{ b64_json: 'data:image/png;base64,YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=' }] });
+    });
+    await generateOpenAICompatibleImage('aicloud-gpt-image', { model: 'gpt-image-2.5', prompt: 'cat', aspectRatio: '9:16', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', AICLOUD_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    await generateOpenAICompatibleImage('aicloud-gpt-image', { model: 'gpt-image-2.5', prompt: 'edit', aspectRatio: '9:16', resolution: '1k', referenceFiles: [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', AICLOUD_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it('submits OriginGateway GPT Image reference edits as multipart for local files', async () => {
@@ -126,6 +147,47 @@ describe('provider client helpers', () => {
     timeoutSpy.mockRestore();
   });
 
+  it('calls PomoAI GPT Responses with the configured model and bearer key', async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://www.pomoai.ai/v1/responses');
+      expect((init?.headers as Record<string, string>).authorization).toBe('Bearer test-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-5.5', input: [{ role: 'user' }] });
+      return Response.json({ output_text: 'pomo result' });
+    });
+    const result = await generateResponsesPrompt('pomoai-gpt-prompt', { prompt: 'hello' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', POMOAI_GPT_PROMPT_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ mode: 'live', provider: 'pomoai-gpt-prompt', model: 'gpt-5.5', text: 'pomo result' });
+    expect(timeoutSpy).toHaveBeenCalledWith(180 * 1000);
+    timeoutSpy.mockRestore();
+  });
+
+  it('falls back only between PomoAI models', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://www.pomoai.ai/v1/responses');
+      const body = JSON.parse(String(init?.body)) as { model?: string };
+      if (body.model === 'gpt-5.5') return new Response(JSON.stringify({ error: { message: 'temporary failure' } }), { status: 503 });
+      if (body.model === 'gemini-3.8-flash') return Response.json({ output_text: 'pomo fallback result' });
+      throw new Error(`unexpected PomoAI model ${body.model}`);
+    });
+    const result = await generatePromptWithFallback({ prompt: 'hello' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', POMOAI_GPT_PROMPT_API_KEY: 'pomo-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ provider: 'pomoai-gpt-prompt', model: 'gemini-3.8-flash', text: 'pomo fallback result', fallbackFrom: 'pomoai-gpt-prompt', fallbackProviders: ['pomoai-gpt-prompt'], fallbackModels: ['gpt-5.5'] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not cross-fallback to OAIRegBox or BigSnake when all PomoAI models fail', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      expect(String(url)).toBe('https://www.pomoai.ai/v1/responses');
+      return new Response(JSON.stringify({ error: { message: 'temporary failure' } }), { status: 503 });
+    });
+    await expect(generatePromptWithFallback({ prompt: 'hello' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', POMOAI_GPT_PROMPT_API_KEY: 'pomo-key', OAIREGBOX_GPT_PROMPT_API_KEY: 'oai-key', BIGSNAKE_API_KEY: 'big-key' }, fetch: fetchMock as typeof fetch })).rejects.toMatchObject({
+      promptProvider: 'pomoai-gpt-prompt',
+      promptModel: POMOAI_PROMPT_FALLBACK_MODELS[POMOAI_PROMPT_FALLBACK_MODELS.length - 1],
+      promptFallbackProviders: ['pomoai-gpt-prompt'],
+      promptFallbackModels: [...POMOAI_PROMPT_FALLBACK_MODELS],
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(POMOAI_PROMPT_FALLBACK_MODELS.length);
+  });
+
   it('includes reference images in BigSnake child prompt requests', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body));
@@ -170,6 +232,9 @@ describe('provider client helpers', () => {
 
   it('uses fixed provider endpoints and redacts upstream errors', () => {
     expect(providerEndpoint('grok-video', 'create')).toBe('https://snumom.com/v1/videos');
+    expect(providerEndpoint('yuanai-grok-video', 'create')).toBe('https://yuanai.uk/v1/videos');
+    expect(providerEndpoint('yuanai-grok-video', 'status')).toBe('https://yuanai.uk/v1/videos/{id}');
+    expect(providerEndpoint('yuanai-grok-video', 'content')).toBe('https://yuanai.uk/v1/videos/{id}/content');
     expect(providerEndpoint('mgrouter-grok-image', 'create')).toBe('https://raw.mgrouter.com/v1/images/generations');
     expect(providerEndpoint('mgrouter-grok-video', 'create')).toBe('https://raw.mgrouter.com/v1/videos/generations');
     expect(providerEndpoint('mgrouter-grok-video', 'status')).toBe('https://raw.mgrouter.com/v1/videos/{id}');
@@ -464,6 +529,47 @@ describe('provider client helpers', () => {
     }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MGROUTER_API_KEY: 'test-key' }, fetch: vi.fn() as typeof fetch })).rejects.toThrow('mgrouter_reference_audio_unsupported');
   });
 
+  it('submits YuanAI Grok video with Qingfeng fields', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://yuanai.uk/v1/videos');
+      expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key', 'content-type': 'application/json' });
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: 'grok-imagine-video-1.5-preview', prompt: 'portrait product', seconds: '6', aspect_ratio: '9:16', resolution: '720p', input_reference: 'https://assets.example/product.jpg',
+      });
+      return Response.json({ id: 'task_yuanai', task_id: 'task_yuanai', status: 'queued' });
+    });
+    const result = await submitVideo({
+      provider: 'yuanai-grok-video', model: 'grok-imagine-video-1.5-preview', prompt: 'portrait product', duration: 6,
+      aspectRatio: '9:16', resolution: '720p', referenceImages: ['https://assets.example/product.jpg'],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_GROK_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ mode: 'live', provider: 'yuanai-grok-video' });
+  });
+
+  it('keeps YuanAI creation task id when status response returns a different id', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      expect(String(url)).toBe('https://yuanai.uk/v1/videos/task_created');
+      return Response.json({ id: 'video_transient', task_id: 'video_transient', status: 'processing', progress: 40 });
+    });
+    const result = await syncProviderTask('yuanai-grok-video', 'task_created', {
+      env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_GROK_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch,
+    });
+    expect(result.providerTaskId).toBe('task_created');
+    expect(result.status).toBe('running');
+  });
+
+  it('fails over Grok video to a configured sibling supplier after upstream failure', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request) => {
+      if (String(url) === 'https://yuanai.uk/v1/videos') return new Response(JSON.stringify({ error: { code: 'upstream_task_failed' } }), { status: 503, headers: { 'content-type': 'application/json' } });
+      expect(String(url)).toBe('https://raw.mgrouter.com/v1/videos/generations');
+      return Response.json({ request_id: 'mgrouter-task', status: 'queued' });
+    });
+    const result = await submitVideoWithFallback({
+      provider: 'yuanai-grok-video', model: 'grok-imagine-video-1.5-preview', prompt: 'demo', duration: 6, aspectRatio: '9:16', resolution: '480p',
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_GROK_VIDEO_API_KEY: 'yuan-key', MGROUTER_API_KEY: 'mg-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ provider: 'mgrouter-grok-video', model: 'grok-imagine-video-1.5', fallbackFrom: 'yuanai-grok-video', fallbackProviders: ['mgrouter-grok-video'] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('submits sd-mini through the same snumom supplier using seconds and image_urls', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(String(_url)).toBe('https://snumom.com/v1/videos');
@@ -506,6 +612,7 @@ describe('provider client helpers', () => {
     expect(normalizeProviderResponse('oairegbox-omni', { taskId: 'img-3', status: 'failed', error: { code: 'image_rejected', message: 'reference image rejected' } })).toMatchObject({ error: 'provider_reference_rejected' });
     expect(normalizeProviderResponse('grok-video', { taskId: 'vid-1', status: 'failed', error: { code: 'task_failed', message: 'upstream task failed' } })).toMatchObject({ error: 'provider_upstream_failed' });
     expect(normalizeProviderResponse('quality-v4', { taskId: 'vid-2', status: 'failed', error: '生成失败，积分已退还' })).toMatchObject({ error: 'provider_upstream_failed' });
+    expect(normalizeProviderResponse('pro666-video', { task_id: 'vid-3', status: 'failed', error: { code: 'service_error', message: 'video_urls is not enabled' } })).toMatchObject({ error: 'pro666_reference_video_unsupported' });
     expect(normalizeProviderResponse('wan3-video', { id: 'task_x', status: 'succeeded', video_url: 'https://media.manjuai.top/videos/a.mp4', download_url: 'https://media.manjuai.top/downloads/a.mp4' })).toMatchObject({ providerTaskId: 'task_x', status: 'completed', progress: 100, outputUrls: ['https://media.manjuai.top/videos/a.mp4'] });
     expect(normalizeProviderResponse('pomoai-gemini-image', { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=' } }] } }] })).toMatchObject({ status: 'completed', progress: 100 });
     expect(normalizeProviderResponse('yuanai-image', { data: [{ b64_json: 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=' }] })).toMatchObject({ status: 'completed', progress: 100 });

@@ -57,6 +57,8 @@ function assertHttpsVideos(values: readonly string[]): void {
 
 export function validateGenerationRequest(input: GenerationValidationInput): GenerationValidationResult {
   const config = getProviderConfig(input.provider);
+  const model = input.model?.trim() || config.model;
+  if (config.modelOptions && !config.modelOptions.includes(model)) throw new Error('unsupported_model');
   const referenceImages = [...(input.referenceImages ?? [])];
   const referenceVideos = [...(input.referenceVideos ?? [])];
   const referenceAudios = [...(input.referenceAudios ?? [])];
@@ -102,9 +104,8 @@ export function validateGenerationRequest(input: GenerationValidationInput): Gen
     if (!supportedRatios.includes(aspectRatio)) throw new Error('unsupported_aspect_ratio');
     result.aspectRatio = aspectRatio;
     const durationForDefault = result.duration ?? input.duration ?? input.seconds;
-    const resolution = input.resolution ?? (config.kind === 'image'
-      ? getDefaultImageResolution(config.supports.resolutions)
-      : (isSdMini && durationForDefault !== 10 ? '480p' : getDefaultVideoResolution(config.supports.resolutions)));
+    const modelResolutions = config.modelResolutions?.[model] ?? config.supports.resolutions;
+    const resolution = config.kind === 'image' ? input.resolution?.trim().toLowerCase() ?? getDefaultImageResolution(modelResolutions) : input.resolution?.trim() ?? (isSdMini && durationForDefault !== 10 ? '480p' : getDefaultVideoResolution(config.supports.resolutions));
     const isGrokPerSecond = input.provider === 'grok-video' && isGrokPerSecondModel(input.model);
     if (isSdMini) {
       // 720p is available only for 10-second jobs; 5s and 15s are 480p-only.
@@ -113,7 +114,7 @@ export function validateGenerationRequest(input: GenerationValidationInput): Gen
         throw new Error('unsupported_resolution');
       }
     } else if (isGrokPerSecond && resolution !== '720p') throw new Error('unsupported_resolution');
-    else if (!isGrokPerSecond && !config.supports.resolutions.includes(resolution)) throw new Error('unsupported_resolution');
+    else if (!isGrokPerSecond && !modelResolutions.map((value) => value.trim().toLowerCase()).includes(resolution.toLowerCase())) throw new Error('unsupported_resolution');
     result.resolution = resolution;
   }
   return result;

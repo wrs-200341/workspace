@@ -1,6 +1,8 @@
 import type { ProviderId } from './config';
 
 export type GrokVideoInput = { model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; referenceImages: string[] };
+/** YuanAI/Qingfeng Grok Imagine Video contract. `seconds` is a string upstream. */
+export type YuanAIGrokVideoInput = { model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; referenceImages?: readonly string[] };
 /**
  * Input contract for snumom's sd-mini video model.  Unlike the historical
  * Grok models, sd-mini uses top-level `seconds`/`resolution`/`aspect_ratio`
@@ -69,6 +71,77 @@ export type OpenAIImageInput = {
   /** Use OriginGateway's documented 4K canvas sizes. */
   originGateway?: boolean;
 };
+
+export type AicloudImageInput = {
+  model: string;
+  prompt: string;
+  aspectRatio?: string;
+  resolution?: string;
+  n?: number;
+};
+
+/**
+ * Aicloud's GPT Image gateway uses explicit pixel canvases rather than the
+ * ratio strings accepted by some of the older OpenAI-compatible suppliers.
+ * Its portrait 4K limit is 2304x4096 (4096x6144 is rejected upstream).
+ */
+export function aicloudImageSize(aspectRatio = '1:1', resolution = '1k'): string {
+  const ratio = aspectRatio.trim() || '1:1';
+  const level = resolution.trim().toLowerCase() || '1k';
+  const sizes: Record<string, Record<string, string>> = {
+    '9:16': { '1k': '1024x1536', '2k': '2048x3072', '4k': '2304x4096' },
+    '16:9': { '1k': '1536x1024', '2k': '3072x2048', '4k': '4096x2304' },
+    '1:1': { '1k': '1024x1024', '2k': '2048x2048', '4k': '4096x4096' },
+  };
+  return sizes[ratio]?.[level] ?? sizes['1:1'][level] ?? sizes['1:1']['1k'];
+}
+
+/** Build Aicloud's conservative JSON body for generations and URL edits. */
+export function buildAicloudImagePayload(input: AicloudImageInput): Record<string, unknown> {
+  return {
+    model: input.model,
+    prompt: input.prompt.trim(),
+    size: aicloudImageSize(input.aspectRatio, input.resolution),
+    n: input.n ?? 1,
+  };
+}
+
+export type AicloudImageEditInput = AicloudImageInput & {
+  referenceImages?: readonly string[];
+  referenceFiles?: readonly MultipartReference[];
+};
+
+/** Build Aicloud's JSON URL edit body. */
+export function buildAicloudImageEditPayload(input: AicloudImageEditInput): Record<string, unknown> {
+  const references = [...(input.referenceImages ?? [])];
+  if (!references.length) throw new Error('aicloud_reference_required');
+  return {
+    ...buildAicloudImagePayload(input),
+    ...(references.length === 1 ? { image: references[0] } : { images: references }),
+  };
+}
+
+/** Build Aicloud's multipart edit body for local workspace assets. */
+export function buildAicloudImageEditFormData(input: AicloudImageEditInput): FormData {
+  const files = [...(input.referenceFiles ?? [])];
+  const urls = [...(input.referenceImages ?? [])];
+  if (!files.length && !urls.length) throw new Error('aicloud_reference_required');
+  const payload = buildAicloudImagePayload(input);
+  const form = new FormData();
+  form.set('model', String(payload.model));
+  form.set('prompt', String(payload.prompt));
+  form.set('size', String(payload.size));
+  form.set('n', String(payload.n ?? 1));
+  const appendFile = (field: string, reference: MultipartReference) => {
+    form.append(field, new Blob([Uint8Array.from(reference.bytes).buffer as ArrayBuffer], { type: reference.mimeType }), reference.fileName);
+  };
+  if (files.length + urls.length === 1 && files.length === 1) appendFile('image', files[0]);
+  else {
+    urls.forEach((url) => form.append('image[]', url));
+    files.forEach((reference) => appendFile('image[]', reference));
+  }
+  return form;
+}
 
 /** OpenAI-compatible image generation payloads used by OriginGateway/Junze. */
 export function buildOpenAIImagePayload(input: OpenAIImageInput): Record<string, unknown> {
@@ -285,6 +358,75 @@ export function buildOAIRegboxMultipartFormData(input: OAIRegboxInput): FormData
  * The gateway accepts public HTTPS media URLs and uses duration/ratio
  * fields (not the Wan media envelope or Grok extra object).
  */
+export type MikuVideoInput = {
+  model: string;
+  prompt: string;
+  duration: number;
+  aspectRatio: string;
+  resolution?: string;
+  referenceImages?: readonly string[];
+  referenceVideos?: readonly string[];
+  referenceAudios?: readonly string[];
+};
+
+const MIKU_H3_MAX_PROMPT_LIMIT = 2999;
+
+function isMikuH3MaxModel(model: string): boolean {
+  const normalized = model.trim().toLowerCase().replaceAll('_', '-');
+  return ['minimax-h3-max', 'minimax-video-3-0-max', 'hailuo-3-max', 'minimax-hailuo-3-max'].includes(normalized);
+}
+
+/**
+ * MikuAPI exposes `minimax-h3-max`, but its upstream routes that alias to
+ * `minimax-video-3_0-max`, whose prompt limit is 2999 characters. Keep the
+ * public model id unchanged while preventing predictable upstream 400s.
+ */
+function normalizeMikuPrompt(model: string, prompt: string): string {
+  const chars = Array.from(prompt);
+  if (!isMikuH3MaxModel(model) || chars.length <= MIKU_H3_MAX_PROMPT_LIMIT) return prompt;
+  return chars.slice(0, MIKU_H3_MAX_PROMPT_LIMIT).join('');
+}
+
+/**
+ * MikuAPI video request.
+ *
+ * The gateway documents `seconds`/`resolution`/`aspect_ratio` plus
+ * `reference_images` / `reference_videos` / `reference_audios`, which differ
+ * from the secure-skill MiniMax field names even though both are
+ * OpenAI-compatible async video endpoints. Keyframe and reference modes are
+ * mutually exclusive upstream, so only the reference form is emitted here.
+ */
+export function buildMikuVideoPayload(input: MikuVideoInput): Record<string, unknown> {
+  const prompt = normalizeMikuPrompt(input.model, input.prompt.trim());
+  if (!prompt) throw new Error('miku_prompt_required');
+  if (!Number.isInteger(input.duration) || input.duration < 5 || input.duration > 15) throw new Error('miku_invalid_duration');
+  const ratios = ['9:16', '16:9', '1:1'];
+  if (!ratios.includes(input.aspectRatio)) throw new Error('miku_invalid_aspect_ratio');
+  const resolution = (input.resolution ?? '768p').toLowerCase();
+  if (!['480p', '768p'].includes(resolution)) throw new Error('miku_invalid_resolution');
+  const images = [...(input.referenceImages ?? [])];
+  const videos = [...(input.referenceVideos ?? [])];
+  const audios = [...(input.referenceAudios ?? [])];
+  if (images.length > 12) throw new Error('miku_too_many_reference_images');
+  if (videos.length > 12) throw new Error('miku_too_many_reference_videos');
+  if (audios.length > 12) throw new Error('miku_too_many_reference_audios');
+  for (const url of [...images, ...videos, ...audios]) {
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { throw new Error('miku_reference_urls_must_be_https'); }
+    if (parsed.protocol !== 'https:') throw new Error('miku_reference_urls_must_be_https');
+  }
+  return {
+    model: input.model,
+    prompt,
+    seconds: input.duration,
+    resolution,
+    aspect_ratio: input.aspectRatio,
+    ...(images.length ? { reference_images: images } : {}),
+    ...(videos.length ? { reference_videos: videos } : {}),
+    ...(audios.length ? { reference_audios: audios } : {}),
+  };
+}
+
 export function buildMiniMaxVideoPayload(input: MiniMaxVideoInput): Record<string, unknown> {
   const prompt = input.prompt.trim();
   if (!prompt) throw new Error('minimax_prompt_required');
@@ -373,6 +515,28 @@ export function buildGrokVideoPayload(input: GrokVideoInput): Record<string, unk
   if (input.referenceImages.length === 1) payload.input_reference = input.referenceImages[0];
   if (input.referenceImages.length > 1) extra.reference_images = input.referenceImages.map((url) => ({ url, role: 'reference_image' }));
   return payload;
+}
+
+export function buildYuanAIGrokVideoPayload(input: YuanAIGrokVideoInput): Record<string, unknown> {
+  const prompt = input.prompt.trim();
+  if (!prompt) throw new Error('yuanai_grok_prompt_required');
+  if (!Number.isInteger(input.duration) || ![6, 10, 12, 16, 20].includes(input.duration)) throw new Error('yuanai_grok_invalid_duration');
+  const aspectRatio = input.aspectRatio.trim();
+  if (!['16:9', '9:16', '1:1', '4:3', '3:4', '2:3', '3:2'].includes(aspectRatio)) throw new Error('yuanai_grok_invalid_aspect_ratio');
+  const resolution = input.resolution.trim().toLowerCase();
+  if (!['480p', '720p', '1080p'].includes(resolution)) throw new Error('yuanai_grok_invalid_resolution');
+  const references = [...(input.referenceImages ?? [])];
+  if (references.length > 7) throw new Error('yuanai_grok_too_many_reference_images');
+  if (references.some((url) => typeof url !== 'string' || !/^https:\/\//i.test(url))) throw new Error('yuanai_grok_reference_urls_must_be_https');
+  return {
+    model: 'grok-imagine-video-1.5-preview',
+    prompt,
+    seconds: String(input.duration),
+    aspect_ratio: aspectRatio,
+    resolution,
+    ...(references.length === 1 ? { input_reference: references[0] } : {}),
+    ...(references.length > 1 ? { reference_images: references.map((url) => ({ url })) } : {}),
+  };
 }
 
 /**
@@ -469,4 +633,4 @@ export function buildYuanAIImagePayload(input: YuanAIImageInput): Record<string,
     ...(input.referenceImages.length ? { images: input.referenceImages } : {}),
   };
 }
-export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'pomoai-gemini-image' || id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image' || id === 'junze-gpt-image' || id === 'junze-gemini-image') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'gpt-2999-prompt' || id === 'bigsnake-prompt') return 'prompt'; return 'video'; }
+export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'aicloud-gpt-image' || id === 'pomoai-gemini-image' || id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image' || id === 'junze-gpt-image' || id === 'junze-gemini-image') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'pomoai-gpt-prompt' || id === 'oairegbox-gpt-prompt' || id === 'gpt-2999-prompt' || id === 'bigsnake-prompt') return 'prompt'; return 'video'; }

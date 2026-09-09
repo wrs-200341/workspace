@@ -1,5 +1,5 @@
-import { buildGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
-import { getProviderConfig, isLiveProvidersAllowed, type ProviderId } from './config';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { getProviderConfig, isLiveProvidersAllowed, isProviderLiveEnabled, POMOAI_PROMPT_FALLBACK_MODELS, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
 // A 4K image response can legitimately contain several megabytes of Base64
@@ -13,6 +13,10 @@ const IMAGE_GENERATION_TIMEOUT_MS = 15 * 60 * 1000;
 // GPT-2999 Responses can take longer than the short task/status timeout,
 // especially when the gateway performs reasoning before returning text.
 const PROMPT_GENERATION_TIMEOUT_MS = 90 * 1000;
+// PomoAI can spend longer processing image-grounded Responses requests than
+// the other prompt gateways. Keep its timeout independent so a slow PomoAI
+// model is not prematurely treated as a failed provider attempt.
+const POMOAI_PROMPT_GENERATION_TIMEOUT_MS = 180 * 1000;
 // BigSnake's Codex-compatible gateway can spend well over a minute on
 // image-grounded prompts (the response includes a full reasoning envelope).
 // Keep this timeout separate from GPT-2999 so a slow BigSnake image request is
@@ -24,6 +28,12 @@ const MAX_ERROR_RESPONSE_BYTES = 1 * 1024 * 1024;
 export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' | 'content', env: Readonly<Record<string, string | undefined>> = process.env): string {
   const base = getProviderConfig(id, env).baseUrl.replace(/\/$/, '');
   if (id === 'grok-video') return operation === 'create' ? `${base}/videos` : `${base}/videos/{id}` + (operation === 'content' ? '/content' : '');
+  if (id === 'yuanai-grok-video') {
+    const yuanaiBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
+    if (operation === 'create') return `${yuanaiBase}/videos`;
+    if (operation === 'content') return `${yuanaiBase}/videos/{id}/content`;
+    return `${yuanaiBase}/videos/{id}`;
+  }
   if (id === 'mgrouter-grok-image') return operation === 'create' ? `${base}/images/generations` : `${base}/images/{id}`;
   if (id === 'mgrouter-grok-video') {
     if (operation === 'create') return `${base}/videos/generations`;
@@ -38,9 +48,10 @@ export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' 
     const wanBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
     return operation === 'create' ? `${wanBase}/videos/generations` : `${wanBase}/videos/tasks/{id}`;
   }
-  if (id === 'minimax-h3') {
+  if (id === 'minimax-h3' || id === 'miku-minimax') {
     // MiniMax H3 uses secure-skill's OpenAI-compatible async video contract.
-    // Wan 3 is the separate ManjuAI integration above.
+    // MikuAPI serves the same shape (`/v1/videos` + poll + `/content`) from a
+    // different gateway. Wan 3 is the separate ManjuAI integration above.
     const minimaxBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
     return operation === 'create' ? `${minimaxBase}/videos` : `${minimaxBase}/videos/{id}` + (operation === 'content' ? '/content' : '');
   }
@@ -49,8 +60,10 @@ export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' 
     return operation === 'create' ? pro666Base + '/videos' : pro666Base + '/videos/{id}';
   }
   if (id === 'yuanai-image') return operation === 'create' ? `${base}/v1/images/generations` : `${base}/v1/images/{id}`;
+  if (id === 'aicloud-gpt-image') return operation === 'create' ? `${base}/v1/images/generations` : `${base}/v1/images/{id}`;
   if (id === 'pomoai-gemini-image') return `${base}/v1beta/models/${encodeURIComponent(getProviderConfig(id, env).model)}:generateContent`;
   if (id === 'gpt-2999-prompt') return `${base}/v1/responses`;
+  if (id === 'pomoai-gpt-prompt' || id === 'oairegbox-gpt-prompt') return `${base}/responses`;
   if (id === 'oairegbox-omni') return operation === 'create' ? `${base}/videos` : `${base}/videos/{id}` + (operation === 'content' ? '/content' : '');
   if (id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'junze-gpt-image') return operation === 'create' ? `${base}/images/generations` : `${base}/images/{id}`;
   if (id === 'origin-nano-image') return operation === 'create' ? `${base}/chat/completions` : `${base}/chat/completions`;
@@ -294,7 +307,7 @@ export function normalizeProviderResponse(_provider: ProviderId, payload: unknow
   const progress = status === 'completed' ? 100 : clampProgress(rawProgress ?? (status === 'running' ? 1 : 0));
   const hasError = status === 'failed' || Boolean(data?.error || root?.error);
   const errorDetails = extractProviderErrorDetails(data, root);
-  const normalizedError = normalizeProviderErrorCode(errorDetails.code, errorDetails.message);
+  const normalizedError = normalizeProviderErrorCode(errorDetails.code, errorDetails.message, _provider);
   return {
     ...(providerTaskId ? { providerTaskId } : {}),
     status,
@@ -330,8 +343,15 @@ function collectMGRouterVideoPaths(value: unknown, output: string[] = []): strin
   return output;
 }
 
-function normalizeProviderErrorCode(code: string | undefined, message?: string): string {
+function normalizeProviderErrorCode(code: string | undefined, message?: string, provider?: ProviderId): string {
   const normalized = `${code ?? ''} ${message ?? ''}`.toLowerCase();
+  // Pro666 accepts the request envelope but may reject video_urls later when
+  // the account's 933 channel has not enabled video-reference capability.
+  // Keep that provider-specific error instead of reporting a generic
+  // upstream failure after a long poll.
+  if (provider === 'pro666-video' && (normalized.includes('video_urls is not enabled') || (normalized.includes('video url') && normalized.includes('not enabled')))) {
+    return 'pro666_reference_video_unsupported';
+  }
   if (normalized.includes('image_rejected') || normalized.includes('reference_rejected')) return 'provider_reference_rejected';
   if (normalized.includes('content_policy') || normalized.includes('content review') || normalized.includes('content_review')) return 'provider_content_policy';
   if (normalized.includes('invalid_token') || normalized.includes('invalid_api_key') || normalized.includes('unauthorized')) return 'provider_unauthorized';
@@ -565,7 +585,7 @@ export async function syncProviderTask(provider: ProviderId, providerTaskId: str
   const response = await fetcher(endpoint, { method: 'GET', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), cache: 'no-store' });
   if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'GET' });
   const payload = await readJsonLimited(response);
-  return { ...normalizeProviderResponse(provider, payload), response: payload };
+  return { ...normalizeProviderResponse(provider, payload), ...(provider === 'yuanai-grok-video' ? { providerTaskId } : {}), response: payload };
 }
 
 /**
@@ -580,7 +600,7 @@ export async function downloadProviderVideoContent(
   providerTaskId: string,
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
 ): Promise<{ bytes: Uint8Array; mimeType: string }> {
-  if (provider !== 'grok-video' && provider !== 'mgrouter-grok-video' && provider !== 'oairegbox-omni' && provider !== 'minimax-h3') throw new Error('provider_content_unsupported');
+  if (provider !== 'grok-video' && provider !== 'yuanai-grok-video' && provider !== 'mgrouter-grok-video' && provider !== 'oairegbox-omni' && provider !== 'minimax-h3' && provider !== 'miku-minimax') throw new Error('provider_content_unsupported');
   const env = dependencies.env ?? process.env;
   const fetcher = dependencies.fetch ?? fetch;
   const config = getProviderConfig(provider, env);
@@ -629,12 +649,14 @@ export async function downloadProviderVideoContent(
   return { bytes, mimeType };
 }
 
-export type SubmitVideoInput = { provider: Exclude<ProviderId, 'mgrouter-grok-image' | 'yuanai-gemini-prompt' | 'pomoai-gemini-image' | 'gpt-2999-prompt'>; model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; referenceImages?: string[]; referenceFiles?: MultipartReference[]; referenceAudios?: string[]; referenceVideos?: string[]; media?: Array<{ type: 'reference_image' | 'reference_video' | 'audio'; url: string }> };
+export type SubmitVideoInput = { provider: Extract<ProviderId, 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni'>; model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; referenceImages?: string[]; referenceFiles?: MultipartReference[]; referenceAudios?: string[]; referenceVideos?: string[]; media?: Array<{ type: 'reference_image' | 'reference_video' | 'audio'; url: string }> };
 
 export async function submitVideo(input: SubmitVideoInput, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
   const env = dependencies.env ?? process.env;
   const isSdMini = input.provider === 'grok-video' && input.model === 'sd-mini';
+  const isYuanAIGrok = input.provider === 'yuanai-grok-video';
   const isMiniMax = input.provider === 'minimax-h3';
+  const isMiku = input.provider === 'miku-minimax';
   const isPro666 = input.provider === 'pro666-video';
   const config = getProviderConfig(input.provider, env);
   if (input.provider === 'mgrouter-grok-video' && (input.referenceAudios?.length || input.media?.some((item) => item.type === 'audio'))) {
@@ -642,6 +664,9 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   }
   if (isSdMini && (input.referenceAudios?.length || input.referenceFiles?.length || input.media?.some((item) => item.type !== 'reference_image'))) {
     throw new Error('sdmini_reference_media_unsupported');
+  }
+  if (isYuanAIGrok && (input.referenceAudios?.length || input.referenceVideos?.length || input.referenceFiles?.length || input.media?.some((item) => item.type !== 'reference_image'))) {
+    throw new Error('yuanai_grok_reference_media_unsupported');
   }
   if (isMiniMax && (input.referenceFiles?.length || input.referenceVideos?.length || input.media?.some((item) => item.type === 'reference_video'))) {
     throw new Error('minimax_reference_media_unsupported');
@@ -666,10 +691,14 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
       : buildOAIRegboxPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, references: [] }))
     : input.provider === 'minimax-h3'
     ? buildMiniMaxVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+    : isMiku
+    ? buildMikuVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
     : isPro666
     ? buildPro666VideoPayload({ prompt: input.prompt.trim(), images: validateReferenceUrls(input.referenceImages ?? []), audios: validateReferenceUrls(input.referenceAudios ?? []) })
     : isSdMini
     ? buildSdMiniVideoPayload({ model: input.model, prompt: input.prompt.trim(), seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
+    : isYuanAIGrok
+    ? buildYuanAIGrokVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
     : input.provider === 'grok-video'
     ? buildGrokVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
     : input.provider === 'mgrouter-grok-video'
@@ -705,6 +734,94 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   return { mode: 'live', provider: input.provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, providerEndpoint(input.provider, 'create', env), config.apiKey, body) };
 }
 
+const FALLBACK_PROVIDER_ERRORS = new Set([
+  'provider_upstream_failed', 'provider_request_failed', 'provider_408', 'provider_429',
+  'provider_500', 'provider_502', 'provider_503', 'provider_504', 'provider_524',
+  'provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable',
+]);
+
+function grokFallbackProviders(provider: SubmitVideoInput['provider'], model: string, env: Readonly<Record<string, string | undefined>>): SubmitVideoInput['provider'][] {
+  if (!['grok-video', 'mgrouter-grok-video', 'yuanai-grok-video'].includes(provider)) return [];
+  if (model.trim().toLowerCase() === 'sd-mini') return [];
+  const candidates: SubmitVideoInput['provider'][] = ['grok-video', 'mgrouter-grok-video', 'yuanai-grok-video'];
+  return candidates.filter((candidate) => candidate !== provider && isProviderLiveEnabled(candidate, env));
+}
+
+function grokFallbackModel(provider: SubmitVideoInput['provider']): string {
+  if (provider === 'yuanai-grok-video') return 'grok-imagine-video-1.5-preview';
+  if (provider === 'mgrouter-grok-video') return 'grok-imagine-video-1.5';
+  return getProviderConfig('grok-video').model;
+}
+
+function adaptGrokFallbackInput(input: SubmitVideoInput, provider: SubmitVideoInput['provider'], env: Readonly<Record<string, string | undefined>>): Pick<SubmitVideoInput, 'duration' | 'aspectRatio' | 'resolution'> {
+  const supports = getProviderConfig(provider, env).supports;
+  const durations = supports.durations ? [...supports.durations] : [];
+  const duration = durations.length && !durations.includes(input.duration)
+    ? durations.reduce((best, value) => Math.abs(value - input.duration) < Math.abs(best - input.duration) ? value : best, durations[0])
+    : input.duration;
+  const ratios = supports.ratios;
+  const aspectRatio = ratios.some((value) => value.toLowerCase() === input.aspectRatio.toLowerCase())
+    ? input.aspectRatio
+    : (ratios.find((value) => value === '9:16') ?? ratios[0] ?? input.aspectRatio);
+  const resolutions = supports.resolutions;
+  const exactResolution = resolutions.find((value) => value.toLowerCase() === input.resolution.toLowerCase());
+  const resolution = exactResolution ?? (resolutions.length ? resolutions.reduce((best, value) => {
+    const numeric = Number.parseInt(value, 10) || 0;
+    const bestNumeric = Number.parseInt(best, 10) || 0;
+    const requestedNumeric = Number.parseInt(input.resolution, 10) || 0;
+    // Prefer the highest available resolution that does not exceed the
+    // requested one; if all are larger, use the smallest supported value.
+    if (numeric <= requestedNumeric && bestNumeric > requestedNumeric) return value;
+    if (numeric <= requestedNumeric && bestNumeric <= requestedNumeric) return numeric > bestNumeric ? value : best;
+    return bestNumeric > requestedNumeric && numeric < bestNumeric ? value : best;
+  }, resolutions[0]) : input.resolution);
+  return { duration, aspectRatio, resolution };
+}
+
+function canFallbackFromProviderError(error: unknown): boolean {
+  const info = providerErrorInfo(error);
+  return FALLBACK_PROVIDER_ERRORS.has(info.code);
+}
+
+/**
+ * Submit a video and fail over between suppliers of the same Grok model when
+ * the upstream is unavailable. Validation and capability errors are returned
+ * immediately; only provider/network failures are eligible for failover.
+ */
+export async function submitVideoWithFallback(
+  input: SubmitVideoInput,
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch; skipProviders?: readonly ProviderId[] } = {},
+): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; model: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackParameters?: Pick<SubmitVideoInput, 'duration' | 'aspectRatio' | 'resolution'> }> {
+  const env = dependencies.env ?? process.env;
+  const allCandidates = [input.provider, ...grokFallbackProviders(input.provider, input.model, env)];
+  const skipped = new Set(dependencies.skipProviders ?? []);
+  const availableCandidates = allCandidates.filter((candidate) => !skipped.has(candidate));
+  const candidates = availableCandidates.length ? availableCandidates : [input.provider];
+  let lastError: unknown;
+  let attemptedFallbacks: ProviderId[] = [];
+  for (const provider of candidates) {
+    if (provider !== input.provider) attemptedFallbacks = [...attemptedFallbacks, provider];
+    const model = provider === input.provider ? input.model : grokFallbackModel(provider);
+    const parameters = provider === input.provider ? { duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution } : adaptGrokFallbackInput(input, provider, env);
+    try {
+      const result = await submitVideo({ ...input, provider, model, ...parameters }, dependencies);
+      const normalized = normalizeProviderResponse(provider, result.response);
+      if (normalized.status === 'failed') {
+        const code = normalized.error ?? 'provider_upstream_failed';
+        if (!FALLBACK_PROVIDER_ERRORS.has(code) || provider === candidates.at(-1)) {
+          return { ...result, provider, model, ...(attemptedFallbacks.length ? { fallbackFrom: input.provider, fallbackProviders: attemptedFallbacks, fallbackParameters: parameters } : {}) };
+        }
+        continue;
+      }
+      return { ...result, provider, model, ...(attemptedFallbacks.length ? { fallbackFrom: input.provider, fallbackProviders: attemptedFallbacks, fallbackParameters: parameters } : {}) };
+    } catch (error) {
+      lastError = error;
+      if (!canFallbackFromProviderError(error) || provider === candidates.at(-1)) throw error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('provider_request_failed');
+}
+
 export async function generatePomoAIImage(input: { model: string; prompt: string; references?: Array<{ mimeType: string; dataBase64: string }>; aspectRatio?: string; resolution?: string }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
   const env = dependencies.env ?? process.env;
   if ((input.references ?? []).length > 3) throw new Error('too_many_reference_images');
@@ -721,7 +838,7 @@ export async function generatePomoAIImage(input: { model: string; prompt: string
 }
 
 export async function generateOpenAICompatibleImage(
-  provider: Extract<ProviderId, 'origin-gpt-image' | 'origin-grok-image' | 'junze-gpt-image'>,
+  provider: Extract<ProviderId, 'origin-gpt-image' | 'origin-grok-image' | 'junze-gpt-image' | 'aicloud-gpt-image'>,
   input: { model: string; prompt: string; aspectRatio?: string; resolution?: string; referenceImages?: readonly string[]; referenceFiles?: readonly MultipartReference[] },
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
 ): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
@@ -736,22 +853,31 @@ export async function generateOpenAICompatibleImage(
   if (provider === 'origin-grok-image' && referenceFiles.length > 0) throw new Error('origin_grok_reference_requires_json');
   if (references.length + referenceFiles.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
   if (provider === 'origin-gpt-image' && references.length > 0 && referenceFiles.length === 0 && input.resolution?.trim().toLowerCase() === '4k') throw new Error('origin_4k_reference_requires_multipart');
-  const genericPayload = buildOpenAIImagePayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', originGateway: provider !== 'junze-gpt-image' });
+  const isAicloud = provider === 'aicloud-gpt-image';
+  const genericPayload = isAicloud
+    ? buildAicloudImagePayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution })
+    : buildOpenAIImagePayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', originGateway: provider !== 'junze-gpt-image' });
   const payload = provider === 'junze-gpt-image'
     ? { ...genericPayload, size: input.aspectRatio === '9:16' ? '9:16' : '1024x1024', quality: 'low' }
     : genericPayload;
   const hasReferences = references.length > 0 || referenceFiles.length > 0;
   const editPayload = hasReferences && referenceFiles.length === 0
-    ? buildOpenAIImageEditPayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', referenceImages: references })
+    ? (isAicloud
+      ? buildAicloudImageEditPayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
+      : buildOpenAIImageEditPayload({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', referenceImages: references }))
     : payload;
   const editForm = hasReferences && referenceFiles.length > 0
-    ? buildOpenAIImageEditFormData({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', referenceImages: references, referenceFiles })
+    ? (isAicloud
+      ? buildAicloudImageEditFormData({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceFiles })
+      : buildOpenAIImageEditFormData({ model: input.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, quality: provider === 'origin-grok-image' ? 'medium' : 'high', referenceImages: references, referenceFiles }))
     : undefined;
   if (!config.apiKey) {
     if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
     return { mode: 'mock', provider, response: { id: `mock_${provider}_${Date.now()}`, status: 'queued', payload: editForm ?? editPayload } };
   }
-  const endpoint = hasReferences ? `${config.baseUrl.replace(/\/$/, '')}/images/edits` : providerEndpoint(provider, 'create', env);
+  const endpoint = hasReferences
+    ? `${config.baseUrl.replace(/\/$/, '')}${isAicloud ? '/v1/images/edits' : '/images/edits'}`
+    : providerEndpoint(provider, 'create', env);
   if (editForm) {
     const response = await (dependencies.fetch ?? fetch)(endpoint, { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body: editForm, signal: AbortSignal.timeout(IMAGE_GENERATION_TIMEOUT_MS), cache: 'no-store' });
     if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
@@ -815,6 +941,91 @@ export async function generateGPTPrompt(input: { model: string; messages: readon
   const response = await fetcherRequest(dependencies.fetch ?? fetch, `${base}/v1/responses`, env.GPT_PROMPT_API_KEY!.trim(), payload, true, PROMPT_GENERATION_TIMEOUT_MS);
   const text = normalizeGPTResponsesResponse(response);
   return { mode: 'live', provider: 'gpt-2999-prompt', text, response };
+}
+
+type ResponsesPromptProvider = Extract<ProviderId, 'pomoai-gpt-prompt' | 'oairegbox-gpt-prompt'>;
+export type PromptGenerationResult = { mode: 'live' | 'mock'; provider: ProviderId; model: string; text: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackModels?: string[] };
+
+/** OpenAI Responses-compatible child-prompt provider (PomoAI or OAIRegBox). */
+export async function generateResponsesPrompt(
+  provider: ResponsesPromptProvider,
+  input: { model?: string; prompt: string; attachments?: readonly GPTPromptAttachment[] },
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
+): Promise<PromptGenerationResult> {
+  const env = dependencies.env ?? process.env;
+  const config = getProviderConfig(provider, env);
+  const model = input.model?.trim() || config.model;
+  const payload = buildGPTResponsesPayload(model, [{ role: 'user', content: input.prompt.trim() }], input.attachments ?? []);
+  if (!config.apiKey) {
+    if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
+    return { mode: 'mock', provider, model, text: '', response: { id: `mock_${provider}_${Date.now()}`, status: 'queued', payload } };
+  }
+  const timeoutMs = provider === 'pomoai-gpt-prompt' ? POMOAI_PROMPT_GENERATION_TIMEOUT_MS : PROMPT_GENERATION_TIMEOUT_MS;
+  const response = await fetcherRequest(dependencies.fetch ?? fetch, providerEndpoint(provider, 'create', env), config.apiKey, payload, true, timeoutMs);
+  return { mode: 'live', provider, model, text: normalizeGPTResponsesResponse(response), response };
+}
+
+export async function generatePomoAIGPTPrompt(
+  input: { model?: string; prompt: string; attachments?: readonly GPTPromptAttachment[] },
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
+): Promise<PromptGenerationResult> {
+  return generateResponsesPrompt('pomoai-gpt-prompt', input, dependencies);
+}
+
+export async function generateOAIRegboxGPTPrompt(
+  input: { model?: string; prompt: string; attachments?: readonly GPTPromptAttachment[] },
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
+): Promise<PromptGenerationResult> {
+  return generateResponsesPrompt('oairegbox-gpt-prompt', input, dependencies);
+}
+
+/**
+ * Generate a child prompt with PomoAI's configured model order. Fallback is
+ * intentionally limited to models served by the same PomoAI supplier: an
+ * explicit OAIRegBox or BigSnake selection is handled by its own provider
+ * function and must never be entered implicitly from this path.
+ */
+export async function generatePromptWithFallback(
+  input: { model?: string; prompt: string; attachments?: readonly GPTPromptAttachment[] },
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
+): Promise<PromptGenerationResult> {
+  const requestedModel = input.model?.trim();
+  const pomoModels = [...new Set([requestedModel, ...POMOAI_PROMPT_FALLBACK_MODELS].filter((value): value is string => Boolean(value)))];
+  const providers = pomoModels.map((model) => ({ provider: 'pomoai-gpt-prompt' as const, model }));
+  const attempted: ProviderId[] = [];
+  const attemptedModels: string[] = [];
+  let lastError: unknown;
+  for (const entry of providers) {
+    const provider = entry.provider;
+    attempted.push(provider);
+    try {
+      const model = entry.model || getProviderConfig(provider, dependencies.env ?? process.env).model;
+      attemptedModels.push(model);
+      const result = await generateResponsesPrompt(provider, { ...input, model }, dependencies);
+      if (result.mode === 'live' && !result.text.trim()) throw new Error('provider_upstream_failed');
+      return {
+        ...result,
+        fallbackFrom: attempted.length > 1 ? attempted[0] : undefined,
+        fallbackProviders: attempted.length > 1 ? ['pomoai-gpt-prompt'] : undefined,
+        fallbackModels: attempted.length > 1 ? attemptedModels.slice(0, -1) : undefined,
+      };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  const message = lastError instanceof Error && lastError.message ? lastError.message : 'prompt_provider_failed';
+  const aggregate = new Error(message);
+  // Keep the terminal attribution tied to the actual supplier and model that
+  // were tried last. Do not expose OAIRegBox/BigSnake as implicit fallbacks.
+  Object.assign(aggregate, {
+    promptProvider: 'pomoai-gpt-prompt',
+    promptModel: attemptedModels[attemptedModels.length - 1],
+    promptFallbackProviders: attempted.length > 1 ? ['pomoai-gpt-prompt'] : undefined,
+    promptFallbackFrom: attempted.length > 1 ? 'pomoai-gpt-prompt' : undefined,
+    promptFallbackModels: attemptedModels,
+    promptProviderErrors: attempted.map(() => message),
+  });
+  throw aggregate;
 }
 
 /** BigSnake's Responses endpoint is used for child/sub-prompt generation. */

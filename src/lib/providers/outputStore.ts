@@ -212,3 +212,27 @@ export function readStoredVideoOutput(accountId: string, taskId: string, index: 
   }
   return null;
 }
+
+/** Return metadata for a cached video without reading its body. */
+export function getStoredVideoOutputFileInfo(accountId: string, taskId: string, index: number): StoredVideoOutput & { filePath: string } | null {
+  if (!/^[-a-zA-Z0-9_]+$/.test(accountId) || !/^[-a-zA-Z0-9_]+$/.test(taskId) || !Number.isInteger(index) || index < 0 || index > 63) return null;
+  const directory = outputDirectory(accountId, taskId);
+  if (!directory) return null;
+  const root = path.resolve(getWorkspacePath());
+  let taskRoot: string;
+  try { taskRoot = fs.realpathSync(directory); } catch { return null; }
+  if (!taskRoot.startsWith(`${root}${path.sep}`)) return null;
+  for (const ext of ['mp4', 'webm', 'mov', 'avi']) {
+    const file = path.join(directory, `${index}.${ext}`);
+    if (!fs.existsSync(file)) continue;
+    try {
+      const resolved = fs.realpathSync(file);
+      if (!resolved.startsWith(`${taskRoot}${path.sep}`)) return null;
+      const stat = fs.statSync(resolved);
+      if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_VIDEO_OUTPUT_BYTES) return null;
+      const mimeType = ext === 'webm' ? 'video/webm' : ext === 'mov' ? 'video/quicktime' : ext === 'avi' ? 'video/x-msvideo' : 'video/mp4';
+      return { index, relativePath: path.relative(getWorkspacePath(), resolved).replace(/\\/g, '/'), mimeType, size: stat.size, filePath: resolved };
+    } catch { return null; }
+  }
+  return null;
+}

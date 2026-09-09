@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount, workspaceOwnerIdForUser } from '@/lib/workspace/access';
-import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
+import * as serverTasks from '@/lib/workspace/serverTasks';
 import { businessDate } from '@/lib/workspace/tasks';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -16,6 +16,10 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     ? auth.role === 'operator' && requestedOwnerId ? requestedOwnerId : workspaceOwnerIdForUser(auth) ?? workspaceOwnerIdForAccount(id)
     : undefined;
   if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
-  const tasks = getServerWorkspaceTasks(ownerScope ? { ownerId, mode: 'prompt' } : { accountId: id, mode: 'prompt' }).filter((task) => !date || businessDate(task.createdAt) === date);
+  const filters = ownerScope ? { ownerId, mode: 'prompt' as const } : { accountId: id, mode: 'prompt' as const };
+  const queueReader = Object.prototype.hasOwnProperty.call(serverTasks, 'getServerWorkspaceQueueTasks')
+    ? serverTasks.getServerWorkspaceQueueTasks
+    : serverTasks.getServerWorkspaceTasks;
+  const tasks = queueReader(filters).filter((task) => !date || businessDate(task.createdAt) === date);
   return NextResponse.json({ success: true, data: tasks, tasks });
 }

@@ -1,10 +1,12 @@
+import fs from 'node:fs';
 import { NextRequest, NextResponse } from 'next/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const {
   mockRequireApiRole,
   mockCanAccessWorkspaceAccount,
   mockGetAsset,
+  mockGetAssetFileInfo,
   mockRenameAsset,
   mockDeleteAsset,
   mockReadAssetFile,
@@ -12,6 +14,7 @@ const {
   mockRequireApiRole: vi.fn(),
   mockCanAccessWorkspaceAccount: vi.fn(),
   mockGetAsset: vi.fn(),
+  mockGetAssetFileInfo: vi.fn(),
   mockRenameAsset: vi.fn(),
   mockDeleteAsset: vi.fn(),
   mockReadAssetFile: vi.fn(),
@@ -21,6 +24,7 @@ vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
 vi.mock('@/lib/workspace/access', () => ({ canAccessWorkspaceAccount: mockCanAccessWorkspaceAccount }));
 vi.mock('@/lib/workspace/assetStore', () => ({
   getAsset: mockGetAsset,
+  getAssetFileInfo: mockGetAssetFileInfo,
   renameAsset: mockRenameAsset,
   deleteAsset: mockDeleteAsset,
   readAssetFile: mockReadAssetFile,
@@ -29,6 +33,7 @@ vi.mock('@/lib/workspace/assetStore', () => ({
 import { DELETE, GET, PATCH } from './route';
 
 const params = { params: Promise.resolve({ id: 'account-1', assetId: 'asset-123' }) };
+const testFilePath = `${process.env.TEMP || process.env.TMP || 'D:/workspace/data'}/workspace-asset-route-${process.pid}.bin`;
 const imageAsset = {
   id: 'asset-123',
   accountId: 'account-1',
@@ -42,6 +47,7 @@ const imageAsset = {
 };
 
 describe('workspace asset item API', () => {
+  afterAll(() => { fs.rmSync(testFilePath, { force: true }); });
   beforeEach(() => {
     mockRequireApiRole.mockReset().mockResolvedValue({ id: 'user-emily', role: 'operator', username: 'emily' });
     mockCanAccessWorkspaceAccount.mockReset().mockReturnValue(true);
@@ -49,6 +55,8 @@ describe('workspace asset item API', () => {
     mockRenameAsset.mockReset().mockReturnValue({ ...imageAsset, name: 'renamed.png' });
     mockDeleteAsset.mockReset().mockReturnValue(imageAsset);
     mockReadAssetFile.mockReset().mockReturnValue({ asset: imageAsset, filePath: 'D:/workspace/data/uploads/account-1/asset-123-hero.png', bytes: Buffer.from([1, 2, 3]) });
+    fs.writeFileSync(testFilePath, Buffer.from([1, 2, 3]));
+    mockGetAssetFileInfo.mockReset().mockReturnValue({ asset: imageAsset, filePath: testFilePath, size: 3 });
   });
 
   it('serves a binary asset inline by default and as an attachment when requested', async () => {
@@ -61,6 +69,13 @@ describe('workspace asset item API', () => {
     const download = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123?download=1'), params);
     expect(download.status).toBe(200);
     expect(download.headers.get('content-disposition')).toContain('attachment');
+  });
+
+  it('serves byte ranges for media previews and seeking', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123', { headers: { range: 'bytes=0-1' } }), params);
+    expect(response.status).toBe(206);
+    expect(response.headers.get('content-range')).toBe('bytes 0-1/3');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2]));
   });
 
   it('returns prompt content as JSON instead of trying to read a file', async () => {

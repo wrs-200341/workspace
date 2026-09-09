@@ -14,15 +14,16 @@ import { getProductImageAbsolutePath, listProductImageAssets, publishProductImag
 import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { enqueueProviderTask, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
+import { normalizeTaskName, parseTaskNameMode, validateTaskNaming } from '@/lib/workspace/taskNaming';
 
-const IMAGE_PROVIDERS: readonly ProviderId[] = ['mgrouter-grok-image', 'yuanai-image', 'pomoai-gemini-image', 'origin-gpt-image', 'origin-grok-image', 'origin-nano-image', 'junze-gpt-image', 'junze-gemini-image'];
+const IMAGE_PROVIDERS: readonly ProviderId[] = ['mgrouter-grok-image', 'yuanai-image', 'aicloud-gpt-image', 'pomoai-gemini-image', 'origin-gpt-image', 'origin-grok-image', 'origin-nano-image', 'junze-gpt-image', 'junze-gemini-image'];
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id } = await params;
   if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
-  const body = await request.json().catch(() => ({})) as { prompt?: unknown; model?: unknown; provider?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; assetIds?: unknown; productImageAssetIds?: unknown; referenceAssetOrder?: unknown; pid?: unknown; count?: unknown };
+  const body = await request.json().catch(() => ({})) as { prompt?: unknown; model?: unknown; provider?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; assetIds?: unknown; productImageAssetIds?: unknown; referenceAssetOrder?: unknown; pid?: unknown; count?: unknown; taskNameMode?: unknown; taskName?: unknown };
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) return NextResponse.json({ success: false, error: 'prompt_required' }, { status: 400 });
   const provider: ProviderId = IMAGE_PROVIDERS.includes(body.provider as ProviderId) ? body.provider as ProviderId : 'mgrouter-grok-image';
   const config = getProviderConfig(provider);
@@ -34,13 +35,19 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     ? referenceAssetOrder.filter((item) => item.kind === 'image' || item.kind === 'product-image')
     : [...assetIds.map((id) => ({ id, kind: 'image' as const })), ...productImageAssetIds.map((id) => ({ id, kind: 'product-image' as const }))])
     .filter((item): item is { id: string; kind: 'image' | 'product-image' } => (item.kind === 'image' || item.kind === 'product-image') && (assetIds.includes(item.id) || productImageAssetIds.includes(item.id)));
+  const taskNameMode = parseTaskNameMode(body.taskNameMode);
+  if (body.taskNameMode !== undefined && !taskNameMode) return NextResponse.json({ success: false, error: 'task_name_mode_invalid' }, { status: 400 });
+  const taskName = normalizeTaskName(body.taskName);
+  const taskNameError = validateTaskNaming(taskNameMode, taskName, rawImages.length + orderedImageAssets.length);
+  if (taskNameError) return NextResponse.json({ success: false, error: taskNameError }, { status: 400 });
   const aspectRatio = typeof body.aspectRatio === 'string' && body.aspectRatio.trim()
     ? body.aspectRatio.trim()
     : getDefaultProductionAspectRatio(config.supports.ratios);
+  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : config.model;
+  const modelResolutions = config.modelResolutions?.[model] ?? config.supports.resolutions;
   const resolution = typeof body.resolution === 'string' && body.resolution.trim()
     ? body.resolution.trim().toLowerCase()
-    : getDefaultImageResolution(config.supports.resolutions);
-  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : config.model;
+    : getDefaultImageResolution(modelResolutions);
   const count = typeof body.count === 'number' && Number.isFinite(body.count) ? Math.min(4, Math.max(1, Math.round(body.count))) : 1;
   try {
     const ownerId = workspaceOwnerIdForAccount(id);
@@ -77,8 +84,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     });
     const referenceTokens = orderedImageAssets.map((item) => publishedTokensByAssetId.get(item.id)).filter((value): value is string => Boolean(value));
     const images = [...rawImages, ...orderedImageAssets.map((item) => publishedByAssetId.get(item.id)).filter((value): value is string => Boolean(value))];
-    const normalized = validateGenerationRequest({ provider, aspectRatio, resolution, referenceImages: images, referenceAudios: [] });
-    const localImageAssets = (provider === 'yuanai-image' || provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image' || provider === 'origin-gpt-image' || provider === 'origin-nano-image') && orderedImageAssets.length > 0
+    const normalized = validateGenerationRequest({ provider, model, aspectRatio, resolution, referenceImages: images, referenceAudios: [] });
+    const localImageAssets = (provider === 'yuanai-image' || provider === 'aicloud-gpt-image' || provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image' || provider === 'origin-gpt-image' || provider === 'origin-nano-image') && orderedImageAssets.length > 0
       ? orderedImageAssets.map((item) => item.kind === 'image'
         ? (() => {
           const asset = assertAssetReference(id, item.id, ['image']);
@@ -103,11 +110,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     // OriginGateway Grok `/images/edits` explicitly rejects multipart and
     // requires application/json. Its local assets are already published into
     // `images` above, so only GPT Image uses the multipart file contract.
-    const originReferenceFiles = provider === 'origin-gpt-image' ? localImageAssets : undefined;
+    const originReferenceFiles = (provider === 'origin-gpt-image' || provider === 'aicloud-gpt-image') ? localImageAssets : undefined;
     const pomoReferences = (provider === 'pomoai-gemini-image' || provider === 'junze-gemini-image' || provider === 'origin-nano-image') && localImageAssets
       ? localImageAssets.map((reference) => ({ mimeType: reference.mimeType, dataBase64: Buffer.from(reference.bytes).toString('base64') }))
       : [];
-    const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'image', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
+    const baseMetadata = { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), ...(taskNameMode ? { taskNameMode } : {}), ...(taskNameMode === 'manual' && taskName ? { taskName } : {}), execution: 'pending', modelId: model, supplierId: provider, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, count, schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'image', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, referenceTokens } : {}), ...(rawImages.length ? { externalReferenceImages: [...rawImages] } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) };
     const promptText = body.prompt.trim();
     const tasks = createProviderTasks(Array.from({ length: count }, (_, index) => ({ accountId: id, mode: 'image' as const, provider, model, prompt: promptText, status: 'queued' as const, progress: 0, metadata: { ...baseMetadata, maxRetries: 2, sequence: index + 1 } })));
     const accepted = tasks.map((task) => enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'image', model, run: () => submitImageTask({ accountId: id, taskId: task.id, provider, model, prompt: promptText, normalized, images, assetIds, productImageAssetIds, referenceAssetOrder: orderedImageAssets, yuanReferenceFiles, originReferenceFiles, pomoReferences }) }));
@@ -117,7 +124,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     return NextResponse.json({ success: !queueFull, data: { accountId: id, taskId: first.id, taskIds: persistedTasks.map((task) => task.id), count: persistedTasks.length, status: first.status, provider: first.provider, execution: 'pending', model: first.model, progress: first.progress }, ...(queueFull ? { error: 'scheduler_queue_full' } : {}) }, { status: queueFull ? 503 : 202 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_images_must_be_https', 'too_many_reference_images', 'reference_image_invalid', 'origin_reference_payload_too_large', 'origin_4k_reference_requires_multipart', 'origin_grok_reference_requires_json', 'origin_nano_external_reference_unsupported', 'reference_images_unsupported', 'unsupported_aspect_ratio', 'unsupported_resolution'];
+    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_images_must_be_https', 'too_many_reference_images', 'reference_image_invalid', 'origin_reference_payload_too_large', 'origin_4k_reference_requires_multipart', 'origin_grok_reference_requires_json', 'origin_nano_external_reference_unsupported', 'reference_images_unsupported', 'unsupported_aspect_ratio', 'unsupported_resolution', 'unsupported_model'];
     const responseError = known.includes(message) ? message : 'image_provider_failed';
     const status = responseError === 'provider_not_configured' ? 503 : responseError.startsWith('provider_') ? 502 : 400;
     return NextResponse.json({ success: false, error: responseError }, { status });
@@ -220,7 +227,7 @@ async function submitImageTask(input: ImageSubmissionInput): Promise<void> {
 async function submitImageProvider(provider: ProviderId, model: string, prompt: string, normalized: { aspectRatio?: string; resolution?: string }, images: string[], yuanReferenceFiles: ImageSubmissionInput['yuanReferenceFiles'], originReferenceFiles: ImageSubmissionInput['originReferenceFiles'], pomoReferences: ImageSubmissionInput['pomoReferences']) {
   if (provider === 'yuanai-image') return generateYuanAIImage({ model, prompt, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution as '1k' | '2k' | '4k', referenceImages: yuanReferenceFiles?.length ? [] : images, referenceFiles: yuanReferenceFiles });
   if (provider === 'pomoai-gemini-image') return generatePomoAIImage({ model, prompt, references: pomoReferences, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution });
-  if (provider === 'origin-gpt-image' || provider === 'origin-grok-image' || provider === 'junze-gpt-image') return generateOpenAICompatibleImage(provider, { model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, referenceImages: images, referenceFiles: originReferenceFiles });
+  if (provider === 'origin-gpt-image' || provider === 'origin-grok-image' || provider === 'junze-gpt-image' || provider === 'aicloud-gpt-image') return generateOpenAICompatibleImage(provider, { model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, referenceImages: images, referenceFiles: originReferenceFiles });
   if (provider === 'origin-nano-image') return generateOriginNanoImage({ model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, references: pomoReferences, referenceImages: images });
   if (provider === 'junze-gemini-image') return generateGeminiNativeImage(provider, { model, prompt, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, references: pomoReferences });
   return generateMGRouterImage({ model, prompt, aspectRatio: normalized.aspectRatio!, resolution: normalized.resolution as '1k' | '2k', referenceImages: images });
@@ -246,7 +253,19 @@ async function completeImageTask(input: ImageSubmissionInput, provider: Provider
     localOutputCount = cache.cached;
   }
   const pendingLocalCache = Boolean(cachePending);
-  const task = updateProviderTask(input.taskId, { provider, model, status: pendingLocalCache ? 'processing' : status.status === 'unknown' ? 'queued' : status.status, progress: pendingLocalCache ? 99 : status.progress, providerTaskId: status.providerTaskId, outputUrls, outputBase64, error: status.error, providerResponse: undefined, metadata: { ...metadata, ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}), ...(localOutputCount ? { localOutputCount, localOutputExpected: localOutputCount, localOutputReady: true } : {}) } });
+  // An unrecognised response is only resumable when the supplier handed back a
+  // task id to poll. Without one there is nothing to wait for, so parking the
+  // task in `queued` left it stuck as "本地排队中" forever; fail it instead so
+  // the scheduler's retry path can pick it up.
+  const unresumable = status.status === 'unknown' && !status.providerTaskId && !outputUrls.length && !outputBase64.length;
+  const resolvedStatus = pendingLocalCache
+    ? 'processing' as const
+    : unresumable
+      ? 'failed' as const
+      : status.status === 'unknown'
+        ? 'queued' as const
+        : status.status;
+  const task = updateProviderTask(input.taskId, { provider, model, status: resolvedStatus, progress: pendingLocalCache ? 99 : unresumable ? 100 : status.progress, providerTaskId: status.providerTaskId, outputUrls, outputBase64, error: unresumable ? (status.error || 'provider_response_unrecognized') : status.error, providerResponse: unresumable ? providerResponseSnapshot(undefined, { body: result.response, method: 'POST' }) : undefined, metadata: { ...metadata, ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}), ...(localOutputCount ? { localOutputCount, localOutputExpected: localOutputCount, localOutputReady: true } : {}) } });
   if (!task) return;
   if (result.mode === 'mock' && localOutputCount === 0) {
     void processMockProviderTask(input.taskId);

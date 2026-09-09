@@ -5,7 +5,9 @@ import { getWorkspacePath } from '../storagePaths';
 
 export type AssetKind = 'prompt' | 'image' | 'inventory-video' | 'audio';
 export type PromptAssetCategory = 'image' | 'video';
-export type WorkspaceAsset = { id: string; accountId: string; kind: AssetKind; name: string; relativePath?: string; mimeType?: string; size?: number; content?: string; category?: PromptAssetCategory; createdAt: string; updatedAt: string };
+export type WorkspaceAsset = { id: string; accountId: string; kind: AssetKind; name: string; relativePath?: string; mimeType?: string; size?: number; content?: string; category?: PromptAssetCategory; publishedAt?: string; createdAt: string; updatedAt: string };
+export type UploadedAssetInput = { name: string; type: string; size: number; arrayBuffer: ArrayBuffer };
+export type WorkspaceAssetFileInfo = { asset: WorkspaceAsset; filePath: string; size: number };
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const ASSET_NAME_MAX_LENGTH = 120;
@@ -16,6 +18,9 @@ const VIDEO_EXTENSIONS = new Set(['mp4', 'webm', 'mov', 'm4v', 'avi', 'mkv']);
 const AUDIO_EXTENSIONS = new Set(['mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'webm']);
 
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
+
+type AssetCacheEntry = { mtimeMs: number; size: number; assets: WorkspaceAsset[] };
+const assetCache = new Map<string, AssetCacheEntry>();
 
 function isAllowedUploadType(kind: Exclude<AssetKind, 'prompt'>, name: string, mimeType: string): boolean {
   const extension = name.split('.').pop()?.toLowerCase() || '';
@@ -56,9 +61,15 @@ function uploadDir(accountId: string): string {
 function read(accountId: string): WorkspaceAsset[] {
   const file = filePath(accountId);
   try {
+    const stat = fs.statSync(file);
+    const cached = assetCache.get(file);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) return cached.assets;
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
-    return Array.isArray(parsed) ? parsed.map(normalizeStoredAsset) : [];
+    const assets = Array.isArray(parsed) ? parsed.map(normalizeStoredAsset) : [];
+    assetCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, assets });
+    return assets;
   } catch (error) {
+    assetCache.delete(file);
     if (error && typeof error === 'object' && (error as { code?: string }).code !== 'ENOENT') {
       // Preserve the historical tolerant behaviour for malformed stores while
       // allowing path/identifier validation errors to surface before this point.
@@ -91,6 +102,8 @@ function write(accountId: string, assets: readonly WorkspaceAsset[]): void {
   try {
     fs.writeFileSync(tmp, JSON.stringify(assets, null, 2), { encoding: 'utf8', mode: 0o600 });
     fs.renameSync(tmp, file);
+    const stat = fs.statSync(file);
+    assetCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, assets: assets.map(normalizeStoredAsset) });
   } finally {
     if (fs.existsSync(tmp)) fs.rmSync(tmp, { force: true });
   }
@@ -143,28 +156,47 @@ export function createPromptAsset(accountId: string, input: { name: string; cont
   return clone(asset);
 }
 
-export function createUploadedAsset(accountId: string, kind: Exclude<AssetKind, 'prompt'>, file: { name: string; type: string; size: number; arrayBuffer: ArrayBuffer }): WorkspaceAsset {
+export function createUploadedAssets(accountId: string, kind: Exclude<AssetKind, 'prompt'>, files: readonly UploadedAssetInput[]): WorkspaceAsset[] {
   const normalizedAccount = assertAssetAccountId(accountId);
-  if (!BINARY_KINDS.includes(kind) || !file.name || file.size <= 0 || file.size > 100 * 1024 * 1024) throw new Error('asset_file_invalid');
-  if (!isAllowedUploadType(kind, file.name, file.type)) throw new Error('asset_file_type_invalid');
-  const bytes = Buffer.from(file.arrayBuffer);
-  if (kind === 'image') {
-    const probe = bytes.subarray(0, 256).toString('utf8').trimStart().toLowerCase();
-    if (probe.startsWith('<svg') || probe.startsWith('<!doctype html') || probe.startsWith('<html') || probe.startsWith('<script')) {
-      throw new Error('asset_file_type_invalid');
+  if (!BINARY_KINDS.includes(kind) || files.length === 0 || files.length > 100) throw new Error('asset_file_invalid');
+  const now = new Date().toISOString();
+  const prepared = files.map((file) => {
+    if (!file.name || file.size <= 0 || file.size > 100 * 1024 * 1024) throw new Error('asset_file_invalid');
+    if (!isAllowedUploadType(kind, file.name, file.type)) throw new Error('asset_file_type_invalid');
+    const bytes = Buffer.from(file.arrayBuffer);
+    if (bytes.length !== file.size) throw new Error('asset_file_invalid');
+    if (kind === 'image') {
+      const probe = bytes.subarray(0, 256).toString('utf8').trimStart().toLowerCase();
+      if (probe.startsWith('<svg') || probe.startsWith('<!doctype html') || probe.startsWith('<html') || probe.startsWith('<script')) {
+        throw new Error('asset_file_type_invalid');
+      }
     }
-  }
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, ASSET_NAME_MAX_LENGTH);
-  const id = `asset-${crypto.randomUUID()}`;
+    const safeName = file.name.replace(/[^a-zA-Z0-9._-]+/g, '_').slice(0, ASSET_NAME_MAX_LENGTH);
+    const id = `asset-${crypto.randomUUID()}`;
+    const relativePath = path.join('uploads', normalizedAccount, `${id}-${safeName}`).replace(/\\/g, '/');
+    const asset: WorkspaceAsset = { id, accountId: normalizedAccount, kind, name: file.name.slice(0, ASSET_NAME_MAX_LENGTH), relativePath, mimeType: file.type.slice(0, ASSET_NAME_MAX_LENGTH), size: file.size, createdAt: now, updatedAt: now };
+    return { asset, bytes, destination: getWorkspacePath(relativePath) };
+  });
   const directory = uploadDir(normalizedAccount);
   fs.mkdirSync(directory, { recursive: true });
-  const relativePath = path.join('uploads', normalizedAccount, `${id}-${safeName}`).replace(/\\/g, '/');
-  const destination = getWorkspacePath(relativePath);
-  fs.writeFileSync(destination, bytes);
-  const now = new Date().toISOString();
-  const asset: WorkspaceAsset = { id, accountId: normalizedAccount, kind, name: file.name.slice(0, ASSET_NAME_MAX_LENGTH), relativePath, mimeType: file.type.slice(0, ASSET_NAME_MAX_LENGTH), size: file.size, createdAt: now, updatedAt: now };
-  write(normalizedAccount, [...read(normalizedAccount), asset]);
-  return clone(asset);
+  const written: string[] = [];
+  try {
+    for (const item of prepared) {
+      fs.writeFileSync(item.destination, item.bytes, { flag: 'wx', mode: 0o600 });
+      written.push(item.destination);
+    }
+    write(normalizedAccount, [...read(normalizedAccount), ...prepared.map((item) => item.asset)]);
+    return prepared.map((item) => clone(item.asset));
+  } catch (error) {
+    for (const destination of written) {
+      try { fs.rmSync(destination, { force: true }); } catch { /* best effort rollback */ }
+    }
+    throw error;
+  }
+}
+
+export function createUploadedAsset(accountId: string, kind: Exclude<AssetKind, 'prompt'>, file: UploadedAssetInput): WorkspaceAsset {
+  return createUploadedAssets(accountId, kind, [file])[0];
 }
 
 /** Rename an asset's display name without moving its physical file. */
@@ -197,6 +229,30 @@ export function updatePromptAsset(accountId: string, id: string, input: { name: 
   return clone(next);
 }
 
+/**
+ * Flag an inventory video as published, or clear that flag.
+ *
+ * Operators need to tell apart clips that already went out from ones still
+ * waiting, so the timestamp is stored on the asset rather than tracked
+ * per-person in someone's head.
+ */
+export function setAssetPublished(accountId: string, id: string, published: boolean, publishedAt: Date | number = new Date()): WorkspaceAsset | null {
+  const normalizedAccount = assertAssetAccountId(accountId);
+  const normalizedAsset = assertAssetId(id);
+  const current = read(normalizedAccount);
+  const index = current.findIndex((asset) => asset.id === normalizedAsset);
+  if (index < 0) return null;
+  if (current[index].kind !== 'inventory-video') throw new Error('asset_kind_invalid');
+  const { publishedAt: _previous, ...rest } = current[index];
+  const next: WorkspaceAsset = {
+    ...rest,
+    ...(published ? { publishedAt: new Date(publishedAt).toISOString() } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+  write(normalizedAccount, current.map((asset, itemIndex) => itemIndex === index ? next : asset));
+  return clone(next);
+}
+
 /** Delete metadata and, for binary assets, the account-scoped physical file. */
 export function deleteAsset(accountId: string, id: string): WorkspaceAsset | null {
   const normalizedAccount = assertAssetAccountId(accountId);
@@ -214,8 +270,8 @@ export function deleteAsset(accountId: string, id: string): WorkspaceAsset | nul
   return clone(asset);
 }
 
-/** Return a validated physical file path for a binary asset and its bytes. */
-export function readAssetFile(accountId: string, id: string): { asset: WorkspaceAsset; filePath: string; bytes: Buffer } | null {
+/** Resolve a binary asset without reading its entire body into memory. */
+export function getAssetFileInfo(accountId: string, id: string): WorkspaceAssetFileInfo | null {
   const normalizedAccount = assertAssetAccountId(accountId);
   const normalizedAsset = assertAssetId(id);
   const asset = read(normalizedAccount).find((item) => item.id === normalizedAsset);
@@ -228,5 +284,12 @@ export function readAssetFile(accountId: string, id: string): { asset: Workspace
     throw error;
   }
   if (!physical) return null;
-  return { asset: clone(asset), filePath: physical, bytes: fs.readFileSync(physical) };
+  const stat = fs.statSync(physical);
+  return { asset: clone(asset), filePath: physical, size: stat.size };
+}
+
+/** Return a validated physical file path for a binary asset and its bytes. */
+export function readAssetFile(accountId: string, id: string): { asset: WorkspaceAsset; filePath: string; bytes: Buffer } | null {
+  const file = getAssetFileInfo(accountId, id);
+  return file ? { asset: file.asset, filePath: file.filePath, bytes: fs.readFileSync(file.filePath) } : null;
 }

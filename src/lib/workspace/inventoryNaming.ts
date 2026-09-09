@@ -17,6 +17,8 @@ export type TaskNameInput = Pick<ProviderTask, 'id' | 'accountId' | 'mode' | 'pr
 
 function taskNameBase(task: TaskNameInput): string {
   const metadata = task.metadata ?? {};
+  const configuredName = metadata.taskNameMode === 'manual' && typeof metadata.taskName === 'string' ? metadata.taskName.trim() : '';
+  if (configuredName) return configuredName;
   const referenceImageName = typeof metadata.referenceImageName === 'string' ? taskImageStem(metadata.referenceImageName) : '';
   return referenceImageName || task.prompt?.trim().slice(0, 80) || `${task.mode} generation`;
 }
@@ -69,8 +71,12 @@ export function taskNameSequenceMap(tasks: readonly TaskNameInput[]): ReadonlyMa
 
 export function taskNameForInventory(task: TaskNameInput, occurrence?: number): string {
   const metadata = task.metadata ?? {};
+  const explicitMode = metadata.taskNameMode === 'auto' || metadata.taskNameMode === 'manual';
   const hasReferenceName = typeof metadata.referenceImageName === 'string' && metadata.referenceImageName.trim();
-  if (!hasReferenceName) return taskNameBase(task);
+  // New image/video tasks always receive a date/sequence suffix, including
+  // manually named tasks without a reference image. Keep the legacy behavior
+  // for records created before taskNameMode was introduced.
+  if (!explicitMode && !hasReferenceName) return taskNameBase(task);
   return `${taskNameBase(task)}_${businessDate(task.createdAt)}_${occurrence ?? taskNameSequenceFor(task)}`;
 }
 

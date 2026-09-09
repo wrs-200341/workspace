@@ -27,7 +27,8 @@ export type ProductImageAsset = {
 export type ProductImageFolder = ProductImageRecord & {
   coverAssetId?: string;
   coverUrl?: string;
-  images: ProductImageAsset[];
+  imageCount: number;
+  images?: ProductImageAsset[];
 };
 
 export type GalleryItem = { pid: string; title?: string; description?: string; coverUrl?: string; [key: string]: unknown };
@@ -50,15 +51,27 @@ const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.av
 
 let sourceToken: string | null = null;
 let sourceTokenBase = '';
+let directoryCache: { root: string; mtimeMs: number; accounts: string[]; records: ProductImageRecord[]; assets: ProductImageAsset[]; folders: ProductImageFolder[] } | null = null;
 
 function sourceTimeoutMs(): number {
   const configured = Number(process.env.WORKSPACE_8765_TIMEOUT_MS || 30_000);
   return Number.isFinite(configured) ? Math.max(1_000, Math.min(120_000, Math.round(configured))) : 30_000;
 }
 
-async function fetchSource(fetcher: typeof fetch, input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+/**
+ * Archive downloads bundle every image of every requested PID, so they are far
+ * slower than the metadata calls the default timeout is sized for. A folder
+ * that has to come from the remote NAS costs roughly a second per file.
+ */
+function archiveTimeoutMs(): number {
+  const configured = Number(process.env.WORKSPACE_8765_ARCHIVE_TIMEOUT_MS || 300_000);
+  const fallback = Math.max(sourceTimeoutMs(), 300_000);
+  return Number.isFinite(configured) ? Math.max(30_000, Math.min(900_000, Math.round(configured))) : fallback;
+}
+
+async function fetchSource(fetcher: typeof fetch, input: RequestInfo | URL, init: RequestInit = {}, timeoutMs = sourceTimeoutMs()): Promise<Response> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), sourceTimeoutMs());
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetcher(input, { ...init, signal: init.signal ?? controller.signal });
   } catch (error) {
@@ -72,6 +85,14 @@ async function fetchSource(fetcher: typeof fetch, input: RequestInfo | URL, init
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 
 function productImagesRoot(): string { return getWorkspacePath('product-images'); }
+
+function rootMtimeMs(root: string): number {
+  try {
+    return fs.statSync(root).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
 
 function safeSegment(value: string, errorCode: string): string {
   const normalized = value.trim();
@@ -173,8 +194,8 @@ async function sourceAuthHeaders(fetcher: typeof fetch): Promise<Record<string, 
   return { 'X-Clone-Token': sourceToken };
 }
 
-async function authenticatedPost(fetcher: typeof fetch, path: string, body: Record<string, unknown>, accept: string): Promise<Response> {
-  const send = async (headers: Record<string, string>) => fetchSource(fetcher, `${baseUrl()}${path}`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json', accept }, body: JSON.stringify(body) });
+async function authenticatedPost(fetcher: typeof fetch, path: string, body: Record<string, unknown>, accept: string, timeoutMs?: number): Promise<Response> {
+  const send = async (headers: Record<string, string>) => fetchSource(fetcher, `${baseUrl()}${path}`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json', accept }, body: JSON.stringify(body) }, timeoutMs ?? sourceTimeoutMs());
   let response = await send(await sourceAuthHeaders(fetcher));
   // 8765 regenerates its local session token on process restart. Refresh it
   // once on an authorization failure so imports recover without a manual
@@ -221,8 +242,8 @@ export async function importProductImages(
   const valid = extractPidList(checkPayload, pids);
   const requested = new Set(pids);
   if (valid.length !== requested.size || new Set(valid).size !== requested.size || valid.some((pid) => !requested.has(pid))) throw new Error('product_pid_unavailable');
-  let response = await fetchSource(fetcher, `${root}/api/v1/gallery/download-folder`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/zip, application/octet-stream' }, body: JSON.stringify({ pids }) });
-  if (response.status === 403 || response.status === 404) response = await authenticatedPost(fetcher, '/api/v1/gallery/download', { pids }, 'application/zip, application/octet-stream');
+  let response = await fetchSource(fetcher, `${root}/api/v1/gallery/download-folder`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/zip, application/octet-stream' }, body: JSON.stringify({ pids }) }, archiveTimeoutMs());
+  if (response.status === 403 || response.status === 404) response = await authenticatedPost(fetcher, '/api/v1/gallery/download', { pids }, 'application/zip, application/octet-stream', archiveTimeoutMs());
   if (!response.ok) throw new Error(`product_source_http_${response.status}`);
   const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
   if (contentType && !['application/zip', 'application/octet-stream', 'application/x-zip-compressed'].includes(contentType)) throw new Error('product_archive_content_type_invalid');
@@ -247,6 +268,7 @@ export async function importProductImages(
       throw error;
     }
   }
+  directoryCache = null;
   return imported.map(clone);
 }
 
@@ -326,30 +348,8 @@ function findSignature(buffer: Buffer, signature: number): number {
   return -1;
 }
 
-export function listProductImages(accountIdInput?: string): ProductImageRecord[] {
-  const root = productImagesRoot();
-  const accountFilter = accountIdInput ? safeSegment(accountIdInput, 'account_id_invalid') : undefined;
-  const accounts = accountFilter ? [accountFilter] : readDirectories(root);
-  const records: ProductImageRecord[] = [];
-  for (const accountId of accounts) {
-    const accountDir = path.join(root, accountId);
-    for (const date of readDirectories(accountDir).filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item))) {
-      for (const pid of readDirectories(path.join(accountDir, date))) {
-        const pidDir = path.join(accountDir, date, pid);
-        const files = listImageFiles(pidDir);
-        if (!files.length) continue;
-        let importedAt = new Date(`${date}T00:00:00.000Z`).toISOString();
-        try { const manifest = JSON.parse(fs.readFileSync(path.join(pidDir, 'manifest.json'), 'utf8')) as { importedAt?: string }; if (typeof manifest.importedAt === 'string') importedAt = manifest.importedAt; } catch { /* manifest is optional */ }
-        records.push({ accountId, pid, importedAt, importDate: date, relativePath: path.relative(getWorkspacePath(), pidDir).replace(/\\/g, '/'), files });
-      }
-    }
-  }
-  return records.map(clone);
-}
-
-/** Lists individual shared product-image files across every operator account. */
-export function listProductImageAssets(accountIdInput?: string): ProductImageAsset[] {
-  return listProductImages(accountIdInput).flatMap((record) => record.files.map((file) => {
+function buildProductImageAssets(record: ProductImageRecord): ProductImageAsset[] {
+  return record.files.map((file) => {
     const relativePath = path.posix.join(record.relativePath.replace(/\\/g, '/'), file.replace(/\\/g, '/'));
     const absolutePath = path.resolve(getWorkspacePath(relativePath));
     let size = 0;
@@ -364,37 +364,108 @@ export function listProductImageAssets(accountIdInput?: string): ProductImageAss
       mimeType: mimeTypeForPath(file),
       size,
     } satisfies ProductImageAsset;
-  }).filter((item): item is ProductImageAsset => Boolean(item)));
+  }).filter((item): item is ProductImageAsset => Boolean(item));
 }
 
-/** Return imported PID folders with their individual image assets. */
-export function listProductImageFolders(accountIdInput?: string): ProductImageFolder[] {
-  const records = listProductImages(accountIdInput);
-  const assets = listProductImageAssets(accountIdInput);
-  const grouped = new Map<string, ProductImageRecord[]>();
-  for (const record of records) {
-    // Keep PID folders isolated per owner.  Two operator accounts may import
-    // the same PID, but their assets must never be merged into one folder.
-    const key = `${record.accountId}:${record.pid}`;
-    grouped.set(key, [...(grouped.get(key) ?? []), record]);
-  }
-  return [...grouped.values()].map((recordGroup) => {
-    const record = [...recordGroup].sort((left, right) => right.importedAt.localeCompare(left.importedAt))[0];
-    const prefix = `product-image:${record.accountId}:${record.importDate}:${record.pid}:`;
-    const images = assets.filter((asset) => asset.id.startsWith(prefix));
-    const cover = images[0];
-    return {
-      ...record,
-      files: [...record.files],
+function buildProductImageFolder(record: ProductImageRecord, includeImages: boolean): ProductImageFolder {
+  const images = includeImages ? buildProductImageAssets(record) : [];
+  const cover = images[0];
+  const fallbackCoverFile = record.files[0];
+  const fallbackCoverAssetId = fallbackCoverFile
+    ? `product-image:${record.accountId}:${record.importDate}:${record.pid}:${fallbackCoverFile.replace(/\\/g, '/')}`
+    : undefined;
+  const fallbackCoverUrl = fallbackCoverAssetId ? `/api/workspace/product-images/preview?assetId=${encodeURIComponent(fallbackCoverAssetId)}` : undefined;
+  return {
+    ...record,
+    files: [...record.files],
+    imageCount: record.files.length,
+    ...(cover ? {
+      coverAssetId: cover.id,
+      coverUrl: `/api/workspace/product-images/preview?assetId=${encodeURIComponent(cover.id)}`,
       images,
-      ...(cover ? {
-        coverAssetId: cover.id,
-        coverUrl: `/api/workspace/product-images/preview?assetId=${encodeURIComponent(cover.id)}`,
-      } : {}),
-    };
-  }).map(clone);
+    } : {
+      ...(fallbackCoverAssetId ? { coverAssetId: fallbackCoverAssetId } : {}),
+      ...(fallbackCoverUrl ? { coverUrl: fallbackCoverUrl } : {}),
+      ...(includeImages ? { images } : {}),
+    }),
+  };
 }
 
+export function listProductImages(accountIdInput?: string): ProductImageRecord[] {
+  const root = productImagesRoot();
+  const cached = directoryCache;
+  const rootStat = rootMtimeMs(root);
+  if (cached && cached.root === root && cached.mtimeMs === rootStat && (!accountIdInput || cached.accounts.includes(accountIdInput))) {
+    return cached.records.filter((record) => !accountIdInput || record.accountId === accountIdInput).map(clone);
+  }
+  const records: ProductImageRecord[] = [];
+  const accounts = readDirectories(root);
+  for (const accountId of accounts) {
+    const accountDir = path.join(root, accountId);
+    for (const date of readDirectories(accountDir).filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item))) {
+      for (const pid of readDirectories(path.join(accountDir, date))) {
+        const pidDir = path.join(accountDir, date, pid);
+        const files = listImageFiles(pidDir);
+        if (!files.length) continue;
+        let importedAt = new Date(`${date}T00:00:00.000Z`).toISOString();
+        try { const manifest = JSON.parse(fs.readFileSync(path.join(pidDir, 'manifest.json'), 'utf8')) as { importedAt?: string }; if (typeof manifest.importedAt === 'string') importedAt = manifest.importedAt; } catch { /* manifest is optional */ }
+        records.push({ accountId, pid, importedAt, importDate: date, relativePath: path.relative(getWorkspacePath(), pidDir).replace(/\\/g, '/'), files });
+      }
+    }
+  }
+  directoryCache = {
+    root,
+    mtimeMs: rootStat,
+    accounts,
+    records: records.map(clone),
+    assets: [],
+    folders: [],
+  };
+  return records.map(clone);
+}
+
+/** Lists individual shared product-image files across every operator account. */
+export function listProductImageAssets(accountIdInput?: string): ProductImageAsset[] {
+  const root = productImagesRoot();
+  const cached = directoryCache;
+  const rootStat = rootMtimeMs(root);
+  if (cached && cached.root === root && cached.mtimeMs === rootStat && cached.assets.length > 0 && (!accountIdInput || cached.accounts.includes(accountIdInput))) {
+    return cached.assets.filter((asset) => !accountIdInput || asset.id.split(':')[1] === accountIdInput).map(clone);
+  }
+  const assets = listProductImages(accountIdInput).flatMap((record) => buildProductImageAssets(record));
+  if (directoryCache && directoryCache.root === root && directoryCache.mtimeMs === rootStat) directoryCache.assets = assets.map(clone);
+  return assets;
+}
+
+/** Return imported PID folders. Images are loaded lazily on demand. */
+export function listProductImageFolders(accountIdInput?: string, options: { includeImages?: boolean } = {}): ProductImageFolder[] {
+  const root = productImagesRoot();
+  const cached = directoryCache;
+  const rootStat = rootMtimeMs(root);
+  if (cached && cached.root === root && cached.mtimeMs === rootStat && cached.folders.length > 0 && !options.includeImages) {
+    return cached.folders.map(clone);
+  }
+  const records = listProductImages(accountIdInput);
+  const grouped = new Map<string, ProductImageRecord[]>();
+  for (const record of records) grouped.set(record.pid, [...(grouped.get(record.pid) ?? []), record]);
+  const folders = [...grouped.values()].map((recordGroup) => buildProductImageFolder([...recordGroup].sort((left, right) => right.importedAt.localeCompare(left.importedAt))[0], Boolean(options.includeImages))).map(clone);
+  directoryCache = {
+    root,
+    mtimeMs: rootStat,
+    accounts: directoryCache?.accounts ?? readDirectories(root),
+    records: directoryCache?.records ?? records.map(clone),
+    assets: directoryCache?.assets ?? [],
+    folders: folders.map(clone),
+  };
+  return folders;
+}
+
+export function readProductImageFolder(accountIdInput: string | undefined, pidInput: string): ProductImageFolder | null {
+  const pid = safeSegment(pidInput, 'product_pid_invalid');
+  const record = listProductImages(accountIdInput).filter((item) => item.pid === pid).sort((left, right) => right.importedAt.localeCompare(left.importedAt))[0];
+  if (!record) return null;
+  return buildProductImageFolder(record, true);
+}
 export function getProductImageAbsolutePath(assetId: string): string {
   const asset = readProductImageAsset(assetId);
   if (!asset) throw new Error('reference_asset_not_found');
@@ -420,9 +491,7 @@ function mimeTypeForPath(file: string): string {
 export function publishProductImageReference(assetId: string, accountId: string): PublishedAssetReference {
   const asset = listProductImageAssets().find((candidate) => candidate.id === assetId);
   if (!asset) throw new Error('reference_asset_not_found');
-  // Shared gallery assets are intentionally available to every workspace;
-  // legacy account-scoped imports remain restricted to their owner.
-  if (asset.id.split(':')[1] !== 'shared' && asset.id.split(':')[1] !== accountId) throw new Error('reference_asset_not_found');
+  // Shared gallery assets are available to every workspace account.
   return publishFileReference({ accountId, assetId, relativePath: asset.relativePath, mimeType: asset.mimeType });
 }
 
@@ -433,8 +502,6 @@ export function publishProductImageReferences(assetIds: readonly string[], accou
   const inputs = assetIds.map((assetId) => {
     const asset = assets.find((candidate) => candidate.id === assetId);
     if (!asset) throw new Error('reference_asset_not_found');
-    const owner = asset.id.split(':')[1];
-    if (owner !== 'shared' && owner !== accountId) throw new Error('reference_asset_not_found');
     return { accountId, assetId, relativePath: asset.relativePath, mimeType: asset.mimeType };
   });
   return publishFileReferences(inputs);
@@ -468,6 +535,7 @@ export function cleanupExpiredProductImages(now: Date | number = new Date(), opt
       if (!options.dryRun) { try { fs.rmSync(dateDir, { recursive: true, force: true }); } catch { result.failures += 1; } }
     }
   }
+  directoryCache = null;
   return result;
 }
 
