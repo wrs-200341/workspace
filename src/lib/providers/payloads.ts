@@ -646,15 +646,17 @@ export function buildWanVideoPayload(input: WanVideoInput): Record<string, unkno
 
 /** Convert the workspace controls to a Seedream canvas size. The measured
  * 1086x1448 canvas is sent verbatim; other choices use the documented 1K
- * ratio presets. */
+ * ratio presets (matching ByteDance's actual per-ratio canvases -- the old
+ * table reused the 9:16 canvas for 3:4 and mislabeled it as 2:3). */
 export function seedreamImageSize(aspectRatio = '9:16', resolution = '1k'): string {
   const ratio = aspectRatio.trim() || '9:16';
   const requestedResolution = resolution.trim().toLowerCase();
   if (requestedResolution === '1086x1448') return '1086x1448';
   const sizes: Record<string, Record<string, string>> = {
-    '9:16': { '1k': '1024x1536' },
-    '16:9': { '1k': '1536x1024' },
+    '9:16': { '1k': '936x1664' },
+    '16:9': { '1k': '1664x936' },
     '1:1': { '1k': '1024x1024' },
+    '3:4': { '1k': '1104x1472' },
   };
   return sizes[ratio]?.['1k'] ?? sizes['9:16']['1k'];
 }

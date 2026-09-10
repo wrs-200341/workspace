@@ -278,7 +278,7 @@ describe('provider client helpers', () => {
     const jpeg = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(40, 1), Buffer.from([0xff, 0xd9])]).toString('base64');
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe('https://newapi.apiaw.com/v1/images/generations');
-      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'dola-seedream-5-0-pro-260628-ep', size: '1024x1536', response_format: 'b64_json' });
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'dola-seedream-5-0-pro-260628-ep', size: '936x1664', response_format: 'b64_json' });
       return Response.json({ data: [{ b64_json: jpeg }] });
     });
     const result = await generateSeedreamImage({ model: 'dola-seedream-5-0-pro-260628-ep', prompt: 'portrait', aspectRatio: '9:16', resolution: '1k' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', SEEDREAM_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
