@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { appendProductSummary, lookupProductSummary } from '@/lib/workspace/productSummary';
 import * as productSummaryModule from '@/lib/workspace/productSummary';
-import { enqueueProviderTask, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
+import { enqueueProviderTask, recoverOrphanedSchedulerTasks, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 import { canonicalTaskProgress } from '@/lib/providers/taskProgress';
 import type { GPTPromptAttachment } from '@/lib/providers/payloads';
@@ -37,6 +37,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const body = await request.json().catch(() => ({}));
   if (body && typeof body === 'object' && (body as { action?: unknown }).action === 'recover-safe') {
     const ownerId = workspaceOwnerIdForAccount(id);
+    recoverOrphanedSchedulerTasks(Date.now(), { force: true });
     const requestedDate = typeof (body as { date?: unknown }).date === 'string' ? (body as { date: string }).date : undefined;
     const candidates = listProviderTasks({ mode: 'video', status: 'failed' }).filter((task) => {
       if (requestedDate && businessDate(task.createdAt) !== requestedDate) return false;

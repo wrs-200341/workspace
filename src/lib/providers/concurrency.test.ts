@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProviderTask, getProviderTask, updateProviderTask } from './taskStore';
-import { enqueueProviderTask, recoverOrphanedSchedulerTasks, resetSchedulerForTests } from './concurrency';
+import { enqueueProviderTask, expireStaleProviderActiveTasks, recoverOrphanedSchedulerTasks, resetSchedulerForTests } from './concurrency';
 
 const testRoot = `D:\\all_projects\\workspace\\data\\concurrency-test-${process.pid}`;
 const previousRoot = process.env.WORKSPACE_DATA_ROOT;
@@ -102,6 +102,56 @@ describe('production concurrency scheduler', () => {
     await tick();
     expect(startedA).toBe(0);
     expect(startedB).toBe(0);
+  });
+
+  it('expires stale provider-active tasks so they do not block a model lane forever', async () => {
+    const staleUpdatedAt = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+    const stale = createProviderTask({
+      id: 'stale-provider-active',
+      accountId: 'operator-a-account',
+      mode: 'video',
+      provider: 'grok-video',
+      model: 'omni-fast-no-water',
+      status: 'queued',
+      providerTaskId: 'upstream-stale',
+      progress: 35,
+      createdAt: staleUpdatedAt,
+      metadata: { ownerId: 'operator-a', schedulerState: 'provider-active' },
+    });
+    const waiting = seed('waiting-after-stale', 'video', 'omni-fast-no-water');
+    let started = 0;
+    enqueueProviderTask({
+      taskId: waiting.id,
+      ownerId: 'operator-a',
+      mode: 'video',
+      model: 'omni-fast-no-water',
+      run: async () => {
+        started += 1;
+        updateProviderTask(waiting.id, { status: 'completed', progress: 100 });
+      },
+    });
+    await tick();
+    expect(started).toBe(1);
+    expect(getProviderTask(stale.id)).toMatchObject({ status: 'failed', error: 'provider_task_stale', progress: 100 });
+  });
+
+  it('can explicitly expire stale provider-active rows during recovery scans', () => {
+    const staleUpdatedAt = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+    const stale = createProviderTask({
+      id: 'stale-provider-scan',
+      accountId: 'operator-a-account',
+      mode: 'video',
+      provider: 'grok-video',
+      model: 'grok-model',
+      status: 'running',
+      providerTaskId: 'upstream-stale-scan',
+      progress: 75,
+      createdAt: staleUpdatedAt,
+      metadata: { ownerId: 'operator-a', schedulerState: 'provider-active' },
+    });
+    const expired = expireStaleProviderActiveTasks(Date.now(), { pump: false });
+    expect(expired.map((task) => task.id)).toContain(stale.id);
+    expect(getProviderTask(stale.id)).toMatchObject({ status: 'failed', error: 'provider_task_stale' });
   });
 
   it('marks never-submitted jobs from a previous runtime as interrupted', () => {

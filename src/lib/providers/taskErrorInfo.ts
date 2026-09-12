@@ -142,6 +142,16 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
       safeToRetry: false,
     };
   }
+  if (lower === 'provider_task_stale') {
+    return {
+      code: lower,
+      category: 'provider_timeout',
+      title: '供应商任务长时间没有更新',
+      message: '这条任务已经提交给供应商，但超过系统等待时间仍没有返回新状态；系统已释放并发槽，避免后续任务一直排队。',
+      action: '请先打开任务详情或供应商后台确认是否已有结果；确认没有结果后再人工重试，避免重复提交扣费。',
+      safeToRetry: false,
+    };
+  }
   if (lower === 'provider_upstream_failed' || lower === 'image_provider_failed' || lower === 'video_outputs_unavailable' || lower === 'image_outputs_unavailable') {
     return {
       code: lower,

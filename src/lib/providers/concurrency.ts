@@ -38,6 +38,7 @@ const PROVIDER_ACTIVE_STATE = 'provider-active';
 const DISPATCHING_STATE = 'dispatching';
 export const SCHEDULER_RUNTIME_ID = crypto.randomUUID();
 const ORPHANED_TASK_AGE_MS = 2 * 60 * 1000;
+const DEFAULT_PROVIDER_ACTIVE_STALE_MS = 6 * 60 * 60 * 1000;
 /** Every production task gets two automatic retries after its first failure. */
 export const DEFAULT_MAX_RETRIES = 2;
 const RETRYING_STATUS: ProviderTaskStatus = 'retrying';
@@ -55,6 +56,11 @@ const pumpAgainScopes = new Set<string>();
 function positiveInteger(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed > 0 && parsed <= 1000 ? parsed : fallback;
+}
+
+function positiveDuration(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 }
 
 export function getConcurrencyLimits(env: Readonly<Record<string, string | undefined>> = process.env): ConcurrencyLimits {
@@ -123,6 +129,57 @@ function currentCounts(scope: Scope, mode: ProductionMode): { total: number; byM
     byModel.set(model, (byModel.get(model) ?? 0) + 1);
   }
   return { total, byModel };
+}
+
+function providerActiveStaleMs(): number {
+  return positiveDuration(process.env.WORKSPACE_PROVIDER_ACTIVE_STALE_MS, DEFAULT_PROVIDER_ACTIVE_STALE_MS);
+}
+
+function isStaleProviderActiveTask(
+  task: Pick<ProviderTask, 'accountId' | 'status' | 'mode' | 'providerTaskId' | 'metadata' | 'updatedAt'>,
+  now: number,
+  options: { ownerId?: string; mode?: ProductionMode } = {},
+): boolean {
+  if (!task.providerTaskId || !isPersistedActiveTask(task)) return false;
+  if (options.mode && task.mode !== options.mode) return false;
+  if (options.ownerId && taskOwnerId(task) !== options.ownerId) return false;
+  const updatedAt = Date.parse(task.updatedAt);
+  if (!Number.isFinite(updatedAt)) return false;
+  return now - updatedAt >= providerActiveStaleMs();
+}
+
+export function expireStaleProviderActiveTasks(
+  now = Date.now(),
+  options: { ownerId?: string; mode?: ProductionMode; pump?: boolean } = {},
+): ProviderTask[] {
+  const expired: ProviderTask[] = [];
+  if (process.env.NODE_ENV === 'test' && options.pump !== false) return expired;
+  const affected = new Map<string, Scope>();
+  for (const summary of listProviderTaskSummaries()) {
+    if (!isStaleProviderActiveTask(summary, now, options)) continue;
+    const latest = getProviderTask(summary.id);
+    if (!latest || !isStaleProviderActiveTask(latest, now, options)) continue;
+    const mode = latest.mode === 'image' || latest.mode === 'video' ? latest.mode : undefined;
+    const ownerId = taskOwnerId(latest);
+    const updated = updateProviderTask(latest.id, {
+      status: 'failed',
+      progress: 100,
+      error: 'provider_task_stale',
+      metadata: {
+        ...(latest.metadata ?? {}),
+        schedulerState: 'terminal',
+        providerTaskStaleAt: new Date(now).toISOString(),
+        schedulerFinishedAt: new Date(now).toISOString(),
+      },
+    });
+    if (!updated) continue;
+    expired.push(updated);
+    if (mode) affected.set(`${ownerId}:${mode}`, { ownerId, mode });
+  }
+  if (options.pump !== false) {
+    for (const scope of affected.values()) void pumpScope(scope);
+  }
+  return expired;
 }
 
 function canStart(job: SchedulerJob, counts: { total: number; byModel: Map<string, number> }, limits: ConcurrencyLimits): boolean {
@@ -242,6 +299,7 @@ async function pumpScope(scope: Scope): Promise<void> {
     for (;;) {
       pumpAgainScopes.delete(key);
       const limits = getConcurrencyLimits();
+      expireStaleProviderActiveTasks(Date.now(), { ownerId: scope.ownerId, pump: false });
       for (;;) {
         const countsByMode = {
           image: currentCounts(scope, 'image'),
@@ -404,6 +462,11 @@ export function pumpProviderTasks(ownerId: string, mode: ProductionMode): void {
 export function recoverOrphanedSchedulerTasks(now = Date.now(), options: { force?: boolean } = {}): ProviderTask[] {
   const recovered: ProviderTask[] = [];
   if (process.env.NODE_ENV === 'test' && !options.force) return recovered;
+  recovered.push(...expireStaleProviderActiveTasks(now, { pump: false }));
+  const affected = new Map<string, Scope>();
+  for (const task of recovered) {
+    if (task.mode === 'image' || task.mode === 'video') affected.set(`${taskOwnerId(task)}:${task.mode}`, { ownerId: taskOwnerId(task), mode: task.mode });
+  }
   // Some lightweight route tests mock only the task methods they exercise;
   // keep recovery optional when that read helper is not present.
   for (const task of listProviderTaskSummaries()) {
@@ -423,7 +486,8 @@ export function recoverOrphanedSchedulerTasks(now = Date.now(), options: { force
     const runtimeId = task.metadata?.schedulerRuntimeId;
     // A stranded task is already finished from the scheduler's point of view,
     // so the current runtime having produced it is not a reason to skip it.
-    if (runtimeId === SCHEDULER_RUNTIME_ID && !strandedTerminal) continue;
+    const knownToThisProcess = registeredJobs.has(task.id) || pendingJobs.some((job) => job.taskId === task.id) || reservations.has(task.id);
+    if (runtimeId === SCHEDULER_RUNTIME_ID && !strandedTerminal && knownToThisProcess) continue;
     const updatedAt = Date.parse(task.updatedAt);
     if (!Number.isFinite(updatedAt) || now - updatedAt < ORPHANED_TASK_AGE_MS) continue;
     // Queue polling and a recovery request can run concurrently. Re-read the
@@ -451,8 +515,12 @@ export function recoverOrphanedSchedulerTasks(now = Date.now(), options: { force
         schedulerRuntimeId: SCHEDULER_RUNTIME_ID,
       },
     });
-    if (updated) recovered.push(updated);
+    if (updated) {
+      recovered.push(updated);
+      if (updated.mode === 'image' || updated.mode === 'video') affected.set(`${taskOwnerId(updated)}:${updated.mode}`, { ownerId: taskOwnerId(updated), mode: updated.mode });
+    }
   }
+  for (const scope of affected.values()) void pumpScope(scope);
   return recovered;
 }
 
