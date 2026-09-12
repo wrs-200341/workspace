@@ -105,6 +105,8 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
   const [publishFilter, setPublishFilter] = useState<'unpublished' | 'published'>('unpublished');
   const [editingName, setEditingName] = useState('');
   const [visibleLimit, setVisibleLimit] = useState(ASSET_PAGE_SIZE);
+  const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -121,7 +123,17 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
   useEffect(() => {
     setVisibleLimit(ASSET_PAGE_SIZE);
     setPublishFilter('unpublished');
+    setSelectedAssetIds([]);
   }, [accountId, section]);
+
+  useEffect(() => {
+    if (section !== 'image' || readOnly) {
+      setSelectedAssetIds([]);
+      return;
+    }
+    const existing = new Set(assets.map((asset) => asset.id));
+    setSelectedAssetIds((current) => current.filter((id) => existing.has(id)));
+  }, [assets, readOnly, section]);
 
   const handleFiles = useCallback(async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
@@ -255,10 +267,53 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
       const payload = await response.json().catch(() => null) as { success?: boolean; error?: string } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '删除失败');
       setAssets((current) => current.filter((item) => item.id !== asset.id));
+      setSelectedAssetIds((current) => current.filter((id) => id !== asset.id));
       setMessage('资产已删除');
     } catch (removeError) {
       setError(removeError instanceof Error ? removeError.message : '删除失败');
     }
+  };
+
+  const selectedAssets = useMemo(() => {
+    const selected = new Set(selectedAssetIds);
+    return assets.filter((asset) => asset.kind === 'image' && selected.has(asset.id));
+  }, [assets, selectedAssetIds]);
+
+  const toggleSelectedAsset = (assetId: string) => {
+    setSelectedAssetIds((current) => current.includes(assetId) ? current.filter((id) => id !== assetId) : [...current, assetId]);
+    setMessage('');
+    setError('');
+  };
+
+  const removeSelectedAssets = async () => {
+    if (section !== 'image' || readOnly || bulkDeleting || selectedAssets.length === 0) return;
+    const count = selectedAssets.length;
+    if (!window.confirm(`确定删除已选择的 ${count} 张素材图吗？此操作不可撤销。`)) return;
+    setBulkDeleting(true);
+    setMessage('');
+    setError('');
+    let succeeded = 0;
+    let failed = 0;
+    const deletedIds: string[] = [];
+    for (const asset of selectedAssets) {
+      try {
+        const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(asset.id)}`, { method: 'DELETE' });
+        const payload = await response.json().catch(() => null) as { success?: boolean; error?: string } | null;
+        if (!response.ok || !payload?.success) throw new Error(payload?.error || 'delete_failed');
+        succeeded += 1;
+        deletedIds.push(asset.id);
+      } catch {
+        failed += 1;
+      }
+    }
+    if (deletedIds.length) {
+      const deleted = new Set(deletedIds);
+      setAssets((current) => current.filter((asset) => !deleted.has(asset.id)));
+      setSelectedAssetIds((current) => current.filter((id) => !deleted.has(id)));
+    }
+    setBulkDeleting(false);
+    if (failed) setError(`已删除 ${succeeded} 张，${failed} 张删除失败，请刷新后重试。`);
+    else setMessage(`已删除 ${succeeded} 张素材图`);
   };
 
   const downloadAsset = async (asset: WorkspaceAsset) => {
@@ -305,8 +360,13 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     ? assets.filter((item) => (publishFilter === 'published' ? Boolean(item.publishedAt) : !item.publishedAt))
     : assets;
   const visibleAssets = filteredAssets.slice(0, visibleLimit);
+  const materialBulkSelectionEnabled = section === 'image' && !readOnly;
+  const selectedCount = selectedAssets.length;
 
   return <div className={`account-asset-library ${section}`}>
+    {materialBulkSelectionEnabled && <div className="asset-bulk-toolbar" aria-label="素材图批量操作">
+      <button type="button" className="asset-bulk-delete-button" disabled={bulkDeleting || selectedCount === 0} onClick={() => void removeSelectedAssets()}><Trash2 size={14} /> {bulkDeleting ? '删除中…' : `批量删除已选 (${selectedCount})`}</button>
+    </div>}
     {!readOnly && <div
       className={`asset-dropzone ${dragging ? 'dragging' : ''} ${uploading ? 'uploading' : ''}`}
       onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
@@ -338,8 +398,9 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     {section !== 'prompt' && visibleAssets.length > 0 && <div className={`asset-card-grid ${section === 'image' ? 'image-grid' : 'media-grid'}`}>
       {visibleAssets.map((asset) => {
         const isEditing = editingId === asset.id;
-        return <article className={`asset-card ${section === 'image' ? 'asset-image-card' : 'asset-media-card'}`} key={asset.id}>
-          {section === 'image' && <div className="asset-image-preview">{asset.relativePath ? <img src={assetUrl(accountId, asset.id)} alt={asset.name} loading="lazy" /> : <FileImage size={28} />}</div>}
+        const isSelected = selectedAssetIds.includes(asset.id);
+        return <article className={`asset-card ${section === 'image' ? 'asset-image-card' : 'asset-media-card'} ${isSelected ? 'is-selected' : ''}`} key={asset.id}>
+          {section === 'image' && <div className="asset-image-preview">{asset.relativePath ? <img src={assetUrl(accountId, asset.id)} alt={asset.name} loading="lazy" /> : <FileImage size={28} />}{materialBulkSelectionEnabled && <button type="button" className={`asset-card-select ${isSelected ? 'is-selected' : ''}`} onClick={() => toggleSelectedAsset(asset.id)} title={isSelected ? '取消选择' : '选择素材图'} aria-pressed={isSelected} aria-label={`${isSelected ? '取消选择' : '选择'} ${asset.name}`}>{isSelected ? <Check size={14} /> : null}</button>}</div>}
           {section === 'inventory-video' && <div className="asset-media-preview"><video src={assetUrl(accountId, asset.id)} controls preload="metadata" /></div>}
           {section === 'audio' && <div className="asset-media-preview audio"><AudioLines size={28} /><audio src={assetUrl(accountId, asset.id)} controls preload="metadata" /></div>}
           <div className="asset-card-body">
