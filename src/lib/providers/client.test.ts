@@ -138,7 +138,7 @@ describe('provider client helpers', () => {
   it('calls BigSnake Responses for child prompt generation', async () => {
     const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-5.5', input: 'make a hook', max_output_tokens: 2800 });
+      expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gpt-5.5', input: 'make a hook', max_output_tokens: 8000 });
       return new Response(JSON.stringify({ output_text: 'hook result' }), { status: 200, headers: { 'content-type': 'application/json' } });
     });
     const result = await generateBigSnakePrompt({ model: 'gpt-5.5', prompt: 'make a hook' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', BIGSNAKE_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
@@ -172,6 +172,13 @@ describe('provider client helpers', () => {
     const result = await generatePromptWithFallback({ prompt: 'hello' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', POMOAI_GPT_PROMPT_API_KEY: 'pomo-key' }, fetch: fetchMock as typeof fetch });
     expect(result).toMatchObject({ provider: 'pomoai-gpt-prompt', model: 'gemini-3.8-flash', text: 'pomo fallback result', fallbackFrom: 'pomoai-gpt-prompt', fallbackProviders: ['pomoai-gpt-prompt'], fallbackModels: ['gpt-5.5'] });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the last blank live result instead of throwing when every PomoAI fallback model replies with empty text', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ output_text: '' }));
+    const result = await generatePromptWithFallback({ prompt: 'hello' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', POMOAI_GPT_PROMPT_API_KEY: 'pomo-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ mode: 'live', provider: 'pomoai-gpt-prompt', text: '' });
+    expect(fetchMock).toHaveBeenCalledTimes(POMOAI_PROMPT_FALLBACK_MODELS.length);
   });
 
   it('does not cross-fallback to OAIRegBox or BigSnake when all PomoAI models fail', async () => {
@@ -417,7 +424,7 @@ describe('provider client helpers', () => {
       expect(JSON.parse(String(init?.body))).toEqual({
         model: 'gpt-5.5',
         input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
-        max_output_tokens: 2800,
+        max_output_tokens: 8000,
       });
       return Response.json({ output_text: 'world' });
     });
@@ -437,9 +444,23 @@ describe('provider client helpers', () => {
   it('normalizes structured Responses output and Chat Completions fallback', () => {
     expect(normalizeGPTResponsesResponse({
       output: [{ content: [{ type: 'output_text', text: 'first' }, { type: 'output_text', text: 'second' }] }],
-    })).toBe('first\nsecond');
-    expect(normalizeGPTResponsesResponse({ choices: [{ message: { content: [{ text: 'fallback' }] } }] })).toBe('fallback');
-    expect(normalizeGPTResponsesResponse({})).toBe('');
+    })).toEqual({ text: 'first\nsecond', incompleteReason: undefined });
+    expect(normalizeGPTResponsesResponse({ choices: [{ message: { content: [{ text: 'fallback' }] } }] })).toEqual({ text: 'fallback', incompleteReason: undefined });
+    expect(normalizeGPTResponsesResponse({})).toEqual({ text: '', incompleteReason: undefined });
+  });
+
+  it('reports the incomplete_details reason when reasoning consumes the entire output-token budget', () => {
+    expect(normalizeGPTResponsesResponse({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: [{ type: 'reasoning', content: [] }],
+    })).toEqual({ text: '', incompleteReason: 'max_output_tokens' });
+    expect(normalizeGPTResponsesResponse({
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output_text: 'partial but present',
+    })).toEqual({ text: 'partial but present', incompleteReason: 'max_output_tokens' });
+    expect(normalizeGPTResponsesResponse({ status: 'incomplete', incomplete_details: {} })).toEqual({ text: '', incompleteReason: 'incomplete' });
   });
 
   it('requires binary references for OAIRegBox multipart requests', async () => {

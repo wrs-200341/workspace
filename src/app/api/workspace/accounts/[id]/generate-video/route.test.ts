@@ -276,4 +276,19 @@ describe('generate-video automatic child prompt queueing', () => {
     });
     expect(mockSubmitVideo).not.toHaveBeenCalled();
   });
+
+  it('falls back to the template and flags it when a live prompt provider returns blank text', async () => {
+    mockGenerateBigSnakePrompt.mockResolvedValue({ mode: 'live', text: '   ', response: { ok: true } });
+    await POST(request(baseBody({ count: 1 })), params);
+    await runs[0]();
+
+    expect(mockSubmitVideo).toHaveBeenCalledTimes(1);
+    expect(tasks.get('task-1')).toMatchObject({
+      status: 'queued',
+      metadata: {
+        promptGenerationPending: false,
+        promptGenerationUsedTemplate: true,
+      },
+    });
+  });
 });

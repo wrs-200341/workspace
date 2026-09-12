@@ -427,6 +427,7 @@ td strong { color:var(--ink); font-weight:600; }
 .queue-model-line b { color:#334155; font-size:10px; font-weight:650; }
 .queue-model-line time { color:var(--muted); font-size:10px; margin-left:2px; }
 .queue-prompt-provider { color:#2563eb; font-size:10px; line-height:1.4; }
+.queue-prompt-provider.queue-prompt-warning { color:#b45309; }
 .production-queue-progress { display:flex; align-items:center; gap:7px; margin-top:10px; color:var(--muted); font:10px 'Fira Code',monospace; }
 .production-queue-progress .progress-track { flex:1; width:auto; margin:0; }
 .queue-inventory { display:inline-flex; align-items:center; gap:4px; color:var(--green); margin-left:auto; }

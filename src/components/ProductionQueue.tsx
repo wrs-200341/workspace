@@ -34,6 +34,7 @@ type QueueTask = {
   promptModel?: string;
   promptMode?: string;
   promptFallbackProviders?: string[];
+  promptGenerationUsedTemplate?: boolean;
   localOutputReady?: boolean;
   localOutputPending?: boolean;
   metadata?: Record<string, unknown>;
@@ -205,6 +206,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
           promptModel: task.promptModel ?? (typeof metadata?.promptModel === 'string' ? metadata.promptModel : undefined),
           promptMode: task.promptMode ?? (typeof metadata?.promptMode === 'string' ? metadata.promptMode : undefined),
           promptFallbackProviders: task.promptFallbackProviders ?? (Array.isArray(metadata?.promptFallbackProviders) ? metadata.promptFallbackProviders.filter((value): value is string => typeof value === 'string') : undefined),
+          promptGenerationUsedTemplate: task.promptGenerationUsedTemplate ?? (metadata?.promptGenerationUsedTemplate === true),
           localOutputReady,
           localOutputPending,
           schedulerState,
@@ -361,6 +363,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
           <div className="production-queue-progress"><div className="progress-track"><span style={{ width: `${task.progress}%` }} /></div><span>{['processing', 'running', 'prompting', 'submitting', 'submitted'].includes(task.status) ? `生成中 · ${task.progress}%` : `${task.progress}%`}</span>{task.inventorySavedAt && <span className="queue-inventory"><CheckCircle2 size={13} /> 已入库</span>}{task.status === 'completed' && !task.inventorySavedAt && <span className="queue-unsaved">未入库</span>}</div>
           {task.error && <div className="queue-error"><CircleAlert size={13} /><div><strong>{task.errorInfo?.title ?? formatProviderError(task.error)}</strong>{task.errorInfo?.message && <span>{task.errorInfo.message}</span>}{task.errorInfo?.action && <small>{task.errorInfo.action}</small>}<em>{task.errorInfo?.safeToRetry ? '可安全恢复' : '需要修改配置或人工确认后重试'}</em></div></div>}
           {task.promptMode !== 'manual' && task.promptFallbackProviders?.length ? <div className="queue-prompt-provider">提示词已自动退避，最终使用 {promptAttributionLabel(task)}</div> : null}
+          {task.promptMode !== 'manual' && task.promptGenerationUsedTemplate ? <div className="queue-prompt-provider queue-prompt-warning">未能生成子提示词，已使用模板提示词</div> : null}
           <div className="production-queue-actions">
              <Link href={reviewHref(task.accountId, mode, task.id)} className="queue-link">{mode === 'prompt' ? '恢复配置' : '审核'}</Link>
               {mode !== 'prompt' && <button type="button" className="queue-link" onClick={() => void openPrompt(task)}>提示词</button>}

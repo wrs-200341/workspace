@@ -1,4 +1,4 @@
-import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildSeedreamImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildSeedreamImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, GPT_RESPONSES_MAX_OUTPUT_TOKENS, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, isProviderLiveEnabled, POMOAI_PROMPT_FALLBACK_MODELS, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 
@@ -128,17 +128,33 @@ export function normalizeGeminiResponse(payload: unknown): string {
   }).join('\n').trim();
 }
 
+export type NormalizedResponsesText = { text: string; incompleteReason?: string };
+
 /**
  * Extract text from an OpenAI Responses API envelope. The API normally
  * exposes a convenient `output_text` field, but some compatible gateways only
  * return the structured `output[].content[]` blocks. For backwards
  * compatibility we also accept a Chat Completions `choices` envelope when a
  * gateway falls back to that shape.
+ *
+ * A reasoning-capable model can spend its entire `max_output_tokens` budget
+ * on internal reasoning before emitting any visible text. The Responses API
+ * surfaces that as `status: 'incomplete'` with `incomplete_details.reason`
+ * (typically `max_output_tokens`) on an otherwise-2xx response, so this is
+ * reported alongside the (possibly empty) extracted text instead of being
+ * silently indistinguishable from a genuinely empty model reply.
  */
-export function normalizeGPTResponsesResponse(payload: unknown): string {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '';
+export function normalizeGPTResponsesResponse(payload: unknown): NormalizedResponsesText {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return { text: '' };
   const root = payload as Record<string, unknown>;
-  if (typeof root.output_text === 'string' && root.output_text.trim()) return root.output_text.trim();
+  const incompleteReason = root.status === 'incomplete' && root.incomplete_details && typeof root.incomplete_details === 'object' && !Array.isArray(root.incomplete_details)
+    ? (() => {
+      const reason = (root.incomplete_details as Record<string, unknown>).reason;
+      return typeof reason === 'string' && reason.trim() ? reason.trim() : 'incomplete';
+    })()
+    : undefined;
+
+  if (typeof root.output_text === 'string' && root.output_text.trim()) return { text: root.output_text.trim(), incompleteReason };
 
   const output = Array.isArray(root.output) ? root.output : [];
   const outputText: string[] = [];
@@ -152,7 +168,7 @@ export function normalizeGPTResponsesResponse(payload: unknown): string {
       if (typeof value === 'string' && value.trim()) outputText.push(value.trim());
     }
   }
-  if (outputText.length) return outputText.join('\n');
+  if (outputText.length) return { text: outputText.join('\n'), incompleteReason };
 
   // Compatibility with OpenAI-compatible providers that still answer using
   // the Chat Completions envelope.
@@ -162,18 +178,18 @@ export function normalizeGPTResponsesResponse(payload: unknown): string {
     const message = (first as Record<string, unknown>).message;
     if (message && typeof message === 'object' && !Array.isArray(message)) {
       const content = (message as Record<string, unknown>).content;
-      if (typeof content === 'string' && content.trim()) return content.trim();
+      if (typeof content === 'string' && content.trim()) return { text: content.trim(), incompleteReason };
       if (Array.isArray(content)) {
         const parts = content.flatMap((part) => {
           if (!part || typeof part !== 'object' || Array.isArray(part)) return [];
           const value = (part as Record<string, unknown>).text;
           return typeof value === 'string' && value.trim() ? [value.trim()] : [];
         });
-        if (parts.length) return parts.join('\n');
+        if (parts.length) return { text: parts.join('\n'), incompleteReason };
       }
     }
   }
-  return '';
+  return { text: '', incompleteReason };
 }
 
 export type NormalizedProviderStatus = {
@@ -996,7 +1012,7 @@ export async function generateOriginNanoImage(
   return { mode: 'live', provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, providerEndpoint(provider, 'create', env), config.apiKey, payload, IMAGE_GENERATION_TIMEOUT_MS) };
 }
 
-export async function generateGPTPrompt(input: { model: string; messages: readonly { role: 'user' | 'assistant' | 'system'; content: string }[]; attachments?: readonly GPTPromptAttachment[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; text: string; response: unknown }> {
+export async function generateGPTPrompt(input: { model: string; messages: readonly { role: 'user' | 'assistant' | 'system'; content: string }[]; attachments?: readonly GPTPromptAttachment[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; text: string; incompleteReason?: string; response: unknown }> {
   const env = dependencies.env ?? process.env;
   const payload = buildGPTResponsesPayload(input.model, input.messages, input.attachments ?? []);
   const live = env.WORKSPACE_ENABLE_LIVE_PROVIDERS === 'true' && Boolean(env.GPT_PROMPT_API_KEY?.trim());
@@ -1006,12 +1022,12 @@ export async function generateGPTPrompt(input: { model: string; messages: readon
   }
   const base = getProviderConfig('gpt-2999-prompt', env).baseUrl;
   const response = await fetcherRequest(dependencies.fetch ?? fetch, `${base}/v1/responses`, env.GPT_PROMPT_API_KEY!.trim(), payload, true, PROMPT_GENERATION_TIMEOUT_MS);
-  const text = normalizeGPTResponsesResponse(response);
-  return { mode: 'live', provider: 'gpt-2999-prompt', text, response };
+  const normalized = normalizeGPTResponsesResponse(response);
+  return { mode: 'live', provider: 'gpt-2999-prompt', text: normalized.text, incompleteReason: normalized.incompleteReason, response };
 }
 
 type ResponsesPromptProvider = Extract<ProviderId, 'pomoai-gpt-prompt' | 'oairegbox-gpt-prompt'>;
-export type PromptGenerationResult = { mode: 'live' | 'mock'; provider: ProviderId; model: string; text: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackModels?: string[] };
+export type PromptGenerationResult = { mode: 'live' | 'mock'; provider: ProviderId; model: string; text: string; incompleteReason?: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackModels?: string[] };
 
 /** OpenAI Responses-compatible child-prompt provider (PomoAI or OAIRegBox). */
 export async function generateResponsesPrompt(
@@ -1029,7 +1045,8 @@ export async function generateResponsesPrompt(
   }
   const timeoutMs = provider === 'pomoai-gpt-prompt' ? POMOAI_PROMPT_GENERATION_TIMEOUT_MS : PROMPT_GENERATION_TIMEOUT_MS;
   const response = await fetcherRequest(dependencies.fetch ?? fetch, providerEndpoint(provider, 'create', env), config.apiKey, payload, true, timeoutMs);
-  return { mode: 'live', provider, model, text: normalizeGPTResponsesResponse(response), response };
+  const normalized = normalizeGPTResponsesResponse(response);
+  return { mode: 'live', provider, model, text: normalized.text, incompleteReason: normalized.incompleteReason, response };
 }
 
 export async function generatePomoAIGPTPrompt(
@@ -1062,6 +1079,7 @@ export async function generatePromptWithFallback(
   const attempted: ProviderId[] = [];
   const attemptedModels: string[] = [];
   let lastError: unknown;
+  let lastBlankResult: PromptGenerationResult | undefined;
   for (const entry of providers) {
     const provider = entry.provider;
     attempted.push(provider);
@@ -1069,7 +1087,15 @@ export async function generatePromptWithFallback(
       const model = entry.model || getProviderConfig(provider, dependencies.env ?? process.env).model;
       attemptedModels.push(model);
       const result = await generateResponsesPrompt(provider, { ...input, model }, dependencies);
-      if (result.mode === 'live' && !result.text.trim()) throw new Error('provider_upstream_failed');
+      // A blank live reply is worth retrying against the next fallback model
+      // (it may succeed), but if this was the last model to try, hand the
+      // blank result back to the caller instead of failing the task — the
+      // caller falls back to the template prompt and flags that no real
+      // child prompt was generated.
+      if (result.mode === 'live' && !result.text.trim()) {
+        lastBlankResult = { ...result, fallbackFrom: attempted.length > 1 ? attempted[0] : undefined, fallbackProviders: attempted.length > 1 ? ['pomoai-gpt-prompt'] : undefined, fallbackModels: attempted.length > 1 ? attemptedModels.slice(0, -1) : undefined };
+        throw new Error('provider_upstream_failed');
+      }
       return {
         ...result,
         fallbackFrom: attempted.length > 1 ? attempted[0] : undefined,
@@ -1080,6 +1106,7 @@ export async function generatePromptWithFallback(
       lastError = error;
     }
   }
+  if (lastBlankResult) return lastBlankResult;
   const message = lastError instanceof Error && lastError.message ? lastError.message : 'prompt_provider_failed';
   const aggregate = new Error(message);
   // Keep the terminal attribution tied to the actual supplier and model that
@@ -1096,20 +1123,21 @@ export async function generatePromptWithFallback(
 }
 
 /** BigSnake's Responses endpoint is used for child/sub-prompt generation. */
-export async function generateBigSnakePrompt(input: { model: string; prompt: string; attachments?: readonly GPTPromptAttachment[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; text: string; response: unknown }> {
+export async function generateBigSnakePrompt(input: { model: string; prompt: string; attachments?: readonly GPTPromptAttachment[] }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; text: string; incompleteReason?: string; response: unknown }> {
   const env = dependencies.env ?? process.env;
   const provider: ProviderId = 'bigsnake-prompt';
   const config = getProviderConfig(provider, env);
   const attachments = (input.attachments ?? []).filter((attachment) => Boolean(attachment.dataBase64?.trim()));
   const payload = attachments.length
-    ? { ...buildGPTResponsesPayload(input.model, [{ role: 'user' as const, content: input.prompt.trim() }], attachments), max_output_tokens: 2_800 }
-    : { model: input.model, input: input.prompt.trim(), max_output_tokens: 2_800 };
+    ? { ...buildGPTResponsesPayload(input.model, [{ role: 'user' as const, content: input.prompt.trim() }], attachments), max_output_tokens: GPT_RESPONSES_MAX_OUTPUT_TOKENS }
+    : { model: input.model, input: input.prompt.trim(), max_output_tokens: GPT_RESPONSES_MAX_OUTPUT_TOKENS };
   if (!config.apiKey) {
     if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
     return { mode: 'mock', provider, text: '', response: { id: `mock_bigsnake_${Date.now()}`, status: 'queued', payload } };
   }
   const response = await fetcherRequest(dependencies.fetch ?? fetch, providerEndpoint(provider, 'create', env), config.apiKey, payload, true, BIGSNAKE_PROMPT_GENERATION_TIMEOUT_MS);
-  return { mode: 'live', provider, text: normalizeGPTResponsesResponse(response), response };
+  const normalized = normalizeGPTResponsesResponse(response);
+  return { mode: 'live', provider, text: normalized.text, incompleteReason: normalized.incompleteReason, response };
 }
 
 async function fetcherRequest(fetcher: typeof fetch, endpoint: string, apiKey: string, payload: Record<string, unknown>, bearer: boolean, timeoutMs = REQUEST_TIMEOUT_MS, includeGoogleApiKey = !bearer): Promise<unknown> {

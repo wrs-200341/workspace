@@ -314,6 +314,17 @@ export function buildGPTPromptPayload(model: string, messages: readonly { role: 
 }
 
 /**
+ * Reasoning-capable Responses models spend part of `max_output_tokens` on
+ * internal reasoning tokens before emitting any visible text, and that spend
+ * grows with input size. The previous 2800-token cap left no room for
+ * visible output once reasoning consumed the budget, producing a "successful"
+ * response with empty text. Sized to comfortably fit up to ~4096 characters
+ * of visible child-prompt text (the cap requested in the generation prompt
+ * itself) plus a generous reasoning allowance.
+ */
+export const GPT_RESPONSES_MAX_OUTPUT_TOKENS = 8_000;
+
+/**
  * Build the OpenAI Responses API request envelope used by the GPT-2999
  * provider. Responses expects an `input` array whose message content is
  * represented by typed `input_text` blocks (rather than Chat Completions'
@@ -348,7 +359,7 @@ export function buildGPTResponsesPayload(
         }) : []),
       ],
     })),
-    max_output_tokens: 2_800,
+    max_output_tokens: GPT_RESPONSES_MAX_OUTPUT_TOKENS,
   };
 }
 

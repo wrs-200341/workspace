@@ -203,7 +203,7 @@ describe('provider payload contracts', () => {
         { role: 'system', content: [{ type: 'input_text', text: 'You are concise.' }] },
         { role: 'user', content: [{ type: 'input_text', text: 'hello' }] },
       ],
-      max_output_tokens: 2800,
+      max_output_tokens: 8000,
     });
   });
 

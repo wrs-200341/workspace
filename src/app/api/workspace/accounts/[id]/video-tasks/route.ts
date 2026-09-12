@@ -89,6 +89,7 @@ function toQueueTask<T extends Record<string, unknown>>(task: T) {
   const promptFallbackProviders = metadata && typeof metadata === 'object' && Array.isArray((metadata as { promptFallbackProviders?: unknown }).promptFallbackProviders)
     ? (metadata as { promptFallbackProviders: unknown[] }).promptFallbackProviders.filter((value): value is string => typeof value === 'string')
     : undefined;
+  const promptGenerationUsedTemplate = Boolean(metadata && typeof metadata === 'object' && (metadata as { promptGenerationUsedTemplate?: unknown }).promptGenerationUsedTemplate === true);
   const localOutputReady = Boolean(metadata && typeof metadata === 'object' && (metadata as { localOutputReady?: unknown }).localOutputReady === true);
   const localOutputCount = metadata && typeof metadata === 'object' && typeof (metadata as { localOutputCount?: unknown }).localOutputCount === 'number' ? (metadata as { localOutputCount: number }).localOutputCount : undefined;
   const localOutputExpected = metadata && typeof metadata === 'object' && typeof (metadata as { localOutputExpected?: unknown }).localOutputExpected === 'number' ? (metadata as { localOutputExpected: number }).localOutputExpected : undefined;
@@ -102,6 +103,7 @@ function toQueueTask<T extends Record<string, unknown>>(task: T) {
     ...(attribution.model ? { promptModel: attribution.model } : {}),
     ...(promptMode ? { promptMode } : {}),
     ...(promptFallbackProviders?.length ? { promptFallbackProviders } : {}),
+    ...(promptGenerationUsedTemplate ? { promptGenerationUsedTemplate: true } : {}),
     ...(localOutputReady ? { localOutputReady: true } : {}),
     ...(localOutputPending ? { localOutputPending: true } : {}),
   };

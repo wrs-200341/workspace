@@ -234,7 +234,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
             // prompt 就是子提示词模型生成的原文，不额外拼接 Excel 内容。
             finalPrompt = generated.text;
             const generatedTask = getProviderTask(task.id);
-            updateProviderTask(task.id, { prompt: finalPrompt, status: 'submitting', progress: canonicalTaskProgress({ mode: 'video', status: 'submitting', progress: generatedTask?.progress ?? 0 }), metadata: { ...(generatedTask?.metadata ?? {}), childPrompt: finalPrompt, finalPrompt, promptGenerationPending: false, promptProvider: generated.provider, promptModel: generated.model, promptGenerationSource: generated.mode, ...(generated.fallbackFrom ? { promptFallbackFrom: generated.fallbackFrom } : {}), ...(generated.fallbackProviders?.length ? { promptFallbackProviders: generated.fallbackProviders } : {}), ...(generated.fallbackModels?.length ? { promptFallbackModels: generated.fallbackModels } : {}) } });
+            updateProviderTask(task.id, { prompt: finalPrompt, status: 'submitting', progress: canonicalTaskProgress({ mode: 'video', status: 'submitting', progress: generatedTask?.progress ?? 0 }), metadata: { ...(generatedTask?.metadata ?? {}), childPrompt: finalPrompt, finalPrompt, promptGenerationPending: false, promptProvider: generated.provider, promptModel: generated.model, promptGenerationSource: generated.mode, promptGenerationUsedTemplate: generated.usedTemplateFallback === true, ...(generated.incompleteReason ? { promptGenerationIncompleteReason: generated.incompleteReason } : {}), ...(generated.fallbackFrom ? { promptFallbackFrom: generated.fallbackFrom } : {}), ...(generated.fallbackProviders?.length ? { promptFallbackProviders: generated.fallbackProviders } : {}), ...(generated.fallbackModels?.length ? { promptFallbackModels: generated.fallbackModels } : {}) } });
           } catch (error) {
             const failedTask = getProviderTask(task.id);
             const fallbackDetails = error && typeof error === 'object' ? error as { promptProvider?: unknown; promptModel?: unknown; promptFallbackFrom?: unknown; promptFallbackProviders?: unknown; promptFallbackModels?: unknown } : {};
@@ -345,7 +345,7 @@ function enqueueRecoveredVideoTask(task: ProviderTask): boolean {
         updateProviderTask(task.id, { status: 'prompting', progress: 2, metadata: { ...(getProviderTask(task.id)?.metadata ?? metadata), promptGenerationPending: true } });
         const generated = await generateChildPrompt({ accountId: task.accountId, title, templateContent, productSummary, promptModel, referenceAssetIds: orderedReferenceAssetIds, productImageAssetIds: orderedProductImageAssetIds });
         finalPrompt = generated.text;
-        updateProviderTask(task.id, { prompt: finalPrompt, status: 'submitting', progress: 30, metadata: { ...(getProviderTask(task.id)?.metadata ?? metadata), promptGenerationPending: false, promptGenerationFailed: false, childPrompt: finalPrompt, finalPrompt, promptProvider: generated.provider, promptModel: generated.model, promptGenerationSource: generated.mode } });
+        updateProviderTask(task.id, { prompt: finalPrompt, status: 'submitting', progress: 30, metadata: { ...(getProviderTask(task.id)?.metadata ?? metadata), promptGenerationPending: false, promptGenerationFailed: false, childPrompt: finalPrompt, finalPrompt, promptProvider: generated.provider, promptModel: generated.model, promptGenerationSource: generated.mode, promptGenerationUsedTemplate: generated.usedTemplateFallback === true, ...(generated.incompleteReason ? { promptGenerationIncompleteReason: generated.incompleteReason } : {}) } });
       }
       await submitVideoTask({ taskId: task.id, provider, model, prompt: finalPrompt, duration, aspectRatio, resolution, referenceImages, referenceFiles, referenceAudios, referenceVideos });
     };
@@ -407,9 +407,27 @@ function promptModelHintFor(requested: string): string | undefined {
   return normalized;
 }
 
-type GeneratedChildPrompt = { provider: ProviderId; model: string; mode: 'live' | 'mock'; text: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackModels?: string[] };
+type GeneratedChildPrompt = { provider: ProviderId; model: string; mode: 'live' | 'mock'; text: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackModels?: string[]; usedTemplateFallback?: boolean; incompleteReason?: string };
 
 const MAX_PROMPT_REFERENCE_BYTES = 40 * 1024 * 1024;
+/** Upper bound instructed to the child-prompt model so its visible reply reliably fits the raised max_output_tokens budget. */
+const CHILD_PROMPT_MAX_CHARS = 4_096;
+
+/**
+ * A provider call can "succeed" (no thrown error) while still returning
+ * blank text (empty upstream response, reasoning-token exhaustion, content
+ * filtering, etc). Failing the task in that case would just force a retry
+ * that is likely to hit the same upstream behaviour again, so the task keeps
+ * moving using the raw template/wrapper prompt as the submitted text — but
+ * callers must be told this happened so it can be surfaced as "used the
+ * template, no child prompt was generated" instead of implying a real
+ * AI-generated sub-prompt was produced.
+ */
+function resolveGeneratedPromptText(text: string, generationPrompt: string): { text: string; usedTemplateFallback: boolean } {
+  const trimmed = text.trim();
+  if (trimmed) return { text: trimmed, usedTemplateFallback: false };
+  return { text: generationPrompt, usedTemplateFallback: true };
+}
 
 /** Generate a child prompt inside the scheduler instead of blocking task creation. */
 async function generateChildPrompt(input: {
@@ -423,7 +441,7 @@ async function generateChildPrompt(input: {
 }): Promise<GeneratedChildPrompt> {
   const references = readPromptReferences(input.accountId, input.referenceAssetIds, input.productImageAssetIds);
   const generationPrompt = appendProductSummary(
-    `请为商品“${input.title.trim()}”生成适合 TikTok 带货视频的子提示词。${input.templateContent.trim()}`.trim(),
+    `请为商品“${input.title.trim()}”生成适合 TikTok 带货视频的子提示词。${input.templateContent.trim()}\n\n重要：生成的子提示词正文必须控制在 ${CHILD_PROMPT_MAX_CHARS} 个字符以内。`.trim(),
     input.productSummary,
   );
   const requested = input.promptModel.trim() || 'pomoai-gpt';
@@ -437,11 +455,13 @@ async function generateChildPrompt(input: {
   if (isPomoFallback) {
     const selectedPomoModel = requested.startsWith('pomoai:') ? requested.slice('pomoai:'.length).trim() : undefined;
     const result = await generatePromptWithFallback({ model: selectedPomoModel || undefined, prompt: generationPrompt, attachments: references });
-    return { ...result, text: result.text.trim() || generationPrompt };
+    const resolved = resolveGeneratedPromptText(result.text, generationPrompt);
+    return { ...result, text: resolved.text, usedTemplateFallback: resolved.usedTemplateFallback, incompleteReason: result.incompleteReason };
   }
   if (isOAIRegbox) {
     const result = await generateOAIRegboxGPTPrompt({ prompt: generationPrompt, attachments: references });
-    return { ...result, text: result.text.trim() || generationPrompt };
+    const resolved = resolveGeneratedPromptText(result.text, generationPrompt);
+    return { ...result, text: resolved.text, usedTemplateFallback: resolved.usedTemplateFallback, incompleteReason: result.incompleteReason };
   }
 
   if (isBigSnake) {
@@ -449,20 +469,23 @@ async function generateChildPrompt(input: {
     const config = getProviderConfig(provider);
     const model = requested.startsWith('bigsnake:') ? requested.slice('bigsnake:'.length).trim() || config.model : config.model;
     const result = await generateBigSnakePrompt({ model, prompt: generationPrompt, attachments: references });
-    return { provider, model, mode: result.mode, text: result.text.trim() || generationPrompt, response: result.response };
+    const resolved = resolveGeneratedPromptText(result.text, generationPrompt);
+    return { provider, model, mode: result.mode, text: resolved.text, usedTemplateFallback: resolved.usedTemplateFallback, incompleteReason: result.incompleteReason, response: result.response };
   }
   if (isGpt) {
     const provider: ProviderId = 'gpt-2999-prompt';
     const config = getProviderConfig(provider);
     const model = /^gpt[-_]/i.test(requested) && requested !== 'gpt-2999' ? requested : config.model;
     const result = await generateGPTPrompt({ model, messages: [{ role: 'user', content: generationPrompt }], attachments: references });
-    return { provider, model, mode: result.mode, text: result.text.trim() || generationPrompt, response: result.response };
+    const resolved = resolveGeneratedPromptText(result.text, generationPrompt);
+    return { provider, model, mode: result.mode, text: resolved.text, usedTemplateFallback: resolved.usedTemplateFallback, incompleteReason: result.incompleteReason, response: result.response };
   }
   const provider: ProviderId = 'yuanai-gemini-prompt';
   const config = getProviderConfig(provider);
   const model = isGemini ? requested : config.model;
   const result = await generateGeminiPrompt({ model, prompt: generationPrompt, references });
-  return { provider, model, mode: result.mode, text: result.text.trim() || generationPrompt, response: result.response };
+  const resolved = resolveGeneratedPromptText(result.text, generationPrompt);
+  return { provider, model, mode: result.mode, text: resolved.text, usedTemplateFallback: resolved.usedTemplateFallback, response: result.response };
 }
 
 function readPromptReferences(accountId: string, referenceAssetIds: readonly string[], productImageAssetIds: readonly string[]): GPTPromptAttachment[] {
