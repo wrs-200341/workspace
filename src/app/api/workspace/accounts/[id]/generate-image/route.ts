@@ -3,7 +3,7 @@ import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 import { generateMGRouterImage, generateSeedreamImage, generateYuanAIImage, generatePomoAIImage, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, normalizeProviderResponse, providerResponseSnapshot, sanitizeProviderError } from '@/lib/providers/client';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
-import { createProviderTasks, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
+import { createProviderTasks, flushProviderTaskStore, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
 import { publishAssetReference, publishAssetReferences, assertAssetReference } from '@/lib/workspace/referenceBridge';
 import { getWorkspacePath } from '@/lib/storagePaths';
@@ -238,11 +238,37 @@ async function completeImageTask(input: ImageSubmissionInput, provider: Provider
   const status = normalizeProviderResponse(provider, result.response);
   const current = getProviderTask(input.taskId);
   const metadata = { ...(current?.metadata ?? {}), execution: result.mode, attempts: details.attempts, ...(details.fallback ? { fallback: true } : {}) };
+  // A synchronous image provider can return valid bytes before the local
+  // output write starts. Persist that response as a recoverable checkpoint
+  // first, so a cache write failure or process restart can retry from the
+  // task's Base64/URL fields instead of losing the only copy in memory.
+  const checkpoint = status.status === 'completed' && current
+    ? updateProviderTask(input.taskId, {
+      status: 'processing',
+      progress: 99,
+      providerTaskId: status.providerTaskId ?? current.providerTaskId,
+      outputUrls: status.outputUrls,
+      outputBase64: status.outputBase64,
+      metadata: {
+        ...metadata,
+        localOutputReady: false,
+        localOutputCount: 0,
+        localOutputExpected: status.outputUrls.length + status.outputBase64.length,
+        localCacheCheckpointAt: new Date().toISOString(),
+      },
+    })
+    : current;
+  if (checkpoint && status.status === 'completed') {
+    // Production task persistence is debounced for throughput. This one
+    // checkpoint is deliberately flushed before the provider result is
+    // replaced by local proxy URLs, closing the crash-recovery window.
+    await flushProviderTaskStore().catch(() => undefined);
+  }
   let outputUrls = status.outputUrls;
   let outputBase64 = status.outputBase64;
   let localOutputCount = 0;
-  const cache = status.status === 'completed' && current
-    ? await cacheImageTaskOutputsBeforeCompletion(input.accountId, { ...current, provider, model, status: 'completed', progress: 100, providerTaskId: status.providerTaskId ?? current.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, metadata })
+  const cache = status.status === 'completed' && checkpoint
+    ? await cacheImageTaskOutputsBeforeCompletion(input.accountId, { ...checkpoint, provider, model, status: 'completed', progress: 100, providerTaskId: status.providerTaskId ?? checkpoint.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64, metadata })
     : null;
   const cachePending = status.status === 'completed' && cache && !cache.ready;
   if (status.status === 'completed' && cache?.ready && cache.expected > 0) {
