@@ -7,6 +7,7 @@ import {
   importProductImages,
   listProductImageAssets,
   listProductImages,
+  productSourceErrorDetail,
   queryProductGallery,
 } from './productImages';
 
@@ -47,6 +48,23 @@ describe('8765 product image adapter', () => {
       return new Response(JSON.stringify({ items: [{ pid: '1731106368253625737', cover_available: true }] }), { status: 200 });
     });
     await expect(queryProductGallery({ query: '1731106' }, fetcher)).resolves.toEqual([expect.objectContaining({ pid: '1731106368253625737', coverUrl: 'http://127.0.0.1:8765/api/v1/gallery/cover/1731106368253625737' })]);
+  });
+
+  it('keeps the upstream 8765 explanation on a failed gallery read', async () => {
+    // 8765 answers with HTTP 502 and names the real cause when the ZSpace
+    // desktop client (and with it the local proxy 8765 depends on) is down.
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ error: '极空间代理请求失败: ConnectionError' }), { status: 502 }));
+    const caught = await queryProductGallery({ query: '1734504276888552805' }, fetcher).catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(Error);
+    expect((caught as Error).message).toBe('product_source_http_502');
+    expect(productSourceErrorDetail(caught)).toBe('极空间代理请求失败: ConnectionError');
+  });
+
+  it('reports a failed import without an upstream body as a bare status code', async () => {
+    const fetcher = vi.fn(async () => new Response('', { status: 502 }));
+    const caught = await importProductImages('account-1', ['P1'], fetcher).catch((error: unknown) => error);
+    expect((caught as Error).message).toBe('product_source_http_502');
+    expect(productSourceErrorDetail(caught)).toBeUndefined();
   });
 
   it('downloads a zip, extracts files below the D-drive PID directory and records metadata', async () => {

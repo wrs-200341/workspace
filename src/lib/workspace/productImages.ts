@@ -82,6 +82,37 @@ async function fetchSource(fetcher: typeof fetch, input: RequestInfo | URL, init
   }
 }
 
+const MAX_SOURCE_ERROR_DETAIL = 400;
+
+/**
+ * 8765 reports a failed read as an HTTP error whose JSON body names the real
+ * cause — for example `极空间代理请求失败: ConnectionError` when the ZSpace
+ * desktop client, and with it the local proxy 8765 depends on, is not running.
+ * Keep the stable `product_source_http_<status>` code that callers switch on,
+ * but carry that upstream text on the error so operators are told what actually
+ * broke instead of only seeing a bare status code.
+ */
+async function productSourceHttpError(response: Response): Promise<Error> {
+  const error = new Error(`product_source_http_${response.status}`) as Error & { detail?: string };
+  const raw = await response.text().catch(() => '');
+  let detail = raw.trim();
+  if (detail) {
+    try {
+      const payload = JSON.parse(detail) as Record<string, unknown>;
+      const named = [payload.error, payload.msg, payload.message].find((value) => typeof value === 'string' && value.trim());
+      if (typeof named === 'string') detail = named.trim();
+    } catch { /* a non-JSON body is reported as-is */ }
+    if (detail) error.detail = detail.slice(0, MAX_SOURCE_ERROR_DETAIL);
+  }
+  return error;
+}
+
+/** Read the upstream 8765 explanation attached by `productSourceHttpError`. */
+export function productSourceErrorDetail(error: unknown): string | undefined {
+  const detail = error && typeof error === 'object' ? (error as { detail?: unknown }).detail : undefined;
+  return typeof detail === 'string' && detail.trim() ? detail.trim() : undefined;
+}
+
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 
 function productImagesRoot(): string { return getWorkspacePath('product-images'); }
@@ -155,7 +186,7 @@ export async function queryProductGallery(
   if (params.offset !== undefined) legacy.searchParams.set('offset', String(Math.max(0, Math.min(1_000_000, Math.round(params.offset)))));
   let response = await fetchSource(fetcher, url, { headers: { accept: 'application/json' } });
   if (response.status === 403 || response.status === 404 || response.status === 405) response = await fetchSource(fetcher, legacy, { headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`product_source_http_${response.status}`);
+  if (!response.ok) throw await productSourceHttpError(response);
   const payload = await response.json() as unknown;
   const items = Array.isArray(payload)
     ? payload
@@ -186,7 +217,7 @@ async function sourceAuthHeaders(fetcher: typeof fetch): Promise<Record<string, 
   const root = baseUrl();
   if (sourceToken && sourceTokenBase === root) return { 'X-Clone-Token': sourceToken };
   const response = await fetchSource(fetcher, `${root}/api/v1/session`, { headers: { accept: 'application/json' } });
-  if (!response.ok) throw new Error(`product_source_http_${response.status}`);
+  if (!response.ok) throw await productSourceHttpError(response);
   const payload = await response.json() as { token?: unknown };
   if (typeof payload.token !== 'string' || !payload.token.trim()) throw new Error('product_source_session_invalid');
   sourceToken = payload.token.trim();
@@ -215,7 +246,7 @@ export async function fetchProductGalleryCover(pidInput: string, fetcher: typeof
   const endpoint = `${baseUrl()}/api/v1/gallery/cover/${encodeURIComponent(pid)}`;
   let response = await fetchSource(fetcher, endpoint, { headers: { accept: 'image/*' } });
   if (response.status === 401 || response.status === 403) response = await fetchSource(fetcher, endpoint, { headers: { ...(await sourceAuthHeaders(fetcher)), accept: 'image/*' } });
-  if (!response.ok) throw new Error(`product_source_http_${response.status}`);
+  if (!response.ok) throw await productSourceHttpError(response);
   const mimeType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() || 'image/jpeg';
   if (!mimeType.startsWith('image/')) throw new Error('product_cover_content_type_invalid');
   const bytes = new Uint8Array(await response.arrayBuffer());
@@ -237,14 +268,14 @@ export async function importProductImages(
   // current clone falls back to authenticated /check.
   let check = await fetchSource(fetcher, `${root}/api/v1/gallery/check-pids`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ pids }) });
   if (check.status === 403 || check.status === 404) check = await authenticatedPost(fetcher, '/api/v1/gallery/check', { pids }, 'application/json');
-  if (!check.ok) throw new Error(`product_source_http_${check.status}`);
+  if (!check.ok) throw await productSourceHttpError(check);
   const checkPayload = await check.json() as unknown;
   const valid = extractPidList(checkPayload, pids);
   const requested = new Set(pids);
   if (valid.length !== requested.size || new Set(valid).size !== requested.size || valid.some((pid) => !requested.has(pid))) throw new Error('product_pid_unavailable');
   let response = await fetchSource(fetcher, `${root}/api/v1/gallery/download-folder`, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/zip, application/octet-stream' }, body: JSON.stringify({ pids }) }, archiveTimeoutMs());
   if (response.status === 403 || response.status === 404) response = await authenticatedPost(fetcher, '/api/v1/gallery/download', { pids }, 'application/zip, application/octet-stream', archiveTimeoutMs());
-  if (!response.ok) throw new Error(`product_source_http_${response.status}`);
+  if (!response.ok) throw await productSourceHttpError(response);
   const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase();
   if (contentType && !['application/zip', 'application/octet-stream', 'application/x-zip-compressed'].includes(contentType)) throw new Error('product_archive_content_type_invalid');
   const declaredLength = Number(response.headers.get('content-length') || 0);

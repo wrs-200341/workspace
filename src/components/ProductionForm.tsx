@@ -21,7 +21,7 @@ import {
 import type { TaskNameMode } from '@/lib/workspace/taskNaming';
 import type { ProductionRestoreConfig } from '@/lib/workspace/productionRestore';
 import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
-import { formatProviderError } from '@/lib/providers/errorMessages';
+import { formatProviderError, formatProviderErrorWithDetail } from '@/lib/providers/errorMessages';
 import * as XLSX from 'xlsx';
 import { normalizeProductGalleryItems, parsePidListText, parsePidRows } from './productImageAssetsModel';
 
@@ -649,9 +649,9 @@ export function ProductionForm({ accountId, mode }: Props) {
     }, capability);
     if (validationError) {
       setMessage(validationError.message === 'task_name_required'
-        ? 'Enter a task name when manual naming is selected.'
+        ? '选择手动命名时请输入任务名称。'
         : validationError.message === 'task_name_reference_required'
-          ? 'Select at least one reference image for automatic naming.'
+          ? '自动命名时请至少选择一张参考图。'
           : validationError.message);
       return;
     }
@@ -741,13 +741,13 @@ export function ProductionForm({ accountId, mode }: Props) {
 
   const promptTemplateTools = mode === 'image' ? <div className="prompt-template-toolbar"><label>选择提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">不使用模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}{item.accountName ? ` · ${item.accountName}` : ''}</option>)}</select></label><label>模板名称<input className="select" value={promptTemplateName} onChange={(event) => setPromptTemplateName(event.target.value)} placeholder="例如：白底商品图" /></label><button type="button" className="ghost-button" onClick={() => void savePromptTemplate()} disabled={savingPromptTemplate || !prompt.trim()}>{savingPromptTemplate ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />} 保存提示词</button></div> : null;
    return <form className="production-form" data-reference-images={maxImages} data-reference-videos={maxVideos} data-reference-audios={maxAudios} onSubmit={submit}>
-    {mode !== 'prompt' && <div className="task-naming-row form-row" role="group" aria-label="Task naming">
-      <label>Task naming<select className="select" value={taskNameMode} onChange={(event) => setTaskNameMode(event.target.value as TaskNameMode)}>
-        <option value="auto">Automatic (first reference image)</option>
-        <option value="manual">Manual</option>
+    {mode !== 'prompt' && <div className="task-naming-row form-row" role="group" aria-label="任务命名">
+      <label>任务命名<select className="select" value={taskNameMode} onChange={(event) => setTaskNameMode(event.target.value as TaskNameMode)}>
+        <option value="auto">自动（取首张参考图）</option>
+        <option value="manual">手动</option>
       </select></label>
-      {taskNameMode === 'manual' && <label>Task name<input className="select" value={taskName} onChange={(event) => setTaskName(event.target.value)} maxLength={120} placeholder="Enter a task name" /></label>}
-      {taskNameMode === 'auto' && <small className="field-help">Automatic naming requires at least one reference image.</small>}
+      {taskNameMode === 'manual' && <label>任务名称<input className="select" value={taskName} onChange={(event) => setTaskName(event.target.value)} maxLength={120} placeholder="输入任务名称" /></label>}
+      {taskNameMode === 'auto' && <small className="field-help">自动命名需要至少一张参考图。</small>}
     </div>}
      {mode === 'image' && imageModelOptions.length > 0 && <label className="form-row">Model<select className="select" value={imageModelId} onChange={(event) => setImageModelId(event.target.value)}>{imageModelOptions.map((item) => <option value={item} key={item}>{item}</option>)}</select></label>}
     {mode === 'image' && <label className="form-row">生成数量<select className="select" value={count} onChange={(event) => setCount(Number(event.target.value))}>{[1, 2, 3, 4].map((value) => <option value={value} key={value}>{value} 条</option>)}</select></label>}
@@ -856,8 +856,8 @@ function ProductGalleryImporter({ accountId, onImported }: { accountId: string; 
       for (let index = 0; index < pids.length; index += 8) {
         const batch = await Promise.allSettled(pids.slice(index, index + 8).map(async (pid) => {
           const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/product-images?source=8765&query=${encodeURIComponent(pid)}`, { cache: 'no-store' });
-          const payload = await response.json() as { success?: boolean; data?: { gallery?: typeof results }; error?: string };
-          if (!response.ok || !payload.success) throw new Error(payload.error || '8765 图库查询失败');
+          const payload = await response.json() as { success?: boolean; data?: { gallery?: typeof results }; error?: string; detail?: string };
+          if (!response.ok || !payload.success) throw new Error(formatProviderErrorWithDetail(payload.error, payload.detail) || '8765 图库查询失败');
           return payload.data?.gallery ?? [];
         }));
         payloads.push(...batch);
@@ -886,8 +886,8 @@ function ProductGalleryImporter({ accountId, onImported }: { accountId: string; 
     setImporting(true); setMessage('');
     try {
       const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/product-images`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pids: selected }) });
-      const payload = await response.json() as { success?: boolean; error?: string };
-      if (!response.ok || !payload.success) throw new Error(payload.error || '商品图片导入失败');
+      const payload = await response.json() as { success?: boolean; error?: string; detail?: string };
+      if (!response.ok || !payload.success) throw new Error(formatProviderErrorWithDetail(payload.error, payload.detail) || '商品图片导入失败');
       setSelected([]); setMessage(`已导入 ${selected.length} 个 PID 文件夹`); await onImported();
     } catch (error) { setMessage(error instanceof Error ? error.message : '商品图片导入失败'); }
     finally { setImporting(false); }

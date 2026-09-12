@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
-import { importProductImages, listProductImageFolders, listProductImages, queryProductGallery, readProductImageFolder, scheduleProductImageCleanup } from '@/lib/workspace/productImages';
+import { importProductImages, listProductImageFolders, listProductImages, productSourceErrorDetail, queryProductGallery, readProductImageFolder, scheduleProductImageCleanup } from '@/lib/workspace/productImages';
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
@@ -26,7 +26,8 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     const folderList = listProductImageFolders(undefined);
     return NextResponse.json({ success: true, data: { accountId: id, imported, folders: folderList, ...(folders ? { folder: folders } : {}), ...(normalizedGallery ? { gallery: normalizedGallery } : {}) } });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'product_gallery_failed' }, { status: 502 });
+    const detail = productSourceErrorDetail(error);
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'product_gallery_failed', ...(detail ? { detail } : {}) }, { status: 502 });
   }
 }
 
@@ -48,6 +49,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const imported = await importProductImages(id, body.pids);
     return NextResponse.json({ success: true, data: { accountId: id, imported } }, { status: 201 });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'product_import_failed' }, { status: 400 });
+    const detail = productSourceErrorDetail(error);
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'product_import_failed', ...(detail ? { detail } : {}) }, { status: 400 });
   }
 }

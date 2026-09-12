@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, Download, Image as ImageIcon, Loader2, Search, X } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { formatProviderErrorWithDetail } from '@/lib/providers/errorMessages';
 import { normalizeProductGalleryItems, parsePidListText, parsePidRows } from './productImageAssetsModel';
 
 type ProductRecord = { pid: string; importDate: string; files: string[]; relativePath: string };
@@ -14,6 +15,7 @@ type ProductImagesPayload = {
   success?: boolean;
   data?: { gallery?: GalleryItem[]; imported?: ProductRecord[]; folders?: ProductFolder[]; folder?: ProductFolder };
   error?: string;
+  detail?: string;
 };
 
 /**
@@ -49,7 +51,7 @@ export function ProductImageAssets({ accountId, readOnly = false }: { accountId:
     try {
       const response = await fetch(endpoint, { cache: 'no-store' });
       const payload = await response.json() as ProductImagesPayload;
-      if (!response.ok || !payload.success) throw new Error(payload.error || '商品图片服务暂不可用');
+      if (!response.ok || !payload.success) throw new Error(formatProviderErrorWithDetail(payload.error, payload.detail) || '商品图片服务暂不可用');
       setImported(payload.data?.imported ?? []);
       setFolders(payload.data?.folders ?? []);
     } catch (error) {
@@ -110,7 +112,7 @@ export function ProductImageAssets({ accountId, readOnly = false }: { accountId:
         const batch = await Promise.allSettled(pids.slice(index, index + 8).map(async (pid) => {
           const response = await fetch(`${endpoint}?source=8765&query=${encodeURIComponent(pid)}`, { cache: 'no-store' });
           const payload = await response.json() as ProductImagesPayload;
-          if (!response.ok || !payload.success) throw new Error(payload.error || '8765 图库搜索失败');
+          if (!response.ok || !payload.success) throw new Error(formatProviderErrorWithDetail(payload.error, payload.detail) || '8765 图库搜索失败');
           return payload.data?.gallery ?? [];
         }));
         responses.push(...batch);
@@ -150,7 +152,7 @@ export function ProductImageAssets({ accountId, readOnly = false }: { accountId:
         body: JSON.stringify({ pids: selected }),
       });
       const payload = await response.json() as ProductImagesPayload;
-      if (!response.ok || !payload.success) throw new Error(payload.error || '商品图片导入失败');
+      if (!response.ok || !payload.success) throw new Error(formatProviderErrorWithDetail(payload.error, payload.detail) || '商品图片导入失败');
       setSelected([]);
       setGallery([]);
       setSubmittedQuery('');

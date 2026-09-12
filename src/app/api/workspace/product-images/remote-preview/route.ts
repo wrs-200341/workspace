@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
-import { fetchProductGalleryCover } from '@/lib/workspace/productImages';
+import { fetchProductGalleryCover, productSourceErrorDetail } from '@/lib/workspace/productImages';
 
 /** Proxy a remote 8765 PID cover through the workspace server. */
 export async function GET(request: NextRequest) {
@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'product_cover_failed' }, { status: 502 });
+    const detail = productSourceErrorDetail(error);
+    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'product_cover_failed', ...(detail ? { detail } : {}) }, { status: 502 });
   }
 }
