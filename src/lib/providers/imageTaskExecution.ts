@@ -93,7 +93,7 @@ function rebuildImageSubmission(task: ProviderTask): ImageSubmissionInput {
   const provider = task.provider;
   const config = getProviderConfig(provider);
   const metadata = task.metadata ?? {};
-  const model = task.model || config.model;
+  const model = provider === 'seedream' ? config.model : task.model || config.model;
   const assets = imageAssetOrder(task);
   const rawImages = strings(metadata.externalReferenceImages);
   if (rawImages.length + assets.length > config.supports.referenceImages) throw new Error('too_many_reference_images');

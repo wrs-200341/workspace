@@ -34,7 +34,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const taskNameError = validateTaskNaming(taskNameMode, taskName, rawImages.length + orderedImageAssets.length);
   if (taskNameError) return NextResponse.json({ success: false, error: taskNameError }, { status: 400 });
   const aspectRatio = typeof body.aspectRatio === 'string' && body.aspectRatio.trim() ? body.aspectRatio.trim() : getDefaultProductionAspectRatio(config.supports.ratios);
-  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : config.model;
+  const model = provider === 'seedream' ? config.model : typeof body.model === 'string' && body.model.trim() ? body.model.trim() : config.model;
   const resolution = typeof body.resolution === 'string' && body.resolution.trim() ? body.resolution.trim().toLowerCase() : getDefaultImageResolution(config.modelResolutions?.[model] ?? config.supports.resolutions);
   const count = typeof body.count === 'number' && Number.isFinite(body.count) ? Math.min(4, Math.max(1, Math.round(body.count))) : 1;
   try {

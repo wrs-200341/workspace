@@ -40,7 +40,7 @@ describe('provider configuration safety', () => {
     expect(getProviderConfig('mgrouter-grok-video').model).toBe('grok-imagine-video-1.5');
     expect(getProviderConfig('yuanai-grok-video').model).toBe('grok-imagine-video-1.5-preview');
     expect(getProviderConfig('wan-3-nsfw').model).toBe('wan-3');
-    expect(getProviderConfig('seedream').model).toBe('dola-seedream-5-0-pro-260628-ep');
+    expect(getProviderConfig('seedream').model).toBe('dola-seedream-5-0-pro-260628');
     expect(getProviderConfig('seedream').supports.resolutions).toEqual(['1086x1448', '1k']);
     expect(getProviderConfig('minimax-h3').baseUrl).toBe('https://token.secure-skill.com');
     expect(getProviderConfig('minimax-h3').model).toBe('minimax-h3');

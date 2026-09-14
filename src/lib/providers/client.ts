@@ -1196,7 +1196,7 @@ export async function generateSeedreamImage(input: { model: string; prompt: stri
   const fetcher = dependencies.fetch ?? fetch;
   const config = getProviderConfig('seedream', env);
   const references = validateReferenceUrls(input.referenceImages ?? []);
-  const body = buildSeedreamImagePayload({ model: input.model || config.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, n: 1 });
+  const body = buildSeedreamImagePayload({ model: config.model, prompt: input.prompt, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, n: 1 });
   if (!config.apiKey) {
     if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
     return { mode: 'mock', provider: 'seedream', response: { id: `mock_seedream_${Date.now()}`, status: 'queued', payload: body } };

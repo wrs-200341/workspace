@@ -31,7 +31,7 @@ vi.mock('./client', () => ({
   sanitizeProviderError: (message: string) => message,
 }));
 vi.mock('./config', () => ({
-  getProviderConfig: () => ({ model: 'image-model', supports: { referenceImages: 8, ratios: ['1:1'], resolutions: ['1k', '2k', '4k'] } }),
+  getProviderConfig: (provider: string) => ({ model: provider === 'seedream' ? 'dola-seedream-5-0-pro-260628' : 'image-model', supports: { referenceImages: 8, ratios: ['1:1'], resolutions: ['1k', '2k', '4k'] } }),
   isProviderLiveEnabled: () => false,
 }));
 vi.mock('./validation', () => ({ validateGenerationRequest: (input: { aspectRatio?: string; resolution?: string }) => ({ aspectRatio: input.aspectRatio ?? '1:1', resolution: input.resolution ?? '2k' }) }));
@@ -75,6 +75,28 @@ describe('persisted image execution', () => {
     await executePersistedImageTask('task');
     expect(state.generate).not.toHaveBeenCalled();
     expect(state.task?.providerTaskId).toBe('upstream-id');
+  });
+
+  it('uses the current Seedream model when executing a saved legacy selection', async () => {
+    seed({ provider: 'seedream', model: 'dola-seedream-5-0-pro-260628-ep' });
+    await executePersistedImageTask('task');
+    expect(state.generate).toHaveBeenCalledWith(expect.objectContaining({ model: 'dola-seedream-5-0-pro-260628' }));
+    expect(state.task?.model).toBe('dola-seedream-5-0-pro-260628');
+  });
+
+  it('keeps an already accepted Seedream request unchanged', async () => {
+    seed({ provider: 'seedream', model: 'dola-seedream-5-0-pro-260628-ep', providerTaskId: 'accepted-seedream', status: 'processing' });
+    await executePersistedImageTask('task');
+    expect(state.generate).not.toHaveBeenCalled();
+    expect(state.task).toMatchObject({ model: 'dola-seedream-5-0-pro-260628-ep', providerTaskId: 'accepted-seedream' });
+  });
+
+  it('enqueues the current Seedream model from an unrefreshed page', async () => {
+    const request = new NextRequest('http://localhost/api/workspace/accounts/account/generate-image', { method: 'POST', body: JSON.stringify({ prompt: 'portrait', provider: 'seedream', model: 'dola-seedream-5-0-pro-260628-ep' }) });
+    const response = await POST(request, { params: Promise.resolve({ id: 'account' }) });
+    expect(response.status).toBe(202);
+    expect(state.task).toMatchObject({ model: 'dola-seedream-5-0-pro-260628', metadata: { modelId: 'dola-seedream-5-0-pro-260628', schedulerModel: 'dola-seedream-5-0-pro-260628' } });
+    expect(state.generate).not.toHaveBeenCalled();
   });
 
   it('checkpoints a confirmed failed upstream ID without exhausting scheduler retries', async () => {
