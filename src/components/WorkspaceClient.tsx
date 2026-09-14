@@ -31,6 +31,7 @@ export function WorkspaceClient({ user, initialAccounts, initialTaskCounters }: 
     : getWorkspaceOperatorForUser(user.username, user.displayName).id;
   const [ownerId, setOwnerId] = useState(initialOwner);
   const [liveAccounts, setLiveAccounts] = useState<WorkspaceAccount[]>(() => initialAccounts.map((account) => ({ ...account })));
+  const [taskCounters, setTaskCounters] = useState<Record<string, OwnerTaskCounters>>(() => ({ ...initialTaskCounters }));
   const [category, setCategory] = useState<WorkspaceCategory>('featured');
   const [planAccountId, setPlanAccountId] = useState<string | null>(null);
   const [planDraft, setPlanDraft] = useState('');
@@ -49,7 +50,7 @@ export function WorkspaceClient({ user, initialAccounts, initialTaskCounters }: 
   useEffect(() => {
     if (user.role === 'workspace' && ownerId !== ownOwnerId) setOwnerId(ownOwnerId);
   }, [ownerId, ownOwnerId, user.role]);
-  const summary = initialTaskCounters[effectiveOwnerId] ?? {
+  const summary = taskCounters[effectiveOwnerId] ?? {
     inventorySavedToday: 0,
     completedNotInInventory: 0,
     running: 0,
@@ -64,15 +65,32 @@ export function WorkspaceClient({ user, initialAccounts, initialTaskCounters }: 
     setAccountEditor(null);
   }, [canEditSelectedOwner]);
 
+  async function refreshTaskCounters() {
+    const query = effectiveOwnerId ? `?ownerId=${encodeURIComponent(effectiveOwnerId)}` : '';
+    const response = await fetch(`/api/workspace/video-stats${query}`, { cache: 'no-store' });
+    const payload = await response.json().catch(() => null) as { success?: boolean; data?: { counters?: Record<string, OwnerTaskCounters> } } | null;
+    if (response.ok && payload?.success && payload.data?.counters) {
+      setTaskCounters((current) => ({ ...current, ...payload.data!.counters! }));
+    }
+  }
+
+  useEffect(() => {
+    void refreshTaskCounters().catch(() => undefined);
+  }, [effectiveOwnerId]);
+
   async function refreshStats() {
     try {
       // Operators keep all readable owner lanes in memory so switching the
       // selector remains instant; the visible list is filtered locally.
       const query = ownerId && user.role !== 'operator' ? `?ownerId=${encodeURIComponent(ownerId)}` : '';
-      const response = await fetch(`/api/workspace/accounts${query}`, { cache: 'no-store' });
-      const payload = await response.json().catch(() => null) as { success?: boolean; data?: { accounts?: WorkspaceAccount[] } } | null;
-      if (response.ok && payload?.success && Array.isArray(payload.data?.accounts)) {
-        setLiveAccounts(payload.data.accounts.map((account) => ({ ...account })));
+      const accountsRequest = fetch(`/api/workspace/accounts${query}`, { cache: 'no-store' });
+      const countersRequest = refreshTaskCounters();
+      const [accountsResult] = await Promise.allSettled([accountsRequest, countersRequest]);
+      if (accountsResult.status === 'fulfilled') {
+        const payload = await accountsResult.value.json().catch(() => null) as { success?: boolean; data?: { accounts?: WorkspaceAccount[] } } | null;
+        if (accountsResult.value.ok && payload?.success && Array.isArray(payload.data?.accounts)) {
+          setLiveAccounts(payload.data.accounts.map((account) => ({ ...account })));
+        }
       }
     } finally {
       setRefreshedAt(new Date());
