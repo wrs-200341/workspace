@@ -27,7 +27,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     : undefined;
   if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
   recoverOrphanedSchedulerTasks();
-  const filters = ownerScope ? { ownerId, mode: 'image' as const } : { accountId: id, mode: 'image' as const };
+  const filters = ownerScope ? { ownerId, mode: 'image' as const, date: date || undefined } : { accountId: id, mode: 'image' as const, date: date || undefined };
   const queueReader = Object.prototype.hasOwnProperty.call(serverTasks, 'getServerWorkspaceQueueTasks')
     ? serverTasks.getServerWorkspaceQueueTasks
     : serverTasks.getServerWorkspaceTasks;

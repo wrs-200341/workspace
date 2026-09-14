@@ -69,7 +69,10 @@ export type ProviderTaskPatch = Partial<Omit<ProviderTask, 'id' | 'createdAt' | 
   updatedAt?: string;
 };
 
-export type ProviderTaskFilters = Partial<Pick<ProviderTask, 'accountId' | 'mode' | 'provider' | 'status' | 'providerTaskId'>>;
+export type ProviderTaskFilters = Partial<Pick<ProviderTask, 'accountId' | 'mode' | 'provider' | 'status' | 'providerTaskId'>> & {
+  accountIds?: readonly string[];
+  createdBusinessDate?: string;
+};
 
 const TASKS_DIRECTORY = 'providers';
 const TASKS_FILE = 'tasks.json';
@@ -82,6 +85,7 @@ const PERSIST_DEBOUNCE_MS = Math.max(50, Number(process.env.WORKSPACE_TASK_PERSI
 const VALID_MODES: readonly ProviderTaskMode[] = ['image', 'video', 'prompt'];
 const VALID_STATUSES: readonly ProviderTaskStatus[] = ['draft', 'queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying', 'completed', 'failed', 'cancelled', 'paused'];
 const VALID_PROVIDERS = new Set<ProviderId>(getProviderCatalog().map((entry) => entry.id));
+const SHANGHAI_DAY_FORMATTER = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' });
 
 /** Returns the only path used by this store. It is confined by storagePaths. */
 export function providerTasksPath(): string {
@@ -299,6 +303,21 @@ function hasOwn(value: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
 }
 
+function taskBusinessDate(value: string): string {
+  return SHANGHAI_DAY_FORMATTER.format(new Date(value));
+}
+
+function taskMatchesFilters(task: ProviderTask, filters: ProviderTaskFilters): boolean {
+  if (filters.accountId && task.accountId !== filters.accountId) return false;
+  if (filters.accountIds && !filters.accountIds.includes(task.accountId)) return false;
+  if (filters.mode && task.mode !== filters.mode) return false;
+  if (filters.provider && task.provider !== filters.provider) return false;
+  if (filters.status && task.status !== filters.status) return false;
+  if (filters.providerTaskId && task.providerTaskId !== filters.providerTaskId) return false;
+  if (filters.createdBusinessDate && taskBusinessDate(task.createdAt) !== filters.createdBusinessDate) return false;
+  return true;
+}
+
 function normalizeStoredTask(value: unknown): ProviderTask {
   if (!record(value)) throw new Error('provider_tasks_invalid_store');
   return {
@@ -371,11 +390,7 @@ export function createProviderTasks(inputs: readonly CreateProviderTaskInput[]):
 
 export function listProviderTasks(filters: ProviderTaskFilters = {}): ProviderTask[] {
   return readTasks()
-    .filter((task) => !filters.accountId || task.accountId === filters.accountId)
-    .filter((task) => !filters.mode || task.mode === filters.mode)
-    .filter((task) => !filters.provider || task.provider === filters.provider)
-    .filter((task) => !filters.status || task.status === filters.status)
-    .filter((task) => !filters.providerTaskId || task.providerTaskId === filters.providerTaskId)
+    .filter((task) => taskMatchesFilters(task, filters))
     .map((task) => cloneFast(task));
 }
 
@@ -407,11 +422,7 @@ function summaryMetadata(metadata: Record<string, unknown> | undefined): Record<
 /** Read only the fields needed by overview counters and cards. */
 export function listProviderTaskSummaries(filters: ProviderTaskFilters = {}): ProviderTaskSummary[] {
   return readTasks()
-    .filter((task) => !filters.accountId || task.accountId === filters.accountId)
-    .filter((task) => !filters.mode || task.mode === filters.mode)
-    .filter((task) => !filters.provider || task.provider === filters.provider)
-    .filter((task) => !filters.status || task.status === filters.status)
-    .filter((task) => !filters.providerTaskId || task.providerTaskId === filters.providerTaskId)
+    .filter((task) => taskMatchesFilters(task, filters))
     .map((task) => {
       const inventoryIds = Array.isArray(task.metadata?.inventoryAssetIds)
         ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))

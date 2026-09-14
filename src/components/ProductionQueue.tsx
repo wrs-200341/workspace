@@ -40,7 +40,7 @@ type QueueTask = {
   metadata?: Record<string, unknown>;
 };
 
-type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string; readOnly?: boolean; ownerId?: string };
+type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string; readOnly?: boolean; ownerId?: string; initialTasks?: QueueTask[] };
 type QueueTab = 'all' | 'active' | 'completed' | 'failed';
 
 const labels: Record<string, string> = {
@@ -155,13 +155,40 @@ export function promptReviewHref(accountId: string, mode: Props['mode'], taskId:
   return mode === 'prompt' ? restoreHref(accountId, mode, taskId) : `${reviewHref(accountId, mode, taskId)}#prompt`;
 }
 
-export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate, readOnly = false, ownerId }: Props) {
+function normalizeQueueTasks(raw: QueueTask[]): QueueTask[] {
+  const normalized = raw.map((task) => {
+    const metadata = task.metadata;
+    const localOutputReady = Boolean(metadata && metadata.localOutputReady === true);
+    const localOutputCount = metadata && typeof metadata.localOutputCount === 'number' ? metadata.localOutputCount : undefined;
+    const localOutputExpected = metadata && typeof metadata.localOutputExpected === 'number' ? metadata.localOutputExpected : undefined;
+    const localOutputPending = localOutputExpected !== undefined && localOutputCount !== undefined && localOutputCount < localOutputExpected;
+    const schedulerState = task.schedulerState ?? (typeof metadata?.schedulerState === 'string' ? metadata.schedulerState : undefined);
+    const providerTaskId = task.providerTaskId;
+    const promptGenerationPending = metadata?.promptGenerationPending === true;
+    return {
+      ...task,
+      progress: canonicalTaskProgress({ mode: task.mode, status: task.status, progress: task.progress, providerTaskId, schedulerState, promptGenerationPending, localOutputReady, localOutputPending }),
+      promptProvider: task.promptProvider ?? (typeof metadata?.promptProvider === 'string' ? metadata.promptProvider : undefined),
+      promptModel: task.promptModel ?? (typeof metadata?.promptModel === 'string' ? metadata.promptModel : undefined),
+      promptMode: task.promptMode ?? (typeof metadata?.promptMode === 'string' ? metadata.promptMode : undefined),
+      promptFallbackProviders: task.promptFallbackProviders ?? (Array.isArray(metadata?.promptFallbackProviders) ? metadata.promptFallbackProviders.filter((value): value is string => typeof value === 'string') : undefined),
+      promptGenerationUsedTemplate: task.promptGenerationUsedTemplate ?? (metadata?.promptGenerationUsedTemplate === true),
+      localOutputReady,
+      localOutputPending,
+      schedulerState,
+    };
+  });
+  return Array.from(new Map(normalized.map((task) => [task.id, task])).values())
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+}
+
+export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate, readOnly = false, ownerId, initialTasks }: Props) {
   const focusTaskId = requestedFocusTaskId;
   const requestedDate = requestedQueueDate;
-  const [tasks, setTasks] = useState<QueueTask[]>([]);
+  const [tasks, setTasks] = useState<QueueTask[]>(() => normalizeQueueTasks(initialTasks ?? []));
   const [queueDate, setQueueDate] = useState(() => requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : today());
   const [queueTab, setQueueTab] = useState<QueueTab>('all');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialTasks);
   const [message, setMessage] = useState('');
   const [loadError, setLoadError] = useState('');
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
@@ -172,7 +199,8 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   const focusAppliedRef = useRef<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const loadingRef = useRef(false);
-  const activeTasksRef = useRef(false);
+  const activeTasksRef = useRef(Boolean(initialTasks?.some((task) => isActive(task.status))));
+  const initialRefreshRef = useRef(Boolean(initialTasks));
 
   async function load(options: { silent?: boolean; sync?: boolean } = {}) {
     const silent = options.silent === true;
@@ -190,30 +218,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
       const payload = await response.json().catch(() => null) as { success?: boolean; error?: string; data?: { tasks?: QueueTask[] } | QueueTask[]; tasks?: QueueTask[] } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '队列加载失败');
       const raw = Array.isArray(payload.data) ? payload.data : payload.data?.tasks ?? payload.tasks ?? [];
-      const normalized = raw.map((task) => {
-        const metadata = task.metadata;
-        const localOutputReady = Boolean(metadata && metadata.localOutputReady === true);
-        const localOutputCount = metadata && typeof metadata.localOutputCount === 'number' ? metadata.localOutputCount : undefined;
-        const localOutputExpected = metadata && typeof metadata.localOutputExpected === 'number' ? metadata.localOutputExpected : undefined;
-        const localOutputPending = localOutputExpected !== undefined && localOutputCount !== undefined && localOutputCount < localOutputExpected;
-        const schedulerState = task.schedulerState ?? (typeof metadata?.schedulerState === 'string' ? metadata.schedulerState : undefined);
-        const providerTaskId = task.providerTaskId;
-        const promptGenerationPending = metadata?.promptGenerationPending === true;
-        return {
-          ...task,
-          progress: canonicalTaskProgress({ mode: task.mode, status: task.status, progress: task.progress, providerTaskId, schedulerState, promptGenerationPending, localOutputReady, localOutputPending }),
-          promptProvider: task.promptProvider ?? (typeof metadata?.promptProvider === 'string' ? metadata.promptProvider : undefined),
-          promptModel: task.promptModel ?? (typeof metadata?.promptModel === 'string' ? metadata.promptModel : undefined),
-          promptMode: task.promptMode ?? (typeof metadata?.promptMode === 'string' ? metadata.promptMode : undefined),
-          promptFallbackProviders: task.promptFallbackProviders ?? (Array.isArray(metadata?.promptFallbackProviders) ? metadata.promptFallbackProviders.filter((value): value is string => typeof value === 'string') : undefined),
-          promptGenerationUsedTemplate: task.promptGenerationUsedTemplate ?? (metadata?.promptGenerationUsedTemplate === true),
-          localOutputReady,
-          localOutputPending,
-          schedulerState,
-        };
-      });
-      const deduped = Array.from(new Map(normalized.map((task) => [task.id, task])).values());
-      const nextTasks = deduped.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+      const nextTasks = normalizeQueueTasks(raw);
       activeTasksRef.current = nextTasks.some((task) => isActive(task.status));
       setTasks(nextTasks);
     } catch (error) {
@@ -229,13 +234,14 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   }
 
   useEffect(() => {
-    void load();
+    void load({ silent: initialRefreshRef.current });
+    initialRefreshRef.current = false;
     const timer = window.setInterval(() => void load({ silent: true, sync: activeTasksRef.current }), 8000);
     return () => {
       window.clearInterval(timer);
       requestRef.current?.abort();
     };
-  }, [accountId, mode, queueDate]);
+  }, [accountId, mode, ownerId, queueDate]);
 
   useEffect(() => {
     if (!focusTaskId || loading || focusAppliedRef.current === focusTaskId) return;

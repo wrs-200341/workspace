@@ -43,7 +43,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     : undefined;
   if (ownerScope && !ownerId) return NextResponse.json({ success: false, error: 'workspace_account_not_found' }, { status: 404 });
   recoverOrphanedSchedulerTasks();
-  const filters = ownerScope ? { ownerId, mode: 'video' as const } : { accountId: id, mode: 'video' as const };
+  const filters = ownerScope ? { ownerId, mode: 'video' as const, date: date || undefined } : { accountId: id, mode: 'video' as const, date: date || undefined };
   // Queue cards never need output URLs, Base64 payloads or full provider
   // responses. Keep the response on the lightweight projection; the full
   // task rows are loaded only by review/detail pages or background sync.

@@ -108,9 +108,17 @@ export type WorkspaceOwnerTaskCounters = {
 
 /** Queue cards need scheduler metadata, but never output URLs/Base64 or the
  * full provider response. This projection keeps queue polling lightweight. */
-export function getServerWorkspaceQueueTasks(filters: { ownerId?: string; accountId?: string; mode?: WorkspaceTask['mode'] } = {}): WorkspaceTask[] {
+export function getServerWorkspaceQueueTasks(filters: { ownerId?: string; accountId?: string; mode?: WorkspaceTask['mode']; date?: string } = {}): WorkspaceTask[] {
   const accountIndex = new Map(listStoredAccounts().map((account) => [account.id, account]));
-  const providerTasks = listProviderTaskSummaries({ accountId: filters.accountId, mode: filters.mode });
+  const accountIds = filters.ownerId
+    ? [...accountIndex.values()].filter((account) => account.ownerId === filters.ownerId).map((account) => account.id)
+    : undefined;
+  const providerTasks = listProviderTaskSummaries({
+    accountId: filters.accountId,
+    accountIds,
+    mode: filters.mode,
+    createdBusinessDate: filters.date,
+  });
   const nameOccurrences = taskNameSequenceMap(providerTasks);
   return providerTasks
     .map((task) => {
@@ -137,8 +145,7 @@ export function getServerWorkspaceQueueTasks(filters: { ownerId?: string; accoun
         ...(task.updatedAt ? { updatedAt: task.updatedAt } : {}),
         ...(task.metadata ? { metadata: task.metadata } : {}),
       } satisfies WorkspaceTask;
-    })
-    .filter((task) => !filters.ownerId || task.owner === filters.ownerId);
+    });
 }
 
 const EMPTY_OWNER_TASK_COUNTERS: WorkspaceOwnerTaskCounters = {
