@@ -40,7 +40,7 @@ type QueueTask = {
   metadata?: Record<string, unknown>;
 };
 
-type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string; readOnly?: boolean; ownerId?: string; initialTasks?: QueueTask[] };
+type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string; readOnly?: boolean; ownerId?: string };
 type QueueTab = 'all' | 'active' | 'completed' | 'failed';
 
 const labels: Record<string, string> = {
@@ -182,13 +182,13 @@ function normalizeQueueTasks(raw: QueueTask[]): QueueTask[] {
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate, readOnly = false, ownerId, initialTasks }: Props) {
+export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate, readOnly = false, ownerId }: Props) {
   const focusTaskId = requestedFocusTaskId;
   const requestedDate = requestedQueueDate;
-  const [tasks, setTasks] = useState<QueueTask[]>(() => normalizeQueueTasks(initialTasks ?? []));
+  const [tasks, setTasks] = useState<QueueTask[]>([]);
   const [queueDate, setQueueDate] = useState(() => requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : today());
   const [queueTab, setQueueTab] = useState<QueueTab>('all');
-  const [loading, setLoading] = useState(!initialTasks);
+  const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [loadError, setLoadError] = useState('');
   const [focusedTaskId, setFocusedTaskId] = useState<string | null>(null);
@@ -199,8 +199,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   const focusAppliedRef = useRef<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const loadingRef = useRef(false);
-  const activeTasksRef = useRef(Boolean(initialTasks?.some((task) => isActive(task.status))));
-  const initialRefreshRef = useRef(Boolean(initialTasks));
+  const activeTasksRef = useRef(false);
 
   async function load(options: { silent?: boolean; sync?: boolean } = {}) {
     const silent = options.silent === true;
@@ -234,8 +233,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   }
 
   useEffect(() => {
-    void load({ silent: initialRefreshRef.current });
-    initialRefreshRef.current = false;
+    void load();
     const timer = window.setInterval(() => void load({ silent: true, sync: activeTasksRef.current }), 8000);
     return () => {
       window.clearInterval(timer);
