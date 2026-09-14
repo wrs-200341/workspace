@@ -3,14 +3,13 @@ import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { deleteProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import { isProviderLiveEnabled } from '@/lib/providers/config';
-import { providerResponseSnapshot, sanitizeProviderError, syncProviderTask } from '@/lib/providers/client';
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
-import { cacheVideoTaskOutputsBeforeCompletion, listVideoTaskInventoryAssets, localVideoOutputUrls, recoverPendingVideoTaskOutputCache, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
+import { listVideoTaskInventoryAssets, recoverPendingVideoTaskOutputCache, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
 import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
-import { canonicalTaskProgress } from '@/lib/providers/taskProgress';
 import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
+import { ensureProviderTaskRecoveryWorker, ownerIdForProviderTask, syncVideoProviderTask } from '@/lib/providers/providerTaskRecovery';
 
 const DETAIL_SYNC_THROTTLE_MS = 10_000;
 const detailSyncInFlight = new Map<string, Promise<void>>();
@@ -21,6 +20,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
   if (auth instanceof Response) return auth;
   const { id, taskId } = await params;
   if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  ensureProviderTaskRecoveryWorker({
+    onTaskFinalized: (task) => pumpProviderTasks(ownerIdForProviderTask(task), 'video'),
+  });
   const persisted = getProviderTask(taskId);
   if (persisted && persisted.accountId === id && persisted.mode === 'video') {
     if ((persisted.status === 'processing' && persisted.metadata?.localOutputReady !== true)
@@ -50,23 +52,12 @@ function queueDetailProviderSync(taskId: string, task: NonNullable<ReturnType<ty
   detailSyncLastStartedAt.set(key, now);
   const run = (async () => {
     try {
-      const status = await syncProviderTask(task.provider, task.providerTaskId!);
-      const normalizedStatus = status.status === 'unknown' ? task.status : status.status;
-      const cacheTask = { ...task, status: 'completed' as const, progress: 100, providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls: status.outputUrls, outputBase64: status.outputBase64 };
-      const cache = normalizedStatus === 'completed' ? await cacheVideoTaskOutputsBeforeCompletion(task.accountId, cacheTask) : null;
-      const noOutput = normalizedStatus === 'completed' && cache?.expected === 0;
-      const cachePending = normalizedStatus === 'completed' && cache && cache.expected > 0 && !cache.ready;
-      const outputUrls = cache?.ready && cache.expected > 0 ? localVideoOutputUrls(task.accountId, task.id, cache.expected) : status.outputUrls;
-      const outputBase64 = cache?.ready && cache.expected > 0 ? [] : status.outputBase64;
-      const finalStatus = noOutput ? 'failed' : cachePending ? 'processing' : normalizedStatus;
-      const updated = updateProviderTask(taskId, { status: finalStatus, progress: canonicalTaskProgress({ mode: 'video', status: finalStatus, progress: status.progress, providerTaskId: status.providerTaskId ?? task.providerTaskId, schedulerState: cachePending ? 'provider-active' : undefined, localOutputReady: cache?.ready === true, localOutputPending: cachePending === true }), providerTaskId: status.providerTaskId ?? task.providerTaskId, outputUrls, outputBase64, error: noOutput ? 'provider_upstream_failed' : status.error, providerResponse: status.status === 'failed' || noOutput ? providerResponseSnapshot(new Error(status.error ?? 'provider_upstream_failed'), { body: status.response, method: 'GET' }) : undefined, metadata: { ...(task.metadata ?? {}), ...(status.status === 'failed' || noOutput ? { lastProviderFailure: task.provider } : {}), ...(cache ? { localOutputCount: cache.cached, localOutputExpected: cache.expected, localOutputReady: cache.ready } : {}) } });
+      const updated = await syncVideoProviderTask(task, { source: 'detail-sync' });
       if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
-      pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
+      if (updated && ['completed', 'failed', 'cancelled'].includes(updated.status)) pumpProviderTasks(ownerIdForProviderTask(updated), 'video');
     } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      const updated = updateProviderTask(taskId, { status: 'failed', progress: 100, error: sanitizeProviderError(message || 'provider_request_failed'), providerResponse: providerResponseSnapshot(error), metadata: { ...(task.metadata ?? {}), lastProviderFailure: task.provider } });
-      if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
-      pumpProviderTasks(typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : task.accountId, 'video');
+      // syncVideoProviderTask keeps transient status-poll failures non-terminal;
+      // this catch is only a final guard so detail pages never fail to render.
     }
   })();
   detailSyncInFlight.set(key, run);
@@ -79,10 +70,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   const { id, taskId } = await params;
   if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   const body = await request.json().catch(() => ({}));
-  const action = body?.action as TaskAction;
-  if (!['retry', 'cancel', 'save-inventory', 'pause', 'resume'].includes(action)) return NextResponse.json({ success: false, error: 'invalid_task_action' }, { status: 400 });
+  const action = body?.action as string;
+  if (!['retry', 'cancel', 'save-inventory', 'pause', 'resume', 'recover-provider'].includes(action)) return NextResponse.json({ success: false, error: 'invalid_task_action' }, { status: 400 });
   const persisted = getProviderTask(taskId);
   if (persisted && persisted.accountId === id && persisted.mode === 'video') {
+    if (action === 'recover-provider') {
+      if (!persisted.providerTaskId || persisted.error !== 'provider_task_stale') return NextResponse.json({ success: false, error: 'provider_recovery_unsupported' }, { status: 409 });
+      const updated = await syncVideoProviderTask(persisted, { force: true, recoverStaleFailed: true, source: 'manual-stale-recovery' });
+      if (updated && ['completed', 'failed', 'cancelled'].includes(updated.status)) pumpProviderTasks(ownerIdForProviderTask(updated), 'video');
+      return NextResponse.json({ success: true, data: updated ?? persisted });
+    }
     if (action === 'cancel' || action === 'pause') removeQueuedProviderTask(taskId);
     if (action === 'resume' && persisted.providerTaskId) return NextResponse.json({ success: false, error: 'provider_resume_unsupported' }, { status: 409 });
     if (action === 'save-inventory' && persisted.status === 'completed') {
@@ -97,7 +94,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
         return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'video_inventory_save_failed' }, { status: 400 });
       }
     }
-    const next = applyTaskAction({ ...persisted, pid: 'pending', title: persisted.prompt || 'video generation', owner: 'operator-unassigned', mode: 'video', model: persisted.model || persisted.provider }, action);
+    const next = applyTaskAction({ ...persisted, pid: 'pending', title: persisted.prompt || 'video generation', owner: 'operator-unassigned', mode: 'video', model: persisted.model || persisted.provider }, action as TaskAction);
     const updated = updateProviderTask(taskId, { status: next.status, progress: next.progress, error: next.error, providerResponse: undefined, inventorySavedAt: next.inventorySavedAt, providerTaskId: next.providerTaskId, outputUrls: next.outputUrls, outputBase64: next.outputBase64 });
     if ((action === 'retry' || action === 'resume') && updated?.status === 'queued') requeueProviderTask(taskId);
     if (action === 'cancel' || action === 'pause') pumpProviderTasks(typeof persisted.metadata?.ownerId === 'string' ? persisted.metadata.ownerId : persisted.accountId, 'video');
@@ -105,7 +102,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   }
   const task = getServerWorkspaceTasks({ accountId: id, mode: 'video' }).find((item) => item.id === taskId);
   if (!task) return NextResponse.json({ success: false, error: 'task_not_found' }, { status: 404 });
-  return NextResponse.json({ success: true, data: applyTaskAction(task, action) });
+  return NextResponse.json({ success: true, data: applyTaskAction(task, action as TaskAction) });
 }
 
 export async function DELETE(_request: NextRequest, { params }: { params: Promise<{ id: string; taskId: string }> }) {

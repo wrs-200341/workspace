@@ -282,7 +282,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
         : await fetch(`/api/workspace/accounts/${encodeURIComponent(task.accountId)}/${endpoint}/${encodeURIComponent(task.id)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: actionName }) });
       const payload = await response.json().catch(() => null) as { success?: boolean; error?: string } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '队列操作失败');
-      setMessage(actionName === 'retry' ? '任务已重新进入队列' : actionName === 'delete' ? '任务已从生产队列删除' : '队列状态已更新');
+      setMessage(actionName === 'retry' ? '任务已重新进入队列' : actionName === 'delete' ? '任务已从生产队列删除' : actionName === 'recover-provider' ? '已查询上游结果并更新队列' : '队列状态已更新');
       await load();
     } catch (error) {
       setMessage(formatProviderError(error instanceof Error ? error.message : '队列操作失败'));
@@ -368,6 +368,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
              <Link href={reviewHref(task.accountId, mode, task.id)} className="queue-link">{mode === 'prompt' ? '恢复配置' : '审核'}</Link>
               {mode !== 'prompt' && <button type="button" className="queue-link" onClick={() => void openPrompt(task)}>提示词</button>}
             {!readOnly && mode !== 'prompt' && <>{['queued', 'prompting', 'submitting', 'submitted', 'running', 'processing'].includes(task.status) && <button type="button" onClick={() => void action(task, 'pause')}><Pause size={13} /> 暂停</button>}{task.status === 'paused' && <button type="button" onClick={() => void action(task, 'resume')}><Play size={13} /> 继续</button>}</>}
+             {!readOnly && mode === 'video' && task.status === 'failed' && task.error === 'provider_task_stale' && task.providerTaskId && <button type="button" onClick={() => void action(task, 'recover-provider')}><RefreshCw size={13} /> 查询上游结果</button>}
              {!readOnly && mode !== 'prompt' && (task.status === 'failed' || task.status === 'cancelled') && <Link href={restoreHref(task.accountId, mode, task.id)} className="queue-link"><RotateCcw size={13} /> 恢复配置</Link>}
              {!readOnly && mode !== 'prompt' && <button type="button" onClick={() => void action(task, 'delete')} disabled={!['completed', 'failed', 'cancelled'].includes(task.status)} title={!['completed', 'failed', 'cancelled'].includes(task.status) ? '任务完成或失败后可删除' : '删除任务'}><Trash2 size={13} /> 删除</button>}
             {!readOnly && ACTIONABLE_ACTIVE_STATUSES.includes(task.status as (typeof ACTIONABLE_ACTIVE_STATUSES)[number]) && <button type="button" onClick={() => void action(task, 'cancel')}><Trash2 size={13} /> 取消</button>}

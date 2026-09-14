@@ -4,10 +4,15 @@ import { getWorkspaceOperators } from '@/lib/workspace/data';
 import { workspaceOwnerIdForUser } from '@/lib/workspace/access';
 import { summarizeWorkspaceTasks } from '@/lib/workspace/tasks';
 import { getServerWorkspaceTaskSummaries } from '@/lib/workspace/serverTasks';
+import { pumpProviderTasks } from '@/lib/providers/concurrency';
+import { ensureProviderTaskRecoveryWorker, ownerIdForProviderTask } from '@/lib/providers/providerTaskRecovery';
 
 export async function GET(request: NextRequest) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
+  ensureProviderTaskRecoveryWorker({
+    onTaskFinalized: (task) => pumpProviderTasks(ownerIdForProviderTask(task), 'video'),
+  });
   const operators = getWorkspaceOperators();
   const requestedOwner = request.nextUrl.searchParams.get('ownerId') || undefined;
   const ownerId = auth.role === 'admin' ? requestedOwner : workspaceOwnerIdForUser(auth);

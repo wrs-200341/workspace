@@ -47,12 +47,62 @@ function responseText(task: Pick<ProviderTask, 'providerResponse'>): string {
   return flatten(task.providerResponse).toLowerCase();
 }
 
+function providerDisplayName(provider?: string): string {
+  const names: Record<string, string> = {
+    'grok-video': 'snumom',
+    'yuanai-grok-video': 'yuanai',
+    'mgrouter-grok-video': 'mgrouter',
+    'mgrouter-grok-image': 'mgrouter',
+    'wan3-video': 'manjuai',
+    'wan-3-nsfw': '808relay',
+    seedream: 'apiaw',
+    'minimax-h3': 'secure-skill',
+    'miku-minimax': 'mikuapi',
+    'pro666-video': 'pro666',
+    'quality-v4': 'quality-v4',
+    'oairegbox-omni': 'oairegbox',
+    'yuanai-image': 'yuanai',
+    'aicloud-gpt-image': 'aicloud',
+    'pomoai-gemini-image': 'pomoai',
+    'origin-gpt-image': 'origingateway',
+    'origin-grok-image': 'origingateway',
+    'origin-nano-image': 'origingateway',
+    'junze-gpt-image': 'junze',
+    'junze-gemini-image': 'junze',
+    'pomoai-gpt-prompt': 'pomoai',
+    'oairegbox-gpt-prompt': 'oairegbox',
+    'gpt-2999-prompt': '2999',
+    'bigsnake-prompt': 'bigsnake',
+  };
+  if (!provider) return '供应商';
+  return names[provider] ?? provider;
+}
+
+function modelFamily(task: { provider?: string; model?: string }): string {
+  const value = `${task.provider ?? ''} ${task.model ?? ''}`.toLowerCase();
+  if (value.includes('grok')) return 'grok';
+  if (value.includes('gpt')) return 'gpt';
+  if (value.includes('gemini')) return 'gemini';
+  if (value.includes('minimax') || value.includes('h3')) return 'minimax';
+  if (value.includes('wan')) return 'wan';
+  if (value.includes('omni')) return 'omni';
+  if (value.includes('sd2') || value.includes('933')) return 'sd 933 mini';
+  if (value.includes('seedream')) return 'seedream';
+  return '';
+}
+
+function providerModelSubject(task: { provider?: string; model?: string }): string {
+  const provider = providerDisplayName(task.provider);
+  const family = modelFamily(task);
+  return family ? `${provider}的${family}` : provider;
+}
+
 /**
  * Convert internal/provider errors into an operator-facing explanation. This
  * deliberately returns a small, non-sensitive object suitable for queue APIs;
  * the full bounded provider response remains available on the detail page.
  */
-export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerResponse' | 'providerTaskId' | 'metadata' | 'mode'>): TaskErrorInfo | undefined {
+export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerResponse' | 'providerTaskId' | 'metadata' | 'mode'> & Partial<Pick<ProviderTask, 'provider' | 'model'>>): TaskErrorInfo | undefined {
   const error = typeof task.error === 'string' ? task.error.trim() : '';
   if (!error) return undefined;
   const lower = error.toLowerCase();
@@ -106,6 +156,32 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
       message: '提示词模型在视频提交前没有及时返回结果，因此视频供应商还没有收到任务。',
       action: '可以安全恢复，建议稍后再次生成。',
       safeToRetry: !hasUpstreamId,
+    };
+  }
+
+  const quotaOrBalance = /额度|限额|余额|点数|积分|额度等待恢复|可用账号额度|insufficient[_\s-]?(balance|quota|credit|funds)|quota|credit|balance|billing|payment required/.test(`${lower} ${response}`);
+  if (quotaOrBalance) {
+    const provider = providerDisplayName(task.provider);
+    return {
+      code: 'provider_quota',
+      category: 'provider_quota',
+      title: `${provider}额度不足`,
+      message: `${provider}账号余额、额度、积分或可用账号资源不足，供应商没有继续处理这条任务。`,
+      action: `请管理员检查 ${provider} 的账号额度/密钥可用范围；额度恢复后再重新提交或切换供应商。`,
+      safeToRetry: false,
+    };
+  }
+
+  const contentRejected = /内容审核|审核不通过|安全策略|违规|敏感|content[_\s-]?policy|content review|moderation|safety|policy violation|blocked by policy|rejected by policy/.test(`${lower} ${response}`);
+  if (contentRejected) {
+    const subject = providerModelSubject(task);
+    return {
+      code: 'provider_content_policy',
+      category: 'content_policy',
+      title: `${subject}内容审核失败`,
+      message: `${subject}拒绝了当前提示词或参考素材，任务没有生成可用结果。`,
+      action: '请调整提示词、减少敏感描述或更换参考素材后再提交；如果是误判，可以切换同模型的其他供应商再试。',
+      safeToRetry: false,
     };
   }
 

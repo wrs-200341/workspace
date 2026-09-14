@@ -17,13 +17,14 @@ import fs from 'node:fs';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { appendProductSummary, lookupProductSummary } from '@/lib/workspace/productSummary';
 import * as productSummaryModule from '@/lib/workspace/productSummary';
-import { enqueueProviderTask, recoverOrphanedSchedulerTasks, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
+import { enqueueProviderTask, pumpProviderTasks, recoverOrphanedSchedulerTasks, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
 import { cacheVideoTaskOutputsBeforeCompletion } from '@/lib/workspace/videoInventory';
 import { canonicalTaskProgress } from '@/lib/providers/taskProgress';
 import type { GPTPromptAttachment } from '@/lib/providers/payloads';
 import { normalizeTaskName, parseTaskNameMode, validateTaskNaming } from '@/lib/workspace/taskNaming';
 import { classifyTaskError } from '@/lib/providers/taskErrorInfo';
 import { businessDate } from '@/lib/workspace/tasks';
+import { ensureProviderTaskRecoveryWorker, ownerIdForProviderTask } from '@/lib/providers/providerTaskRecovery';
 
 type VideoProvider = 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni';
 const VIDEO_PROVIDERS: readonly VideoProvider[] = ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'wan3-video', 'wan-3-nsfw', 'minimax-h3', 'miku-minimax', 'pro666-video', 'quality-v4', 'oairegbox-omni'];
@@ -34,6 +35,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (auth instanceof Response) return auth;
   const { id } = await params;
   if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
+  ensureProviderTaskRecoveryWorker({
+    onTaskFinalized: (task) => pumpProviderTasks(ownerIdForProviderTask(task), 'video'),
+  });
   const body = await request.json().catch(() => ({}));
   if (body && typeof body === 'object' && (body as { action?: unknown }).action === 'recover-safe') {
     const ownerId = workspaceOwnerIdForAccount(id);

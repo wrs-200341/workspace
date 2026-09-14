@@ -3,6 +3,7 @@ import { getProviderTask, listProviderTaskSummaries, updateProviderTask, type Pr
 import * as taskStore from './taskStore';
 import { workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 import { canonicalTaskProgress } from './taskProgress';
+import { isProviderLiveEnabled } from './config';
 
 /**
  * Workspace production concurrency policy.
@@ -136,11 +137,15 @@ function providerActiveStaleMs(): number {
 }
 
 function isStaleProviderActiveTask(
-  task: Pick<ProviderTask, 'accountId' | 'status' | 'mode' | 'providerTaskId' | 'metadata' | 'updatedAt'>,
+  task: Pick<ProviderTask, 'accountId' | 'status' | 'mode' | 'provider' | 'providerTaskId' | 'metadata' | 'updatedAt'>,
   now: number,
   options: { ownerId?: string; mode?: ProductionMode } = {},
 ): boolean {
   if (!task.providerTaskId || !isPersistedActiveTask(task)) return false;
+  // Live video tasks must get one last read-only provider status sync before
+  // they are declared stale. The background recovery worker owns that path;
+  // this synchronous scheduler guard remains for non-live/unsupported tasks.
+  if (task.mode === 'video' && isProviderLiveEnabled(task.provider)) return false;
   if (options.mode && task.mode !== options.mode) return false;
   if (options.ownerId && taskOwnerId(task) !== options.ownerId) return false;
   const updatedAt = Date.parse(task.updatedAt);
