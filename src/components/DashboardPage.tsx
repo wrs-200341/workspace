@@ -37,8 +37,17 @@ export function DashboardPage() {
 
   return <>
     <div className="page-heading">
-      <div><div className="eyebrow">Control room / overview</div><h1>今日生产与经营总览</h1><p className="subtitle">统计仅来自当前工作区和已授权的下游同步数据。</p></div>
-      <div className="toolbar"><span className="tag">实时读取 D 盘数据</span><Link href="/downstream" className="ghost-button" style={{ textDecoration: 'none' }}>查看下游看板 <ArrowUpRight size={14} /></Link></div>
+      <div>
+        <div className="eyebrow">Control room / overview</div>
+        <h1>今日生产与经营总览</h1>
+        <p className="subtitle">统计来自当前工作区和已授权的下游同步数据。</p>
+      </div>
+      <div className="toolbar">
+        <span className="tag">实时读取 D 盘数据</span>
+        <Link href="/downstream" className="ghost-button" style={{ textDecoration: 'none' }} prefetch={false}>
+          查看下游看板 <ArrowUpRight size={14} />
+        </Link>
+      </div>
     </div>
 
     <div className="section-grid kpi-grid">
@@ -51,19 +60,93 @@ export function DashboardPage() {
     <div className="section-grid content-grid">
       <EarningsTrendBoard />
       <section className="panel">
-        <div className="panel-header"><div><h2 className="panel-title">账号表现排行</h2><div className="panel-meta">仅展示有真实下游表现的账号</div></div><Link href="/accounts" className="panel-meta" style={{ color: '#1e40af', textDecoration: 'none' }}>全部账号 <ArrowUpRight size={13} /></Link></div>
-        <div className="ranking">{rankedAccounts.length ? rankedAccounts.slice(0, 8).map((account, index) => <div className="rank-row" key={account.id}><div className="rank-no">{String(index + 1).padStart(2, '0')}</div><div><div className="rank-name">{account.name}</div><div className="rank-sub">{account.ownerName} · {account.category}</div></div><div className="rank-value">¥{formatCompact(account.gmv)}</div></div>) : <div className="empty-state">暂无已同步的下游表现数据</div>}</div>
+        <div className="panel-header">
+          <div>
+            <h2 className="panel-title">账号表现排行</h2>
+            <div className="panel-meta">仅展示有真实下游表现的账号</div>
+          </div>
+          <Link href="/accounts" className="panel-meta" style={{ color: '#1e40af', textDecoration: 'none' }} prefetch={false}>
+            全部账号 <ArrowUpRight size={13} />
+          </Link>
+        </div>
+        <div className="ranking">
+          {rankedAccounts.length ? rankedAccounts.slice(0, 8).map((account, index) => (
+            <div className="rank-row" key={account.id}>
+              <div className="rank-no">{String(index + 1).padStart(2, '0')}</div>
+              <div>
+                <div className="rank-name">{account.name}</div>
+                <div className="rank-sub">{account.ownerName} · {account.category}</div>
+              </div>
+              <div className="rank-value">¥{formatCompact(account.gmv)}</div>
+            </div>
+          )) : <div className="empty-state">暂无已同步的下游表现数据</div>}
+        </div>
       </section>
     </div>
 
     <div className="section-grid content-grid">
       <section className="panel table-panel" style={{ marginTop: 0 }}>
-        <div className="panel-header"><div><h2 className="panel-title">最近发布的视频</h2><div className="panel-meta">等待授权的发布数据同步</div></div><Link href="/downstream" className="panel-meta" style={{ color: '#1e40af', textDecoration: 'none' }}>打开明细 <ArrowUpRight size={13} /></Link></div>
-        <div className="table-scroll"><table><thead><tr><th>视频</th><th>账号</th><th>发布时间</th><th>播放</th><th>订单</th><th>成交额</th></tr></thead><tbody>{snapshot.videos.length ? snapshot.videos.slice(0, 4).map((video) => <tr key={video.id}><td><div className="video-cell"><div className="cover" style={{ background: video.cover }} /><div><strong className="video-title">{video.title}</strong><div style={{ color: '#9aa3b2', marginTop: 4, fontFamily: 'Fira Code' }}>PID {video.pid}</div></div></div></td><td>{video.account}</td><td>{video.publishedAt}</td><td>{formatCompact(video.views)}</td><td>{video.orders}</td><td><strong>¥{formatCompact(video.gmv)}</strong></td></tr>) : <tr><td colSpan={6}><div className="empty-state">暂无已同步的发布视频</div></td></tr>}</tbody></table></div>
+        <div className="panel-header">
+          <div>
+            <h2 className="panel-title">最近发布的视频</h2>
+            <div className="panel-meta">等待授权的发布数据同步</div>
+          </div>
+          <Link href="/downstream" className="panel-meta" style={{ color: '#1e40af', textDecoration: 'none' }} prefetch={false}>
+            打开明细 <ArrowUpRight size={13} />
+          </Link>
+        </div>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr><th>视频</th><th>账号</th><th>发布时间</th><th>播放</th><th>订单</th><th>成交额</th></tr>
+            </thead>
+            <tbody>
+              {snapshot.videos.length ? snapshot.videos.slice(0, 4).map((video) => (
+                <tr key={video.id}>
+                  <td>
+                    <div className="video-cell">
+                      <div className="cover" style={{ background: video.cover }} />
+                      <div>
+                        <strong className="video-title">{video.title}</strong>
+                        <div style={{ color: '#9aa3b2', marginTop: 4, fontFamily: 'Fira Code' }}>PID {video.pid}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td>{video.account}</td>
+                  <td>{video.publishedAt}</td>
+                  <td>{formatCompact(video.views)}</td>
+                  <td>{video.orders}</td>
+                  <td><strong>¥{formatCompact(video.gmv)}</strong></td>
+                </tr>
+              )) : <tr><td colSpan={6}><div className="empty-state">暂无已同步的发布视频</div></td></tr>}
+            </tbody>
+          </table>
+        </div>
       </section>
       <section className="panel">
-        <div className="panel-header"><div><h2 className="panel-title">同步与提醒</h2><div className="panel-meta">工作区生产数据</div></div><Sparkles size={16} color="#1e40af" /></div>
-        <div className="notice-list"><div className="notice"><div className="notice-icon"><PackageCheck size={13} /></div><div><div className="notice-title">下游发布数据</div><div className="notice-text">9001 尚未提供可信的发布/播放/交易同步数据。</div></div></div><div className="notice"><div className="notice-icon"><PlaySquare size={13} /></div><div><div className="notice-title">生产任务 {production.total} 条</div><div className="notice-text">完成 {production.completed} · 失败 {production.failed} · 处理中 {production.running + production.queued}</div></div></div></div>
+        <div className="panel-header">
+          <div>
+            <h2 className="panel-title">同步与提醒</h2>
+            <div className="panel-meta">工作区生产数据</div>
+          </div>
+          <Sparkles size={16} color="#1e40af" />
+        </div>
+        <div className="notice-list">
+          <div className="notice">
+            <div className="notice-icon"><PackageCheck size={13} /></div>
+            <div>
+              <div className="notice-title">下游发布数据</div>
+              <div className="notice-text">9001 尚未提供可信的发布、播放、交易同步数据。</div>
+            </div>
+          </div>
+          <div className="notice">
+            <div className="notice-icon"><PlaySquare size={13} /></div>
+            <div>
+              <div className="notice-title">生产任务 {production.total} 条</div>
+              <div className="notice-text">完成 {production.completed} · 失败 {production.failed} · 处理中 {production.running + production.queued}</div>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
   </>;

@@ -304,7 +304,7 @@ describe('production concurrency scheduler', () => {
     expect(getProviderTask(task.id)?.metadata?.schedulerRetryCount).toBe(2);
   });
 
-  it('clears stale provider handles before an automatic retry is dispatched', async () => {
+  it('does not dispatch or clear accepted provider handles without a confirmed terminal failure', async () => {
     const task = createProviderTask({
       id: 'auto-retry-clears-provider',
       accountId: 'operator-a-account',
@@ -329,9 +329,9 @@ describe('production concurrency scheduler', () => {
     });
     await tick();
     const retrying = getProviderTask(task.id);
-    expect(retrying?.status).toBe('retrying');
-    expect(retrying?.providerTaskId).toBeUndefined();
-    expect(retrying?.outputUrls).toEqual([]);
-    expect(attempts).toBe(1);
+    expect(retrying?.status).toBe('queued');
+    expect(retrying?.providerTaskId).toBe('stale-upstream-id');
+    expect(retrying?.outputUrls).toEqual(['https://cdn.example/video.mp4']);
+    expect(attempts).toBe(0);
   });
 });

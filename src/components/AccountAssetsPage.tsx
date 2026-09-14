@@ -62,12 +62,12 @@ export async function AccountAssetsPage({ accountId, section = 'prompt', imageTa
         <div className="eyebrow">{workspaceAccount?.ownerName ?? '精选账号'}</div>
         <h1>{displayName}<span className="asset-heading-accent"> 数据资产</span></h1>
       </div>
-      <div className="toolbar">{!readOnly && <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${productionMode[section]}`} className="primary-button" style={{ textDecoration: 'none' }}><Plus size={14} /> 新建生产任务</Link>}</div>
+      <div className="toolbar">{!readOnly && <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/production?mode=${productionMode[section]}`} className="primary-button" style={{ textDecoration: 'none' }} prefetch={false}><Plus size={14} /> 新建生产任务</Link>}</div>
     </div>
     <div className="asset-layout">
       <aside className="asset-sidebar panel">
         <div className="asset-sidebar-title">DATA ASSETS</div>
-        {sections.map(({ id, label, icon: SectionIcon }) => <Link key={id} href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/${sectionPath[id]}`} className={`asset-nav-item ${section === id ? 'active' : ''}`}>
+        {sections.map(({ id, label, icon: SectionIcon }) => <Link key={id} href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/${sectionPath[id]}`} className={`asset-nav-item ${section === id ? 'active' : ''}`} prefetch={false}>
           <span><SectionIcon size={16} />{label}</span>
           <strong>{counts[id] ?? 0}</strong>
         </Link>)}
@@ -86,8 +86,8 @@ export async function AccountAssetsPage({ accountId, section = 'prompt', imageTa
 function ImageAssets({ accountId, tab, assets, readOnly }: { accountId: string; tab: ImageAssetTab; assets: ReturnType<typeof listAssets>; readOnly: boolean }) {
   return <div className="image-assets-panel">
     <nav className="asset-secondary-tabs" aria-label="图片资产分类" role="tablist">
-      <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/images?tab=materials`} role="tab" aria-selected={tab === 'materials'} className={`asset-secondary-tab ${tab === 'materials' ? 'active' : ''}`}>素材图片<span>本地上传</span></Link>
-      <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/images?tab=products`} role="tab" aria-selected={tab === 'products'} className={`asset-secondary-tab ${tab === 'products' ? 'active' : ''}`}>商品图片<span>8765 PID</span></Link>
+      <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/images?tab=materials`} role="tab" aria-selected={tab === 'materials'} className={`asset-secondary-tab ${tab === 'materials' ? 'active' : ''}`} prefetch={false}>素材图片<span>本地上传</span></Link>
+      <Link href={`/workspace/accounts/${encodeURIComponent(accountId)}/assets/images?tab=products`} role="tab" aria-selected={tab === 'products'} className={`asset-secondary-tab ${tab === 'products' ? 'active' : ''}`} prefetch={false}>商品图片<span>8765 PID</span></Link>
     </nav>
     {tab === 'products' ? <ProductImageAssets accountId={accountId} readOnly={readOnly} /> : <AccountAssetLibrary accountId={accountId} section="image" initialAssets={assets} readOnly={readOnly} />}
   </div>;

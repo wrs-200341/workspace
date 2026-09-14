@@ -80,6 +80,7 @@ vi.mock('@/lib/providers/taskStore', () => ({
   createProviderTasks: mockCreateProviderTasks,
   getProviderTask: mockGetProviderTask,
   updateProviderTask: mockUpdateProviderTask,
+  flushProviderTaskStore: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/providers/concurrency', () => ({
   enqueueProviderTask: mockEnqueueProviderTask,
@@ -93,6 +94,7 @@ vi.mock('@/lib/providers/client', () => ({
   submitVideoWithFallback: mockSubmitVideo,
   normalizeProviderResponse: mockNormalizeProviderResponse,
   providerResponseSnapshot: mockProviderResponseSnapshot,
+  providerErrorInfo: vi.fn((error: Error) => ({ code: error.message })),
   sanitizeProviderError: vi.fn((value: string) => value),
 }));
 vi.mock('@/lib/providers/validation', () => ({ validateGenerationRequest: mockValidateGenerationRequest }));
@@ -118,10 +120,11 @@ vi.mock('@/lib/workspace/videoInventory', () => ({ cacheVideoTaskOutputsBeforeCo
 vi.mock('@/lib/workspace/production/dailyQuota', () => ({ getDailyQuotaUsage: mockGetDailyQuotaUsage }));
 
 import { POST } from './route';
+import { executePersistedVideoTask } from '@/lib/providers/videoTaskExecution';
 
 const params = { params: Promise.resolve({ id: 'account-1' }) };
 let tasks = new Map<string, MockTask>();
-let runs: Array<() => Promise<void>> = [];
+let queuedIds: string[] = [];
 
 function request(body: Record<string, unknown>): NextRequest {
   return new NextRequest('http://localhost/api/workspace/accounts/account-1/generate-video', {
@@ -149,7 +152,7 @@ function baseBody(overrides: Record<string, unknown> = {}): Record<string, unkno
 describe('generate-video automatic child prompt queueing', () => {
   beforeEach(() => {
     tasks = new Map();
-    runs = [];
+    queuedIds = [];
     mockRequireApiRole.mockResolvedValue({ role: 'admin', username: 'admin' });
     mockCanAccessWorkspaceAccount.mockReturnValue(true);
     mockGetProviderConfig.mockImplementation((id: string) => ({
@@ -167,8 +170,8 @@ describe('generate-video automatic child prompt queueing', () => {
     mockGenerateBigSnakePrompt.mockReset();
     mockGenerateGPTPrompt.mockReset();
     mockGenerateGeminiPrompt.mockReset();
-    mockSubmitVideo.mockReset().mockResolvedValue({ mode: 'mock', response: {} });
-    mockNormalizeProviderResponse.mockReset().mockReturnValue({ status: 'queued', progress: 5, outputUrls: [], outputBase64: [] });
+    mockSubmitVideo.mockReset().mockResolvedValue({ mode: 'mock', provider: 'grok-video', model: 'grok-model', response: {} });
+    mockNormalizeProviderResponse.mockReset().mockReturnValue({ status: 'queued', providerTaskId: 'mock-upstream', progress: 5, outputUrls: [], outputBase64: [] });
     mockProviderResponseSnapshot.mockImplementation((error: unknown) => ({ code: error instanceof Error ? error.message : 'provider_error' }));
     mockCacheVideoTaskOutputsBeforeCompletion.mockReset();
     mockProcessMockProviderTask.mockReset();
@@ -198,8 +201,9 @@ describe('generate-video automatic child prompt queueing', () => {
       tasks.set(id, next);
       return next;
     });
-    mockEnqueueProviderTask.mockImplementation((input: { taskId: string; run: () => Promise<void> }) => {
-      runs.push(input.run);
+    mockEnqueueProviderTask.mockImplementation((input: { taskId: string; run?: () => Promise<void> }) => {
+      expect(input.run).toBeUndefined();
+      queuedIds.push(input.taskId);
       return true;
     });
   });
@@ -245,7 +249,7 @@ describe('generate-video automatic child prompt queueing', () => {
       success: true,
       data: { count: 2, status: 'prompting', execution: 'pending' },
     });
-    expect(runs).toHaveLength(2);
+    expect(queuedIds).toHaveLength(2);
     expect(mockGenerateBigSnakePrompt).not.toHaveBeenCalled();
     expect([...tasks.values()]).toEqual(expect.arrayContaining([
       expect.objectContaining({ status: 'prompting', progress: 2, metadata: expect.objectContaining({ promptGenerationPending: true }) }),
@@ -255,7 +259,7 @@ describe('generate-video automatic child prompt queueing', () => {
   it('shares one generated child prompt across all tasks in a batch', async () => {
     mockGenerateBigSnakePrompt.mockResolvedValue({ mode: 'mock', text: 'generated child prompt', response: { ok: true } });
     await POST(request(baseBody()), params);
-    await Promise.all(runs.map((run) => run()));
+    await Promise.all(queuedIds.map((id) => executePersistedVideoTask(id)));
 
     expect(mockGenerateBigSnakePrompt).toHaveBeenCalledTimes(1);
     expect(mockSubmitVideo).toHaveBeenCalledTimes(2);
@@ -266,7 +270,7 @@ describe('generate-video automatic child prompt queueing', () => {
   it('records a failed prompt stage so the scheduler can retry the task', async () => {
     mockGenerateBigSnakePrompt.mockRejectedValue(new Error('prompt_provider_failed'));
     await POST(request(baseBody({ count: 1 })), params);
-    await expect(runs[0]()).rejects.toThrow('prompt_provider_failed');
+    await executePersistedVideoTask(queuedIds[0]);
 
     expect(tasks.get('task-1')).toMatchObject({
       status: 'failed',
@@ -280,7 +284,7 @@ describe('generate-video automatic child prompt queueing', () => {
   it('falls back to the template and flags it when a live prompt provider returns blank text', async () => {
     mockGenerateBigSnakePrompt.mockResolvedValue({ mode: 'live', text: '   ', response: { ok: true } });
     await POST(request(baseBody({ count: 1 })), params);
-    await runs[0]();
+    await executePersistedVideoTask(queuedIds[0]);
 
     expect(mockSubmitVideo).toHaveBeenCalledTimes(1);
     expect(tasks.get('task-1')).toMatchObject({

@@ -1,7 +1,6 @@
-import { listAssets, type AssetKind } from './assetStore';
-import { listProviderTasks, type ProviderTask } from '@/lib/providers/taskStore';
+import { countAssetsByAccount, listAssets, type AssetKind } from './assetStore';
+import { listProviderTaskSummaries } from '@/lib/providers/taskStore';
 import type { WorkspaceAccount } from './data';
-import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 
 /**
  * Counters derived from the current workspace stores.
@@ -27,25 +26,15 @@ const EMPTY_ASSET_COUNTS: Record<AssetKind, number> = {
   audio: 0,
 };
 
-function outputCount(task: ProviderTask): number {
-  const inventoryIds = Array.isArray(task.metadata?.inventoryAssetIds)
-    ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
-    : [];
-  if (task.inventorySavedAt && inventoryIds.length > 0) return inventoryIds.length;
-  // Provider task storage already normalizes these arrays, but counting only
-  // non-empty strings keeps the statistic correct for legacy records.
-  return countVideoOutputs(task.provider, task.outputUrls, task.outputBase64, Boolean(task.providerTaskId));
-}
-
 /** Compute counters from live asset and provider-task data for one account. */
 export function getLiveAccountStats(accountId: string): LiveAccountStats {
   const assets = listAssets(accountId);
   const assetCounts: Record<AssetKind, number> = { ...EMPTY_ASSET_COUNTS };
   for (const asset of assets) assetCounts[asset.kind] += 1;
 
-  const videoTasks = listProviderTasks({ accountId, mode: 'video' });
+  const videoTasks = listProviderTaskSummaries({ accountId, mode: 'video', status: 'completed' });
   const successful = videoTasks
-    .map((task) => ({ task, outputs: outputCount(task) }))
+    .map((task) => ({ task, outputs: task.outputCount }))
     .filter(({ task, outputs }) => task.status === 'completed' && outputs > 0);
   // The account card's "视频" counter is the inventory-video asset branch,
   // not a count of transient provider outputs. Published content has no
@@ -82,10 +71,9 @@ export function withLiveAccountStats(account: WorkspaceAccount): WorkspaceAccoun
 }
 
 export function withLiveAccountStatsList(accounts: readonly WorkspaceAccount[]): WorkspaceAccount[] {
+  const accountAssetCounts = countAssetsByAccount(accounts.map((account) => account.id));
   return accounts.map((account) => {
-    const assets = listAssets(account.id);
-    const assetCounts: Record<AssetKind, number> = { ...EMPTY_ASSET_COUNTS };
-    for (const asset of assets) assetCounts[asset.kind] += 1;
+    const assetCounts = accountAssetCounts[account.id] ?? EMPTY_ASSET_COUNTS;
     return {
       ...account,
       promptCount: assetCounts.prompt,

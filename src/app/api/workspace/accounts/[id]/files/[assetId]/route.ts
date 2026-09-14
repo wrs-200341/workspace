@@ -18,6 +18,9 @@ export async function GET(request: NextRequest, { params }: Params) {
     const asset = getAsset(id, assetId);
     if (!asset) return NextResponse.json({ success: false, error: 'asset_not_found' }, { status: 404 });
     const download = request.nextUrl.searchParams.get('download') === '1';
+    if (!download && request.nextUrl.searchParams.get('metadata') === '1') {
+      return NextResponse.json({ success: true, data: { asset } }, { headers: { 'cache-control': 'private, no-store' } });
+    }
     if (asset.kind === 'prompt') {
       if (!download) return NextResponse.json({ success: true, data: { asset } });
       const headers = new Headers({

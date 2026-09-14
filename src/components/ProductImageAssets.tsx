@@ -8,7 +8,7 @@ import { normalizeProductGalleryItems, parsePidListText, parsePidRows } from './
 
 type ProductRecord = { pid: string; importDate: string; files: string[]; relativePath: string };
 type GalleryItem = { pid: string; title?: string; description?: string; coverUrl?: string };
-type ProductImageAsset = { id: string; pid: string; name: string; importDate: string; mimeType: string };
+type ProductImageAsset = { id: string; pid: string; name: string; importDate: string; mimeType: string; thumbnailUrl?: string };
 type ProductFolder = ProductRecord & { images?: ProductImageAsset[]; coverUrl?: string; coverAssetId?: string };
 
 type ProductImagesPayload = {
@@ -311,7 +311,7 @@ export function ProductImageAssets({ accountId, readOnly = false }: { accountId:
             <div className="product-folder-grid">
               {folderImages.map((asset) => (
                 <figure key={asset.id}>
-                  <img src={`/api/workspace/product-images/preview?assetId=${encodeURIComponent(asset.id)}`} alt={asset.name} loading="lazy" />
+                  <img src={asset.thumbnailUrl || `/api/workspace/product-images/preview?assetId=${encodeURIComponent(asset.id)}&thumbnail=1`} alt={asset.name} loading="lazy" decoding="async" />
                   <figcaption>{asset.name}</figcaption>
                 </figure>
               ))}

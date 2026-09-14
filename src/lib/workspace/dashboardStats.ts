@@ -1,9 +1,9 @@
 import type { WorkspaceAccount } from './data';
 import { listStoredAccounts } from './accountStore';
 import { withLiveAccountStatsList } from './accountStats';
-import { getServerWorkspaceTaskSummaries } from './serverTasks';
 import { businessDate, type WorkspaceTask } from './tasks';
 import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
+import { listProviderTaskSummaries, type ProviderTaskSummary } from '@/lib/providers/taskStore';
 
 /**
  * Downstream performance is intentionally kept separate from production
@@ -82,7 +82,17 @@ const EMPTY_TOTALS: DownstreamTotals = {
   refunds: 0,
 };
 
-function outputCount(task: WorkspaceTask): number {
+type ProductionTaskStatsInput = Pick<WorkspaceTask, 'accountId' | 'mode' | 'status' | 'createdAt' | 'inventorySavedAt'> & {
+  outputCount?: number;
+  outputUrls?: string[];
+  outputBase64?: string[];
+  provider?: string;
+  providerTaskId?: string;
+  metadata?: Record<string, unknown>;
+};
+
+function outputCount(task: ProductionTaskStatsInput): number {
+  if (typeof task.outputCount === 'number') return task.outputCount;
   const inventoryIds = Array.isArray(task.metadata?.inventoryAssetIds)
     ? task.metadata.inventoryAssetIds.filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
     : [];
@@ -95,7 +105,7 @@ function isRunning(status: WorkspaceTask['status']): boolean {
 }
 
 /** Aggregate production counters from persisted tasks without mutating them. */
-export function aggregateProductionTaskStats(tasks: readonly WorkspaceTask[], now: Date | string | number = new Date()): ProductionTaskStats {
+export function aggregateProductionTaskStats(tasks: readonly ProductionTaskStatsInput[], now: Date | string | number = new Date()): ProductionTaskStats {
   const today = businessDate(now);
   const activeAccounts = new Set<string>();
   const result = tasks.reduce<ProductionTaskStats>((summary, task) => {
@@ -120,6 +130,10 @@ export function aggregateProductionTaskStats(tasks: readonly WorkspaceTask[], no
   return { ...result, activeAccountsToday: activeAccounts.size };
 }
 
+export function aggregateProductionTaskSummaryStats(tasks: readonly ProviderTaskSummary[], now: Date | string | number = new Date()): ProductionTaskStats {
+  return aggregateProductionTaskStats(tasks, now);
+}
+
 function accountRows(accounts: readonly WorkspaceAccount[]): DashboardAccount[] {
   return accounts.map((account) => ({
     ...account,
@@ -137,13 +151,14 @@ function accountRows(accounts: readonly WorkspaceAccount[]): DashboardAccount[] 
 /** Build the server-side snapshot consumed by the overview and tables. */
 export function getDashboardSnapshot(now: Date | string | number = new Date()): DashboardSnapshot {
   const accounts = accountRows(withLiveAccountStatsList(listStoredAccounts()));
-  // Dashboard counters do not render provider outputs. Use the compact task
-  // projection so this API never clones multi-megabyte output payloads.
-  const tasks = getServerWorkspaceTaskSummaries();
+  // Dashboard counters do not render queue titles or provider outputs. Read
+  // the compact provider-task projection directly so this API does not build
+  // occurrence maps or clone multi-megabyte output payloads.
+  const tasks = listProviderTaskSummaries();
   return {
     accounts,
     totals: { ...EMPTY_TOTALS },
-    production: aggregateProductionTaskStats(tasks, now),
+    production: aggregateProductionTaskSummaryStats(tasks, now),
     // No verified downstream publishing source exists yet. Keep these arrays
     // empty rather than exposing the old demonstration records.
     videos: [],

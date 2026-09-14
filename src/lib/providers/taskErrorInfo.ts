@@ -2,6 +2,7 @@ import type { ProviderTask } from './taskStore';
 
 export type TaskErrorCategory =
   | 'service_restart'
+  | 'submission_uncertain'
   | 'prompt_timeout'
   | 'provider_timeout'
   | 'provider_capacity'
@@ -108,6 +109,20 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
   const lower = error.toLowerCase();
   const response = responseText(task);
   const metadata = task.metadata ?? {};
+  // Restart and capacity metadata must not make an ambiguous paid request
+  // eligible for the safe-recovery batch.
+  if (lower === 'provider_submission_uncertain' || metadata.providerSubmissionUncertain === true) {
+    return {
+      code: 'provider_submission_uncertain',
+      category: 'submission_uncertain',
+      title: '提交结果待供应商确认',
+      message: '无法确认供应商是否已收到请求，任务可能仍在处理或已产生费用。为避免重复提交扣费，系统已暂停自动重试。',
+      action: task.providerTaskId
+        ? '请先在供应商后台核对该任务编号和处理结果；不要直接重新提交。'
+        : '请管理员按供应商、提交时间和请求内容核对后台记录与扣费情况；确认原请求未受理后，再决定是否重新提交。',
+      safeToRetry: false,
+    };
+  }
   const promptPending = metadata.promptGenerationPending === true || metadata.promptGenerationFailed === true;
   const hasUpstreamId = Boolean(task.providerTaskId);
   const retryInterrupted = lower === 'scheduler_retry_interrupted';

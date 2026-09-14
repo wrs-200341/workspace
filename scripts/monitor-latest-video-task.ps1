@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = 'SilentlyContinue'
 $root = 'D:\all_projects\workspace'
-$taskFile = Join-Path $root 'data\providers\tasks.json'
+$taskReader = Join-Path $root 'scripts\read-provider-task-summaries.ts'
 $monitorDir = Join-Path $root 'data\monitor'
 $stateFile = Join-Path $monitorDir 'latest-video-task.json'
 $logFile = Join-Path $monitorDir 'latest-video-task.log'
@@ -18,7 +18,7 @@ function Write-State([hashtable]$state) {
 }
 
 function Read-Tasks {
-  try { return @((Get-Content -LiteralPath $taskFile -Raw | ConvertFrom-Json)) } catch { return @() }
+  try { return @((& node --import tsx $taskReader | ConvertFrom-Json)) } catch { return @() }
 }
 
 $baseline = @(Read-Tasks | ForEach-Object { $_.id })

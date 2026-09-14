@@ -570,7 +570,7 @@ td strong { color:var(--ink); font-weight:600; }
 .product-folder-card { display:flex; flex-direction:column; padding:0; border:1px solid var(--line); background:#fff; text-align:left; cursor:pointer; transition:border-color .2s, box-shadow .2s; }
 .product-folder-card:hover { border-color:#aacdc3; box-shadow:0 4px 14px rgba(15,23,42,.08); }
 .product-folder-card-cover { width:100%; aspect-ratio:3 / 4; display:grid; place-items:center; overflow:hidden; background:#f4f1e9; color:#9a9488; }
-.product-folder-card-cover img { width:100%; height:100%; object-fit:cover; display:block; }
+.product-folder-card-cover img { width:100%; height:100%; object-fit:contain; display:block; }
 .product-folder-card-meta { display:grid; gap:2px; padding:9px 12px; }
 .product-folder-card-meta small { color:var(--muted); }
 .product-folder-modal { width:min(80vw, 1200px); height:min(80vh, 900px); max-width:calc(100vw - 32px); max-height:calc(100vh - 32px); overflow:auto; }

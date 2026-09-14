@@ -3,7 +3,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUploadedAsset, listAssets } from './assetStore';
 import { cacheImageTaskOutputsBeforeCompletion, recoverPendingImageTaskOutputCache, repairSavedImageTaskInventory, saveImageTaskOutputsToAssets } from './imageInventory';
 import { storeImageOutput } from '@/lib/providers/outputStore';
-import { createProviderTask, getProviderTask } from '@/lib/providers/taskStore';
+import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
 const root = `D:\\all_projects\\workspace\\data\\image-inventory-test-${process.pid}`;
@@ -33,6 +33,16 @@ function task(overrides: Partial<ProviderTask> = {}): ProviderTask {
 }
 
 describe('image task inventory persistence', () => {
+  it('does not overwrite cancellation while an output download is in flight', async () => {
+    const pending = createProviderTask({ accountId, mode: 'image', provider: 'mgrouter-grok-image', status: 'processing', outputUrls: ['https://cdn.example.test/cancel.png'] });
+    const fetcher = vi.fn(async () => {
+      updateProviderTask(pending.id, { status: 'cancelled', metadata: { operatorCancelled: true } });
+      return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]), { headers: { 'content-type': 'image/png' } });
+    });
+    await recoverPendingImageTaskOutputCache(pending.id, { fetcher, lookup: publicLookup });
+    expect(getProviderTask(pending.id)).toMatchObject({ status: 'cancelled', metadata: { operatorCancelled: true } });
+  });
+
   it('caches mixed Base64 and URL outputs in distinct local slots', async () => {
     const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
     const fetcher = vi.fn().mockResolvedValue(new Response(pngBytes, { status: 200, headers: { 'content-type': 'image/png' } }));

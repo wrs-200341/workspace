@@ -2,6 +2,7 @@ node_modules/
 .next/
 .next-verify/
 .next-previous/
+.next-backup-*/
 *.log
 *.pid
 tsconfig.tsbuildinfo

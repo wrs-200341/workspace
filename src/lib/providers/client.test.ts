@@ -642,6 +642,18 @@ describe('provider client helpers', () => {
     expect(result).toMatchObject({ mode: 'live', provider: 'grok-video' });
   });
 
+  it('does not fail over an ambiguous timeout or accepted task in durable mode', async () => {
+    const env = { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_GROK_VIDEO_API_KEY: 'test-yuan', MGROUTER_API_KEY: 'test-mg' };
+    const input = { provider: 'yuanai-grok-video' as const, model: 'grok-imagine-video-1.5-preview', prompt: 'demo', duration: 6, aspectRatio: '9:16', resolution: '720p' };
+    const timeout = vi.fn(async () => { throw new Error('provider_504'); });
+    await expect(submitVideoWithFallback(input, { env, fetch: timeout as typeof fetch, preventAmbiguousResubmission: true })).rejects.toThrow();
+    expect(timeout).toHaveBeenCalledTimes(1);
+    const accepted = vi.fn(async () => Response.json({ id: 'preserve-upstream-id', status: 'failed', error: 'provider_upstream_failed' }));
+    const result = await submitVideoWithFallback(input, { env, fetch: accepted as typeof fetch, preventAmbiguousResubmission: true });
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(normalizeProviderResponse(result.provider, result.response).providerTaskId).toBe('preserve-upstream-id');
+  });
+
   it('rejects unsupported sd-mini reference media', async () => {
     await expect(submitVideo({
       provider: 'grok-video', model: 'sd-mini', prompt: 'demo', duration: 5,

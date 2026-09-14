@@ -2,66 +2,25 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { deleteProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
-import { isProviderLiveEnabled } from '@/lib/providers/config';
 import { getServerWorkspaceTasks } from '@/lib/workspace/serverTasks';
 import { applyTaskAction, type TaskAction } from '@/lib/workspace/taskActions';
 import { productionRestoreConfig } from '@/lib/workspace/productionRestore';
 import { listVideoTaskInventoryAssets, recoverPendingVideoTaskOutputCache, saveVideoTaskOutputsToAssets } from '@/lib/workspace/videoInventory';
 import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
-import { forgetProviderTask, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask, retryProviderTaskOnFailure } from '@/lib/providers/concurrency';
-import { ensureProviderTaskRecoveryWorker, ownerIdForProviderTask, syncVideoProviderTask } from '@/lib/providers/providerTaskRecovery';
-
-const DETAIL_SYNC_THROTTLE_MS = 10_000;
-const detailSyncInFlight = new Map<string, Promise<void>>();
-const detailSyncLastStartedAt = new Map<string, number>();
+import { forgetProviderTask, hasConfirmedProviderFailure, pumpProviderTasks, removeQueuedProviderTask, requeueProviderTask } from '@/lib/providers/concurrency';
 
 export async function GET(_request: NextRequest, { params }: { params: Promise<{ id: string; taskId: string }> }) {
   const auth = await requireApiRole(['admin', 'workspace', 'operator']);
   if (auth instanceof Response) return auth;
   const { id, taskId } = await params;
   if (!canAccessWorkspaceAccount(auth, id)) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
-  ensureProviderTaskRecoveryWorker({
-    onTaskFinalized: (task) => pumpProviderTasks(ownerIdForProviderTask(task), 'video'),
-  });
   const persisted = getProviderTask(taskId);
   if (persisted && persisted.accountId === id && persisted.mode === 'video') {
-    if ((persisted.status === 'processing' && persisted.metadata?.localOutputReady !== true)
-      || (persisted.status === 'failed' && persisted.error === 'video_output_cache_failed')) {
-      void recoverPendingVideoTaskOutputCache(taskId).catch(() => null);
-    }
-    const legacyGenericError = persisted.error === 'provider request failed' || persisted.error === 'provider_request_failed';
-    if (persisted.providerTaskId && isProviderLiveEnabled(persisted.provider) && (
-      ['submitting', 'queued', 'submitted', 'processing', 'running'].includes(persisted.status) ||
-      (persisted.status === 'failed' && legacyGenericError)
-    )) {
-      void queueDetailProviderSync(taskId, persisted);
-    }
     return NextResponse.json({ success: true, data: { ...persisted, restoreConfig: productionRestoreConfig(persisted), reviewUrl: `/workspace/accounts/${id}/production/video-tasks/${taskId}` } });
   }
   const task = getServerWorkspaceTasks({ accountId: id, mode: 'video' }).find((item) => item.id === taskId);
   if (!task) return NextResponse.json({ success: false, error: 'task_not_found' }, { status: 404 });
   return NextResponse.json({ success: true, data: { ...task, reviewUrl: `/workspace/accounts/${id}/production/video-tasks/${taskId}` } });
-}
-
-function queueDetailProviderSync(taskId: string, task: NonNullable<ReturnType<typeof getProviderTask>>): Promise<void> {
-  const key = `${task.provider}:${task.providerTaskId}`;
-  const existing = detailSyncInFlight.get(key);
-  if (existing) return existing;
-  const now = Date.now();
-  if (now - (detailSyncLastStartedAt.get(key) ?? 0) < DETAIL_SYNC_THROTTLE_MS) return Promise.resolve();
-  detailSyncLastStartedAt.set(key, now);
-  const run = (async () => {
-    try {
-      const updated = await syncVideoProviderTask(task, { source: 'detail-sync' });
-      if (updated?.status === 'failed') retryProviderTaskOnFailure(taskId);
-      if (updated && ['completed', 'failed', 'cancelled'].includes(updated.status)) pumpProviderTasks(ownerIdForProviderTask(updated), 'video');
-    } catch (error) {
-      // syncVideoProviderTask keeps transient status-poll failures non-terminal;
-      // this catch is only a final guard so detail pages never fail to render.
-    }
-  })();
-  detailSyncInFlight.set(key, run);
-  return run.finally(() => { detailSyncInFlight.delete(key); });
 }
 
 export async function POST(request: NextRequest, { params }: { params: Promise<{ id: string; taskId: string }> }) {
@@ -76,12 +35,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (persisted && persisted.accountId === id && persisted.mode === 'video') {
     if (action === 'recover-provider') {
       if (!persisted.providerTaskId || persisted.error !== 'provider_task_stale') return NextResponse.json({ success: false, error: 'provider_recovery_unsupported' }, { status: 409 });
-      const updated = await syncVideoProviderTask(persisted, { force: true, recoverStaleFailed: true, source: 'manual-stale-recovery' });
-      if (updated && ['completed', 'failed', 'cancelled'].includes(updated.status)) pumpProviderTasks(ownerIdForProviderTask(updated), 'video');
-      return NextResponse.json({ success: true, data: updated ?? persisted });
+      const updated = updateProviderTask(taskId, { metadata: { ...(persisted.metadata ?? {}), providerStaleRecoverCheckedAt: undefined, recoveryRequestedAt: new Date().toISOString() } });
+      return NextResponse.json({ success: true, data: updated ?? persisted }, { status: 202 });
+    }
+    if ((action === 'retry' || action === 'resume') && !hasConfirmedProviderFailure(persisted) && (persisted.providerTaskId || persisted.metadata?.providerAcceptedAt || persisted.metadata?.providerSubmissionUncertain === true)) return NextResponse.json({ success: false, error: 'provider_task_requires_status_recovery' }, { status: 409 });
+    if (action === 'retry' || action === 'resume') {
+      const accepted = requeueProviderTask(taskId);
+      return NextResponse.json({ success: accepted, data: getProviderTask(taskId), ...(accepted ? {} : { error: 'task_not_retryable' }) }, { status: accepted ? 202 : 409 });
     }
     if (action === 'cancel' || action === 'pause') removeQueuedProviderTask(taskId);
-    if (action === 'resume' && persisted.providerTaskId) return NextResponse.json({ success: false, error: 'provider_resume_unsupported' }, { status: 409 });
     if (action === 'save-inventory' && persisted.status === 'completed') {
       try {
         const created = await saveVideoTaskOutputsToAssets(id, persisted);
@@ -96,7 +58,6 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     }
     const next = applyTaskAction({ ...persisted, pid: 'pending', title: persisted.prompt || 'video generation', owner: 'operator-unassigned', mode: 'video', model: persisted.model || persisted.provider }, action as TaskAction);
     const updated = updateProviderTask(taskId, { status: next.status, progress: next.progress, error: next.error, providerResponse: undefined, inventorySavedAt: next.inventorySavedAt, providerTaskId: next.providerTaskId, outputUrls: next.outputUrls, outputBase64: next.outputBase64 });
-    if ((action === 'retry' || action === 'resume') && updated?.status === 'queued') requeueProviderTask(taskId);
     if (action === 'cancel' || action === 'pause') pumpProviderTasks(typeof persisted.metadata?.ownerId === 'string' ? persisted.metadata.ownerId : persisted.accountId, 'video');
     return NextResponse.json({ success: true, data: updated });
   }

@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
   if (process.env.EARNINGS_TREND_TOKEN) headers.authorization = `Bearer ${process.env.EARNINGS_TREND_TOKEN}`;
 
   try {
-    const response = await fetch(`${upstream}?from=${start}&to=${end}`, { headers, signal: AbortSignal.timeout(3500), cache: 'no-store' });
+    const response = await fetch(`${upstream}?from=${start}&to=${end}`, { headers, signal: AbortSignal.timeout(Number(process.env.EARNINGS_API_TIMEOUT_MS || 500)), cache: 'no-store' });
     if (!response.ok) throw new Error(`upstream_${response.status}`);
     const payload: unknown = await response.json();
     const raw = payload && typeof payload === 'object' && 'data' in payload ? (payload as { data?: unknown }).data : payload;

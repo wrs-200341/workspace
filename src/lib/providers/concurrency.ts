@@ -25,7 +25,8 @@ export type SchedulerJob = {
   ownerId: string;
   mode: ProductionMode;
   model: string;
-  run: () => Promise<void>;
+  /** Only isolated scheduler tests supply callbacks. Production executes persisted task IDs. */
+  run?: () => Promise<void>;
 };
 
 type Scope = { ownerId: string; mode: ProductionMode };
@@ -110,6 +111,11 @@ export function isPersistedActiveTask(task: Pick<ProviderTask, 'status' | 'metad
   // `queued` is ambiguous: it is either waiting locally or waiting at the
   // provider after a successful submission. Only the latter consumes a slot.
   return task.status === 'queued' && (schedulerState(task) === PROVIDER_ACTIVE_STATE || Boolean(task.providerTaskId));
+}
+
+/** A new paid attempt is allowed only after an explicit terminal supplier failure. */
+export function hasConfirmedProviderFailure(task: Pick<ProviderTask, 'status' | 'metadata'>): boolean {
+  return task.status === 'failed' && task.metadata?.lastProviderStatus === 'failed' && task.metadata?.providerSubmissionUncertain !== true;
 }
 
 function scopeKey(scope: Scope): string {
@@ -256,6 +262,10 @@ function maxRetries(task: ProviderTask): number {
  * retry counter changes. This makes retries visible as one logical task.
  */
 function scheduleRetry(job: SchedulerJob, task: ProviderTask): boolean {
+  // Only an explicit terminal supplier failure can release an accepted ID
+  // for retry. A failed status poll must never become another paid request.
+  const confirmedFailure = hasConfirmedProviderFailure(task);
+  if (task.metadata?.providerSubmissionUncertain === true || ((task.providerTaskId || task.metadata?.providerAcceptedAt) && !confirmedFailure)) return false;
   const attempts = retryCount(task);
   const limit = maxRetries(task);
   if (attempts >= limit) return false;
@@ -270,6 +280,7 @@ function scheduleRetry(job: SchedulerJob, task: ProviderTask): boolean {
     // handle and outputs so the stale request cannot be counted as an active
     // slot (or accidentally polled) while the replacement is waiting.
     providerTaskId: undefined,
+    providerResponse: undefined,
     outputUrls: [],
     outputBase64: [],
     metadata: {
@@ -279,9 +290,17 @@ function scheduleRetry(job: SchedulerJob, task: ProviderTask): boolean {
       lastRetryAt: new Date().toISOString(),
       schedulerState: WAITING_STATE,
       retrying: true,
+      schedulerRetryNotBefore: new Date(Date.now() + RETRY_BACKOFF_MS * Math.max(1, nextRetry)).toISOString(),
+      providerSubmissionStartedAt: undefined,
+      providerAcceptedAt: undefined,
+      providerTaskAcceptedAt: undefined,
+      lastProviderStatus: undefined,
+      lastProviderFailure: confirmedFailure ? task.provider : task.metadata?.lastProviderFailure,
+      ...(confirmedFailure ? { providerAttemptHistory: [...(Array.isArray(task.metadata?.providerAttemptHistory) ? task.metadata.providerAttemptHistory : []), { provider: task.provider, model: task.model, providerTaskId: task.providerTaskId, status: 'failed', finishedAt: new Date().toISOString(), error: task.error, providerResponse: task.providerResponse }] } : {}),
     },
   });
   if (!updated) return false;
+  if (process.env.NODE_ENV !== 'test' || !job.run) return true;
   // Defer re-enqueueing very briefly to avoid a tight failure loop and to let
   // the queue poller render the explicit “retrying” state first.
   setTimeout(() => {
@@ -322,7 +341,7 @@ async function pumpScope(scope: Scope): Promise<void> {
         markDispatching(job);
         void (async () => {
           try {
-            await job.run();
+            await job.run?.();
           } catch (error) {
             const current = getProviderTask(job.taskId);
             if (current && !['completed', 'cancelled', 'failed'].includes(current.status)) {
@@ -364,6 +383,18 @@ async function pumpScope(scope: Scope): Promise<void> {
 /** Enqueue a live image/video submission and start it when its limits allow. */
 export function enqueueProviderTask(job: SchedulerJob): boolean {
   const normalized: SchedulerJob = { ...job, ownerId: job.ownerId.trim() || 'unassigned', model: job.model.trim() || 'unknown' };
+  if (getProviderTask(job.taskId)?.providerTaskId) return false;
+  if (process.env.NODE_ENV !== 'test' || !job.run) {
+    const current = getProviderTask(job.taskId);
+    if (!current || current.providerTaskId || !['queued', 'prompting', 'retrying'].includes(current.status)) return false;
+    const metadata = current.metadata ?? {};
+    if (metadata.schedulerState !== WAITING_STATE || metadata.schedulerOwnerId !== normalized.ownerId || metadata.schedulerModel !== normalized.model) {
+      updateProviderTask(job.taskId, { metadata: { ...metadata, schedulerState: WAITING_STATE, schedulerOwnerId: normalized.ownerId, schedulerMode: normalized.mode, schedulerModel: normalized.model } });
+    }
+    // SQLite is the queue. No reference bytes, promises, timers or callbacks
+    // are retained by the web server after acknowledgement.
+    return true;
+  }
   while (registeredJobs.size >= MAX_REGISTERED_JOBS) {
     const oldest = registeredJobs.keys().next().value;
     if (!oldest) break;
@@ -409,6 +440,14 @@ export function enqueueProviderTask(job: SchedulerJob): boolean {
 
 /** Requeue a task after a local retry/resume action while the server process is alive. */
 export function requeueProviderTask(taskId: string): boolean {
+  if (process.env.NODE_ENV !== 'test' || !registeredJobs.has(taskId)) {
+    const current = getProviderTask(taskId);
+    if (!current || (current.mode !== 'image' && current.mode !== 'video')) return false;
+    const confirmedFailure = hasConfirmedProviderFailure(current);
+    if (current.metadata?.providerSubmissionUncertain === true || ((current.providerTaskId || current.metadata?.providerAcceptedAt) && !confirmedFailure)) return false;
+    if (!['failed', 'cancelled', 'queued', 'paused'].includes(current.status)) return false;
+    return Boolean(updateProviderTask(taskId, { status: current.metadata?.promptGenerationPending === true ? 'prompting' : 'queued', progress: 0, error: undefined, ...(confirmedFailure ? { providerTaskId: undefined, outputUrls: [], outputBase64: [] } : {}), metadata: { ...(current.metadata ?? {}), schedulerState: WAITING_STATE, schedulerRetryCount: 0, schedulerRetryExhausted: false, retrying: false, schedulerRetryNotBefore: undefined, providerSubmissionStartedAt: undefined, providerAcceptedAt: undefined, providerTaskAcceptedAt: undefined, lastProviderStatus: undefined, ...(confirmedFailure ? { lastProviderFailure: current.provider, providerAttemptHistory: [...(Array.isArray(current.metadata?.providerAttemptHistory) ? current.metadata.providerAttemptHistory : []), { provider: current.provider, model: current.model, providerTaskId: current.providerTaskId, status: 'failed', finishedAt: new Date().toISOString(), error: current.error, providerResponse: current.providerResponse }] } : {}), maxRetries: DEFAULT_MAX_RETRIES } }));
+  }
   const job = registeredJobs.get(taskId);
   if (!job || pendingJobs.some((candidate) => candidate.taskId === taskId)) return Boolean(job);
   const current = getProviderTask(taskId);
@@ -442,8 +481,8 @@ export function requeueProviderTask(taskId: string): boolean {
  * scheduler job itself is not the code that observed the failed response.
  */
 export function retryProviderTaskOnFailure(taskId: string): boolean {
-  const job = registeredJobs.get(taskId);
   const current = getProviderTask(taskId);
+  const job = registeredJobs.get(taskId) ?? (current && (current.mode === 'image' || current.mode === 'video') ? { taskId, ownerId: taskOwnerId(current), mode: current.mode, model: taskModelId(current) } : undefined);
   if (!job || !current || current.status !== 'failed') return false;
   return scheduleRetry(job, current);
 }
@@ -455,6 +494,7 @@ export function forgetProviderTask(taskId: string): void {
 
 /** Trigger queued jobs after a poll/cancel/completion releases a slot. */
 export function pumpProviderTasks(ownerId: string, mode: ProductionMode): void {
+  if (process.env.NODE_ENV !== 'test') return;
   void pumpScope({ ownerId: ownerId.trim() || 'unassigned', mode });
 }
 
@@ -466,6 +506,9 @@ export function pumpProviderTasks(ownerId: string, mode: ProductionMode): void {
  */
 export function recoverOrphanedSchedulerTasks(now = Date.now(), options: { force?: boolean } = {}): ProviderTask[] {
   const recovered: ProviderTask[] = [];
+  // Restart recovery is owned by the independently leased worker. Browser
+  // requests must never mutate tasks because a different web process restarted.
+  if (process.env.NODE_ENV !== 'test') return recovered;
   if (process.env.NODE_ENV === 'test' && !options.force) return recovered;
   recovered.push(...expireStaleProviderActiveTasks(now, { pump: false }));
   const affected = new Map<string, Scope>();

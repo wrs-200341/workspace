@@ -11,7 +11,7 @@
  * a clip that starts at 23:55 and finishes after midnight belongs to the day it
  * actually completed.
  */
-import { listProviderTasks, type ProviderTask } from '@/lib/providers/taskStore';
+import { listProviderTaskSummaries, type ProviderTaskSummary } from '@/lib/providers/taskStore';
 
 /**
  * Model ids that are capped, keyed by the environment variable holding the
@@ -48,7 +48,7 @@ export function dailyLimitForModel(model: string, env: Readonly<Record<string, s
 }
 
 /** A task counts against quota only once it has actually produced a video. */
-function isSuccessfulOn(task: ProviderTask, model: string, ownerId: string, dateKey: string): boolean {
+function isSuccessfulOn(task: ProviderTaskSummary, model: string, ownerId: string, dateKey: string): boolean {
   if (task.mode !== 'video' || task.status !== 'completed') return false;
   if ((task.metadata?.modelId ?? task.model ?? '') !== model && task.model !== model) return false;
   const taskOwner = typeof task.metadata?.ownerId === 'string' && task.metadata.ownerId ? task.metadata.ownerId : task.accountId;
@@ -63,7 +63,7 @@ export function getDailyQuotaUsage(ownerId: string, model: string, now: Date | n
   const limit = dailyLimitForModel(model, env);
   if (limit === undefined) return null;
   const dateKey = shanghaiDateKey(now);
-  const used = listProviderTasks({ mode: 'video', status: 'completed' })
+  const used = listProviderTaskSummaries({ mode: 'video', status: 'completed' })
     .filter((task) => isSuccessfulOn(task, model, ownerId, dateKey))
     .length;
   return { model, limit, used, remaining: Math.max(0, limit - used), date: dateKey };

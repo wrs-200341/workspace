@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { getWorkspacePath } from '../storagePaths';
+import { productImageFileVersion, productImageThumbnailUrl } from './productImageThumbnails';
 import { publishFileReference, publishFileReferences, type PublishedAssetReference } from './referenceBridge';
 
 /** Product/PID records imported from the 8765 gallery service. */
@@ -22,6 +23,8 @@ export type ProductImageAsset = {
   relativePath: string;
   mimeType: string;
   size: number;
+  version?: string;
+  thumbnailUrl?: string;
 };
 
 export type ProductImageFolder = ProductImageRecord & {
@@ -51,7 +54,15 @@ const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.av
 
 let sourceToken: string | null = null;
 let sourceTokenBase = '';
-let directoryCache: { root: string; mtimeMs: number; accounts: string[]; records: ProductImageRecord[]; assets: ProductImageAsset[]; folders: ProductImageFolder[] } | null = null;
+type ProductImageDirectoryCache = {
+  root: string;
+  mtimeMs: number;
+  records: ProductImageRecord[];
+  assetSources: Map<string, { record: ProductImageRecord; file: string }>;
+  assets: Map<string, ProductImageAsset>;
+  folders: Map<string, ProductImageFolder[]>;
+};
+let directoryCache: ProductImageDirectoryCache | null = null;
 
 function sourceTimeoutMs(): number {
   const configured = Number(process.env.WORKSPACE_8765_TIMEOUT_MS || 30_000);
@@ -284,6 +295,8 @@ export async function importProductImages(
   if (bytes.length <= 0 || bytes.length > MAX_ARCHIVE_BYTES) throw new Error('product_archive_too_large');
   const date = dateInShanghai(importedAt);
   const imported: ProductImageRecord[] = [];
+  // Partial imports also change the index, including when extraction later fails.
+  directoryCache = null;
   for (const pid of pids) {
     const destination = getWorkspacePath('product-images', accountId, date, pid);
     fs.mkdirSync(destination, { recursive: true });
@@ -379,41 +392,55 @@ function findSignature(buffer: Buffer, signature: number): number {
   return -1;
 }
 
+function productImageAssetId(record: ProductImageRecord, file: string): string {
+  return `product-image:${record.accountId}:${record.importDate}:${record.pid}:${file.replace(/\\/g, '/')}`;
+}
+
 function buildProductImageAssets(record: ProductImageRecord): ProductImageAsset[] {
-  return record.files.map((file) => {
-    const relativePath = path.posix.join(record.relativePath.replace(/\\/g, '/'), file.replace(/\\/g, '/'));
-    const absolutePath = path.resolve(getWorkspacePath(relativePath));
-    let size = 0;
-    try { size = fs.statSync(absolutePath).size; } catch { /* stale files are omitted below */ }
-    if (!size) return null;
-    return {
-      id: `product-image:${record.accountId}:${record.importDate}:${record.pid}:${file.replace(/\\/g, '/')}`,
-      pid: record.pid,
-      importDate: record.importDate,
-      name: `${record.pid} · ${path.basename(file)}`,
-      relativePath,
-      mimeType: mimeTypeForPath(file),
-      size,
-    } satisfies ProductImageAsset;
-  }).filter((item): item is ProductImageAsset => Boolean(item));
+  return record.files.map((file) => buildProductImageAsset(record, file)).filter((item): item is ProductImageAsset => Boolean(item));
+}
+
+function buildProductImageAsset(record: ProductImageRecord, file: string): ProductImageAsset | null {
+  const id = productImageAssetId(record, file);
+  const cached = directoryCache?.assets.get(id);
+  if (cached) return cached;
+  const relativePath = path.posix.join(record.relativePath.replace(/\\/g, '/'), file.replace(/\\/g, '/'));
+  const absolutePath = path.resolve(getWorkspacePath(relativePath));
+  let stat: fs.Stats;
+  try { stat = fs.statSync(absolutePath); } catch { return null; }
+  if (!stat.isFile() || !stat.size) return null;
+  const version = productImageFileVersion(stat);
+  const asset: ProductImageAsset = {
+    id,
+    pid: record.pid,
+    importDate: record.importDate,
+    name: `${record.pid} · ${path.basename(file)}`,
+    relativePath,
+    mimeType: mimeTypeForPath(file),
+    size: stat.size,
+    version,
+    thumbnailUrl: productImageThumbnailUrl(id, version),
+  };
+  directoryCache?.assets.set(id, asset);
+  return asset;
 }
 
 function buildProductImageFolder(record: ProductImageRecord, includeImages: boolean): ProductImageFolder {
   const images = includeImages ? buildProductImageAssets(record) : [];
-  const cover = images[0];
+  const cover = images[0] ?? (record.files[0] ? buildProductImageAsset(record, record.files[0]) : null);
   const fallbackCoverFile = record.files[0];
   const fallbackCoverAssetId = fallbackCoverFile
     ? `product-image:${record.accountId}:${record.importDate}:${record.pid}:${fallbackCoverFile.replace(/\\/g, '/')}`
     : undefined;
-  const fallbackCoverUrl = fallbackCoverAssetId ? `/api/workspace/product-images/preview?assetId=${encodeURIComponent(fallbackCoverAssetId)}` : undefined;
+  const fallbackCoverUrl = fallbackCoverAssetId ? productImageThumbnailUrl(fallbackCoverAssetId) : undefined;
   return {
     ...record,
     files: [...record.files],
     imageCount: record.files.length,
     ...(cover ? {
       coverAssetId: cover.id,
-      coverUrl: `/api/workspace/product-images/preview?assetId=${encodeURIComponent(cover.id)}`,
-      images,
+      coverUrl: cover.thumbnailUrl,
+      ...(includeImages ? { images } : {}),
     } : {
       ...(fallbackCoverAssetId ? { coverAssetId: fallbackCoverAssetId } : {}),
       ...(fallbackCoverUrl ? { coverUrl: fallbackCoverUrl } : {}),
@@ -422,13 +449,11 @@ function buildProductImageFolder(record: ProductImageRecord, includeImages: bool
   };
 }
 
-export function listProductImages(accountIdInput?: string): ProductImageRecord[] {
+function getProductImageDirectoryCache(): ProductImageDirectoryCache {
   const root = productImagesRoot();
   const cached = directoryCache;
   const rootStat = rootMtimeMs(root);
-  if (cached && cached.root === root && cached.mtimeMs === rootStat && (!accountIdInput || cached.accounts.includes(accountIdInput))) {
-    return cached.records.filter((record) => !accountIdInput || record.accountId === accountIdInput).map(clone);
-  }
+  if (cached && cached.root === root && cached.mtimeMs === rootStat) return cached;
   const records: ProductImageRecord[] = [];
   const accounts = readDirectories(root);
   for (const accountId of accounts) {
@@ -447,47 +472,35 @@ export function listProductImages(accountIdInput?: string): ProductImageRecord[]
   directoryCache = {
     root,
     mtimeMs: rootStat,
-    accounts,
-    records: records.map(clone),
-    assets: [],
-    folders: [],
+    records,
+    assetSources: new Map(records.flatMap((record) => record.files.map((file) => [productImageAssetId(record, file), { record, file }] as const))),
+    assets: new Map(),
+    folders: new Map(),
   };
-  return records.map(clone);
+  return directoryCache;
+}
+
+export function listProductImages(accountIdInput?: string): ProductImageRecord[] {
+  return getProductImageDirectoryCache().records.filter((record) => !accountIdInput || record.accountId === accountIdInput).map(clone);
 }
 
 /** Lists individual shared product-image files across every operator account. */
 export function listProductImageAssets(accountIdInput?: string): ProductImageAsset[] {
-  const root = productImagesRoot();
-  const cached = directoryCache;
-  const rootStat = rootMtimeMs(root);
-  if (cached && cached.root === root && cached.mtimeMs === rootStat && cached.assets.length > 0 && (!accountIdInput || cached.accounts.includes(accountIdInput))) {
-    return cached.assets.filter((asset) => !accountIdInput || asset.id.split(':')[1] === accountIdInput).map(clone);
-  }
-  const assets = listProductImages(accountIdInput).flatMap((record) => buildProductImageAssets(record));
-  if (directoryCache && directoryCache.root === root && directoryCache.mtimeMs === rootStat) directoryCache.assets = assets.map(clone);
-  return assets;
+  return getProductImageDirectoryCache().records.filter((record) => !accountIdInput || record.accountId === accountIdInput)
+    .flatMap((record) => buildProductImageAssets(record)).map(clone);
 }
 
 /** Return imported PID folders. Images are loaded lazily on demand. */
 export function listProductImageFolders(accountIdInput?: string, options: { includeImages?: boolean } = {}): ProductImageFolder[] {
-  const root = productImagesRoot();
-  const cached = directoryCache;
-  const rootStat = rootMtimeMs(root);
-  if (cached && cached.root === root && cached.mtimeMs === rootStat && cached.folders.length > 0 && !options.includeImages) {
-    return cached.folders.map(clone);
-  }
+  const cache = getProductImageDirectoryCache();
+  const scope = accountIdInput ?? '';
+  const cachedFolders = cache.folders.get(scope);
+  if (cachedFolders && !options.includeImages) return cachedFolders.map(clone);
   const records = listProductImages(accountIdInput);
   const grouped = new Map<string, ProductImageRecord[]>();
   for (const record of records) grouped.set(record.pid, [...(grouped.get(record.pid) ?? []), record]);
   const folders = [...grouped.values()].map((recordGroup) => buildProductImageFolder([...recordGroup].sort((left, right) => right.importedAt.localeCompare(left.importedAt))[0], Boolean(options.includeImages))).map(clone);
-  directoryCache = {
-    root,
-    mtimeMs: rootStat,
-    accounts: directoryCache?.accounts ?? readDirectories(root),
-    records: directoryCache?.records ?? records.map(clone),
-    assets: directoryCache?.assets ?? [],
-    folders: folders.map(clone),
-  };
+  if (!options.includeImages) cache.folders.set(scope, folders.map(clone));
   return folders;
 }
 
@@ -495,7 +508,7 @@ export function readProductImageFolder(accountIdInput: string | undefined, pidIn
   const pid = safeSegment(pidInput, 'product_pid_invalid');
   const record = listProductImages(accountIdInput).filter((item) => item.pid === pid).sort((left, right) => right.importedAt.localeCompare(left.importedAt))[0];
   if (!record) return null;
-  return buildProductImageFolder(record, true);
+  return clone(buildProductImageFolder(record, true));
 }
 export function getProductImageAbsolutePath(assetId: string): string {
   const asset = readProductImageAsset(assetId);
@@ -520,7 +533,7 @@ function mimeTypeForPath(file: string): string {
 
 /** Publishes a shared product image through the same short-lived reference bridge as account assets. */
 export function publishProductImageReference(assetId: string, accountId: string): PublishedAssetReference {
-  const asset = listProductImageAssets().find((candidate) => candidate.id === assetId);
+  const asset = readProductImageAsset(assetId);
   if (!asset) throw new Error('reference_asset_not_found');
   // Shared gallery assets are available to every workspace account.
   return publishFileReference({ accountId, assetId, relativePath: asset.relativePath, mimeType: asset.mimeType });
@@ -529,9 +542,8 @@ export function publishProductImageReference(assetId: string, accountId: string)
 /** Batch variant used by production submissions to avoid one registry rewrite per image. */
 export function publishProductImageReferences(assetIds: readonly string[], accountId: string): PublishedAssetReference[] {
   if (!assetIds.length) return [];
-  const assets = listProductImageAssets();
   const inputs = assetIds.map((assetId) => {
-    const asset = assets.find((candidate) => candidate.id === assetId);
+    const asset = readProductImageAsset(assetId);
     if (!asset) throw new Error('reference_asset_not_found');
     return { accountId, assetId, relativePath: asset.relativePath, mimeType: asset.mimeType };
   });
@@ -539,7 +551,11 @@ export function publishProductImageReferences(assetIds: readonly string[], accou
 }
 
 export function readProductImageAsset(assetId: string): ProductImageAsset | null {
-  return listProductImageAssets().find((candidate) => candidate.id === assetId) ?? null;
+  const cache = getProductImageDirectoryCache();
+  const source = cache.assetSources.get(assetId);
+  if (!source) return null;
+  const asset = buildProductImageAsset(source.record, source.file);
+  return asset ? clone(asset) : null;
 }
 
 function readDirectories(directory: string): string[] { try { return fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((left, right) => left.localeCompare(right, undefined, { numeric: true })); } catch { return []; } }

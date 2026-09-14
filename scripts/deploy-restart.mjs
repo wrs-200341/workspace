@@ -1,23 +1,25 @@
 /**
- * Build then hot-swap the running production server with minimal downtime.
+ * Build, swap .next, and restart production through start-production.mjs.
  *
- * `safe-next-build.mjs` keeps its output in `.next-verify` whenever port 3000
- * is live, so a build alone never reaches the operators. This script performs
- * the remaining half: verify the fresh build, swap it into `.next`, restart
- * `next start`, and wait until the server answers again. Downtime is the
- * restart window only (a few seconds), and a failed build leaves the currently
- * running version untouched.
+ * After the task store is migrated to SQLite, deployment must never bypass the
+ * provider worker supervisor or silently roll back to an older JSON-task build.
  */
-import { existsSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, openSync, closeSync, renameSync, rmSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { spawn, spawnSync } from 'node:child_process';
+import { DatabaseSync } from 'node:sqlite';
 import net from 'node:net';
 import { fileURLToPath } from 'node:url';
+import nextEnv from '@next/env';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const { loadEnvConfig } = nextEnv;
+loadEnvConfig(root);
 const PORT = 3000;
 const HOST = '127.0.0.1';
 const LOG_FILE = join(root, 'server.log');
+const dataRoot = resolve(process.env.WORKSPACE_DATA_ROOT || join(root, 'data'));
+const databaseFile = join(dataRoot, 'providers', 'tasks.sqlite');
 
 function probe(port = PORT, host = HOST, timeout = 1500) {
   return new Promise((done) => {
@@ -51,16 +53,53 @@ function run(command, args, { capture = false } = {}) {
   return result;
 }
 
-/** PIDs owning the port, so we never guess which node process to stop. */
-function listenerPids(port = PORT) {
+function sqliteMigrated() {
+  if (!existsSync(databaseFile)) return false;
+  const db = new DatabaseSync(databaseFile, { readOnly: true });
+  try {
+    return Boolean(db.prepare("SELECT value FROM task_store_meta WHERE key='imported'").get());
+  } finally {
+    db.close();
+  }
+}
+
+function listenerProcesses(port = PORT) {
   const result = run('powershell', [
-    '-NoProfile', '-Command',
-    `Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess`,
+    '-NoProfile',
+    '-ExecutionPolicy', 'Bypass',
+    '-Command',
+    `$items=Get-NetTCPConnection -LocalPort ${port} -State Listen -ErrorAction SilentlyContinue; $items | ForEach-Object { $p=Get-CimInstance Win32_Process -Filter "ProcessId = $($_.OwningProcess)"; [pscustomobject]@{pid=$_.OwningProcess; commandLine=$p.CommandLine} } | ConvertTo-Json -Compress`,
   ], { capture: true });
-  return [...new Set((result.stdout || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
+  const text = (result.stdout || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    const rows = Array.isArray(parsed) ? parsed : [parsed];
+    return rows.map((row) => ({ pid: Number(row.pid), commandLine: typeof row.commandLine === 'string' ? row.commandLine : '' }))
+      .filter((row) => Number.isInteger(row.pid) && row.pid > 0);
+  } catch {
+    return [];
+  }
+}
+
+function isLegacyDirectNext(commandLine) {
+  const command = commandLine.toLowerCase();
+  return command.includes('next') && command.includes(' start') && !command.includes('start-production.mjs');
 }
 
 const step = (message) => console.log(`\n[deploy] ${message}`);
+
+const migrated = sqliteMigrated();
+const listenersBeforeBuild = listenerProcesses();
+if (!migrated) {
+  const legacy = listenersBeforeBuild.find((item) => isLegacyDirectNext(item.commandLine));
+  if (legacy) {
+    console.error(`[deploy] refusing to stop legacy JSON Next PID ${legacy.pid} before SQLite migration/drain has completed.`);
+    process.exit(1);
+  }
+  console.error('[deploy] task SQLite database is not migrated; run npm run tasks:migrate before production deploy.');
+  process.exit(1);
+}
 
 step('building (isolated while the live server keeps serving)…');
 const build = run(process.execPath, [join(root, 'scripts', 'safe-next-build.mjs')]);
@@ -79,10 +118,17 @@ if (builtIsolated && !existsSync(join(verifyDir, 'BUILD_ID'))) {
   process.exit(1);
 }
 
-const pids = listenerPids();
+step('gracefully restarting provider worker while web keeps serving…');
+const workerRestart = run(process.execPath, [join(root, 'scripts', 'start-production.mjs'), '--restart-worker', '--no-web']);
+if (workerRestart.status !== 0) {
+  console.error('[deploy] provider worker restart failed; the running web server was left untouched.');
+  process.exit(1);
+}
+
+const pids = listenerProcesses().map((item) => item.pid);
 if (pids.length) {
   step(`stopping server (pid ${pids.join(', ')})…`);
-  for (const pid of pids) run('powershell', ['-NoProfile', '-Command', `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`]);
+  for (const pid of pids) run('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `Stop-Process -Id ${pid} -Force -ErrorAction SilentlyContinue`]);
   await waitFor(async () => !(await probe()), { timeoutMs: 20_000, label: 'port 3000 to free up' });
 } else {
   step('no live server found; starting fresh.');
@@ -95,29 +141,23 @@ if (builtIsolated) {
   renameSync(verifyDir, liveDir);
 }
 
-step('starting server…');
-const nextBin = join(root, 'node_modules', 'next', 'dist', 'bin', 'next');
-const child = spawn(process.execPath, [nextBin, 'start', '-H', '0.0.0.0', '-p', String(PORT)], {
+step('starting production wrapper…');
+const log = openSync(LOG_FILE, 'a');
+const child = spawn(process.execPath, [join(root, 'scripts', 'start-production.mjs')], {
   cwd: root,
   detached: true,
-  stdio: ['ignore', 'ignore', 'ignore'],
+  stdio: ['ignore', log, log],
   windowsHide: true,
   env: { ...process.env, WORKSPACE_NEXT_DIST_DIR: '' },
 });
+closeSync(log);
 child.unref();
 
 try {
   await waitFor(() => probe(), { timeoutMs: 90_000, label: 'server to accept connections' });
 } catch (error) {
   console.error(`[deploy] ${error.message}`);
-  if (builtIsolated && existsSync(backupDir)) {
-    console.error('[deploy] rolling back to the previous build…');
-    rmSync(liveDir, { recursive: true, force: true });
-    renameSync(backupDir, liveDir);
-    spawn(process.execPath, [nextBin, 'start', '-H', '0.0.0.0', '-p', String(PORT)], {
-      cwd: root, detached: true, stdio: 'ignore', windowsHide: true,
-    }).unref();
-  }
+  console.error('[deploy] not rolling back automatically because SQLite may already be accepting provider jobs. Restore manually only after verifying task-store compatibility.');
   process.exit(1);
 }
 

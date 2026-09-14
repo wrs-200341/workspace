@@ -1,10 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { CalendarDays, CheckCircle2, CircleAlert, Copy, Pause, Play, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
+import { CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, CircleAlert, Copy, Pause, Play, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { formatProviderError } from '@/lib/providers/errorMessages';
 import { canonicalTaskProgress } from '@/lib/providers/taskProgress';
+import { mergeQueueDelta, type QueueCounts, type QueueDelta, type QueueTab } from '@/lib/workspace/queueProtocol';
 
 type QueueTask = {
   id: string;
@@ -40,8 +41,20 @@ type QueueTask = {
   metadata?: Record<string, unknown>;
 };
 
-type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string; readOnly?: boolean; ownerId?: string };
-type QueueTab = 'all' | 'active' | 'completed' | 'failed';
+type Props = { accountId: string; mode: 'video' | 'image' | 'prompt'; focusTaskId?: string; queueDate?: string; readOnly?: boolean; ownerId?: string; viewerKey?: string };
+type FocusRequest = { taskId?: string; unstored?: boolean };
+type QueueSnapshot = Omit<QueueDelta<QueueTask>, 'deletedTaskIds' | 'reset'> & { key: string; scrollY: number; savedAt: number };
+type QueuePreference = { date: string; tab: QueueTab; page: number; focus: FocusRequest; savedAt: number };
+const queueMemory = new Map<string, QueueSnapshot>();
+const queuePreferences = new Map<string, QueuePreference>();
+const QUEUE_CACHE_TTL = 5 * 60_000;
+const EMPTY_COUNTS: QueueCounts = { all: 0, active: 0, completed: 0, failed: 0, unsaved: 0, safeRecoverable: 0 };
+
+function rememberQueue(key: string, snapshot: QueueSnapshot) {
+  queueMemory.delete(key);
+  queueMemory.set(key, snapshot);
+  while (queueMemory.size > 16) queueMemory.delete(queueMemory.keys().next().value!);
+}
 
 const labels: Record<string, string> = {
   retrying: '重试中',
@@ -158,10 +171,10 @@ export function promptReviewHref(accountId: string, mode: Props['mode'], taskId:
 function normalizeQueueTasks(raw: QueueTask[]): QueueTask[] {
   const normalized = raw.map((task) => {
     const metadata = task.metadata;
-    const localOutputReady = Boolean(metadata && metadata.localOutputReady === true);
+    const localOutputReady = task.localOutputReady ?? Boolean(metadata && metadata.localOutputReady === true);
     const localOutputCount = metadata && typeof metadata.localOutputCount === 'number' ? metadata.localOutputCount : undefined;
     const localOutputExpected = metadata && typeof metadata.localOutputExpected === 'number' ? metadata.localOutputExpected : undefined;
-    const localOutputPending = localOutputExpected !== undefined && localOutputCount !== undefined && localOutputCount < localOutputExpected;
+    const localOutputPending = task.localOutputPending ?? (localOutputExpected !== undefined && localOutputCount !== undefined && localOutputCount < localOutputExpected);
     const schedulerState = task.schedulerState ?? (typeof metadata?.schedulerState === 'string' ? metadata.schedulerState : undefined);
     const providerTaskId = task.providerTaskId;
     const promptGenerationPending = metadata?.promptGenerationPending === true;
@@ -182,12 +195,15 @@ function normalizeQueueTasks(raw: QueueTask[]): QueueTask[] {
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 }
 
-export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate, readOnly = false, ownerId }: Props) {
-  const focusTaskId = requestedFocusTaskId;
+export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTaskId, queueDate: requestedQueueDate, readOnly = false, ownerId, viewerKey }: Props) {
   const requestedDate = requestedQueueDate;
   const [tasks, setTasks] = useState<QueueTask[]>([]);
   const [queueDate, setQueueDate] = useState(() => requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate) ? requestedDate : today());
   const [queueTab, setQueueTab] = useState<QueueTab>('all');
+  const [page, setPage] = useState(0);
+  const [focusRequest, setFocusRequest] = useState<FocusRequest>({ taskId: requestedFocusTaskId });
+  const [loadedCounts, setCounts] = useState<QueueCounts>(EMPTY_COUNTS);
+  const [pagination, setPagination] = useState({ page: 0, totalPages: 1 });
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [loadError, setLoadError] = useState('');
@@ -199,71 +215,163 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   const focusAppliedRef = useRef<string | null>(null);
   const requestRef = useRef<AbortController | null>(null);
   const loadingRef = useRef(false);
-  const activeTasksRef = useRef(false);
+  const snapshotRef = useRef<QueueSnapshot | null>(null);
+  const scrollPositionRef = useRef(0);
+  const restoreScrollRef = useRef<number | null>(null);
+  const cacheRoot = JSON.stringify([viewerKey, accountId, ownerId, mode, readOnly]);
+  const viewKey = JSON.stringify([cacheRoot, queueDate, queueTab, page, focusRequest]);
+  const currentViewRef = useRef(viewKey);
+  currentViewRef.current = viewKey;
+  const counts = snapshotRef.current?.key === viewKey ? loadedCounts : EMPTY_COUNTS;
+
+  function saveNavigation() {
+    const snapshot = snapshotRef.current;
+    if (!viewerKey || snapshot?.key !== viewKey) return;
+    const savedAt = Date.now();
+    scrollPositionRef.current = window.scrollY;
+    rememberQueue(viewKey, { ...snapshot, scrollY: window.scrollY, savedAt });
+    queuePreferences.delete(cacheRoot);
+    queuePreferences.set(cacheRoot, { date: queueDate, tab: queueTab, page, focus: focusRequest, savedAt });
+    while (queuePreferences.size > 16) queuePreferences.delete(queuePreferences.keys().next().value!);
+  }
+
+  useEffect(() => {
+    if (!viewerKey) return;
+    const preference = queuePreferences.get(cacheRoot);
+    if (!preference || Date.now() - preference.savedAt > QUEUE_CACHE_TTL) return;
+    if (requestedDate && requestedDate !== preference.date) return;
+    setQueueDate(requestedDate || preference.date);
+    if (!requestedFocusTaskId) {
+      setQueueTab(preference.tab);
+      setPage(preference.page);
+      setFocusRequest(preference.focus);
+    }
+  }, [cacheRoot, viewerKey, requestedDate, requestedFocusTaskId]);
+
+  useEffect(() => {
+    if (requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) setQueueDate(requestedDate);
+    if (requestedFocusTaskId) {
+      focusAppliedRef.current = null;
+      setQueueTab('all');
+      setPage(0);
+      setFocusRequest({ taskId: requestedFocusTaskId });
+    }
+  }, [requestedDate, requestedFocusTaskId]);
 
   async function load(options: { silent?: boolean; sync?: boolean } = {}) {
     const silent = options.silent === true;
-    if (silent && loadingRef.current) return;
+    if (currentViewRef.current !== viewKey || document.hidden || (silent && loadingRef.current)) return;
     requestRef.current?.abort();
     const controller = new AbortController();
     requestRef.current = controller;
     loadingRef.current = true;
-    if (!silent) setLoading(true);
+    if (!silent && snapshotRef.current?.key !== viewKey) setLoading(true);
     setLoadError('');
     try {
-      const sync = options.sync === true ? '&sync=1' : '';
-      const scope = `&scope=owner${ownerId ? `&ownerId=${encodeURIComponent(ownerId)}` : ''}`;
-      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${taskEndpoint(mode)}?date=${encodeURIComponent(queueDate)}${scope}${sync}`, { cache: 'no-store', signal: controller.signal });
-      const payload = await response.json().catch(() => null) as { success?: boolean; error?: string; data?: { tasks?: QueueTask[] } | QueueTask[]; tasks?: QueueTask[] } | null;
+      const params = new URLSearchParams({ date: queueDate, scope: 'owner', queue: 'delta', tab: queueTab, page: String(page), limit: '50' });
+      if (ownerId) params.set('ownerId', ownerId);
+      if (focusRequest.taskId) params.set('focusTaskId', focusRequest.taskId);
+      if (focusRequest.unstored) params.set('focusUnstored', '1');
+      const previous = snapshotRef.current?.key === viewKey ? snapshotRef.current : null;
+      if (previous?.token) params.set('since', previous.token);
+      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${taskEndpoint(mode)}?${params.toString()}`, { cache: 'no-store', signal: controller.signal });
+      const payload = await response.json().catch(() => null) as { success?: boolean; error?: string; data?: QueueDelta<QueueTask> } | null;
+      if (controller.signal.aborted || currentViewRef.current !== viewKey) return;
+      if (response.status === 401 || response.status === 403) {
+        queueMemory.clear();
+        queuePreferences.clear();
+        snapshotRef.current = null;
+        setTasks([]);
+        setCounts(EMPTY_COUNTS);
+      }
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '队列加载失败');
-      const raw = Array.isArray(payload.data) ? payload.data : payload.data?.tasks ?? payload.tasks ?? [];
-      const nextTasks = normalizeQueueTasks(raw);
-      activeTasksRef.current = nextTasks.some((task) => isActive(task.status));
+      const delta = payload.data;
+      if (!delta || !Array.isArray(delta.tasks) || typeof delta.token !== 'string' || !delta.counts) throw new Error('queue_response_invalid');
+      const nextTasks = mergeQueueDelta(previous?.tasks ?? [], { ...delta, tasks: normalizeQueueTasks(delta.tasks) });
+      const snapshot: QueueSnapshot = { ...delta, tasks: nextTasks, key: viewKey, scrollY: previous?.scrollY ?? 0, savedAt: Date.now() };
+      snapshotRef.current = snapshot;
+      if (viewerKey) rememberQueue(viewKey, snapshot);
       setTasks(nextTasks);
+      setCounts((current) => JSON.stringify(current) === JSON.stringify(delta.counts) ? current : delta.counts);
+      setPagination((current) => current.page === delta.page && current.totalPages === delta.totalPages ? current : { page: delta.page, totalPages: delta.totalPages });
     } catch (error) {
+      if (controller.signal.aborted || currentViewRef.current !== viewKey) return;
       if (error instanceof DOMException && error.name === 'AbortError') return;
       setLoadError(error instanceof Error ? error.message : '队列加载失败');
     } finally {
       if (requestRef.current === controller) {
         requestRef.current = null;
         loadingRef.current = false;
-        if (!silent) setLoading(false);
+        setLoading(false);
       }
     }
   }
 
   useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load({ silent: true, sync: activeTasksRef.current }), 8000);
+    const cached = viewerKey ? queueMemory.get(viewKey) : undefined;
+    const snapshot = cached && Date.now() - cached.savedAt <= QUEUE_CACHE_TTL ? cached : null;
+    snapshotRef.current = snapshot;
+    setTasks(snapshot?.tasks ?? []);
+    setCounts(snapshot?.counts ?? EMPTY_COUNTS);
+    setPagination({ page: snapshot?.page ?? 0, totalPages: snapshot?.totalPages ?? 1 });
+    setLoading(!snapshot);
+    restoreScrollRef.current = snapshot?.scrollY ?? null;
+    if (snapshot) focusAppliedRef.current = focusRequest.taskId || (focusRequest.unstored ? 'unsaved' : null);
+    loadingRef.current = false;
+    void load({ silent: Boolean(snapshot) });
+    const timer = window.setInterval(() => void load({ silent: true }), 8000);
+    const onVisibility = () => {
+      if (document.hidden) {
+        requestRef.current?.abort();
+        return;
+      }
+      void load({ silent: true });
+    };
+    const onScroll = () => { scrollPositionRef.current = window.scrollY; };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('scroll', onScroll, { passive: true });
     return () => {
       window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('scroll', onScroll);
       requestRef.current?.abort();
+      const current = snapshotRef.current;
+      if (viewerKey && current?.key === viewKey) {
+        const savedAt = Date.now();
+        rememberQueue(viewKey, { ...current, scrollY: scrollPositionRef.current, savedAt });
+        queuePreferences.delete(cacheRoot);
+        queuePreferences.set(cacheRoot, { date: queueDate, tab: queueTab, page, focus: focusRequest, savedAt });
+        while (queuePreferences.size > 16) queuePreferences.delete(queuePreferences.keys().next().value!);
+      }
     };
-  }, [accountId, mode, ownerId, queueDate]);
+  }, [viewKey]);
 
   useEffect(() => {
-    if (!focusTaskId || loading || focusAppliedRef.current === focusTaskId) return;
-    const target = tasks.find((task) => task.id === focusTaskId);
+    if (loading || restoreScrollRef.current === null) return;
+    const y = restoreScrollRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: y, behavior: 'instant' });
+      restoreScrollRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, tasks, focusRequest]);
+
+  useEffect(() => {
+    const focusTaskId = focusRequest.taskId;
+    const focusKey = focusTaskId || (focusRequest.unstored ? 'unsaved' : '');
+    if (!focusKey || loading || focusAppliedRef.current === focusKey) return;
+    const target = tasks.find((task) => focusTaskId ? task.id === focusTaskId : task.status === 'completed' && !task.inventorySavedAt);
     if (!target) return;
-    focusAppliedRef.current = focusTaskId;
-    setQueueTab('all');
+    focusAppliedRef.current = focusKey;
     setFocusedTaskId(target.id);
     const timer = window.setTimeout(() => document.getElementById(`queue-task-${target.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
     return () => window.clearTimeout(timer);
-  }, [focusTaskId, loading, tasks]);
+  }, [focusRequest, loading, tasks]);
 
   const dated = useMemo(
-    () => tasks.filter((task) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(task.createdAt)) === queueDate),
-    [tasks, queueDate],
+    () => snapshotRef.current?.key === viewKey ? tasks.filter((task) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(task.createdAt)) === queueDate) : [],
+    [tasks, queueDate, viewKey],
   );
-  const unsaved = useMemo(() => mode === 'video' ? dated.filter((task) => task.status === 'completed' && !task.inventorySavedAt) : [], [dated, mode]);
-  const safeRecoverable = useMemo(() => dated.filter((task) => task.status === 'failed' && task.errorInfo?.safeToRetry), [dated]);
-  const counts = useMemo(() => ({
-    all: dated.length,
-    active: dated.filter((task) => isActive(task.status)).length,
-    completed: dated.filter((task) => task.status === 'completed').length,
-    failed: dated.filter((task) => task.status === 'failed').length,
-  }), [dated]);
   const visible = useMemo(() => {
     if (queueTab === 'all') return dated;
     if (queueTab === 'active') return dated.filter((task) => isActive(task.status));
@@ -271,11 +379,11 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   }, [dated, queueTab]);
 
   function jumpToUnstored() {
-    const target = unsaved[0];
-    if (!target) return;
+    if (!counts.unsaved) return;
+    focusAppliedRef.current = null;
     setQueueTab('all');
-    setFocusedTaskId(target.id);
-    window.setTimeout(() => document.getElementById(`queue-task-${target.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 50);
+    setPage(0);
+    setFocusRequest({ unstored: true });
   }
 
   async function action(task: QueueTask, actionName: string) {
@@ -294,7 +402,7 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
   }
 
   async function recoverSafeTasks() {
-    if (recovering || !safeRecoverable.length || mode === 'prompt') return;
+    if (recovering || !counts.safeRecoverable || mode === 'prompt') return;
     setRecovering(true);
     try {
       const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/generate-video`, {
@@ -350,12 +458,12 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
     <section className={`panel production-queue-panel ${readOnly ? 'read-only-queue' : ''}`}>
       <header className="production-queue-header">
         <div><span className="eyebrow">PRODUCTION QUEUE</span><h2>生产队列</h2><p>按上海时间汇总当前运营账号下全部工作区的任务。</p></div>
-        <div className="production-queue-tools"><label><CalendarDays size={14} /><span className="sr-only">按日期筛选生产任务</span><input type="date" value={queueDate} onChange={(event) => setQueueDate(event.target.value)} /></label><button type="button" className="icon-button" onClick={() => void load({ sync: true })} aria-label="刷新生产队列" title="刷新生产队列"><RefreshCw size={14} /></button><strong>{visible.length}</strong></div>
+        <div className="production-queue-tools"><label><CalendarDays size={14} /><span className="sr-only">按日期筛选生产任务</span><input type="date" value={queueDate} onChange={(event) => { if (!event.target.value) return; setQueueDate(event.target.value); setPage(0); setFocusRequest({}); }} /></label><button type="button" className="icon-button" onClick={() => void load()} aria-label="刷新生产队列" title="刷新生产队列"><RefreshCw size={14} /></button><strong>{counts[queueTab]}</strong></div>
       </header>
       <div className="production-queue-tabs" role="tablist">
-        {(['all', 'active', 'completed', 'failed'] as const).map((tab) => <button key={tab} type="button" role="tab" aria-selected={queueTab === tab} className={queueTab === tab ? 'active' : ''} onClick={() => setQueueTab(tab)}>{tab === 'all' ? '全部' : tab === 'active' ? '进行中' : tab === 'completed' ? '完成' : '失败'}<span>{counts[tab]}</span></button>)}
-        {unsaved.length > 0 && <button type="button" className="queue-unsaved-link" onClick={jumpToUnstored}>未入库 {unsaved.length} 条 · 跳转</button>}
-        {!readOnly && mode !== 'prompt' && safeRecoverable.length > 0 && <button type="button" className="queue-recover-safe" onClick={() => void recoverSafeTasks()} disabled={recovering}>{recovering ? <RefreshCw size={13} className="spin" /> : <RotateCcw size={13} />} {recovering ? '正在恢复…' : `一键恢复 ${safeRecoverable.length} 条安全任务`}</button>}
+        {(['all', 'active', 'completed', 'failed'] as const).map((tab) => <button key={tab} type="button" role="tab" aria-selected={queueTab === tab} className={queueTab === tab ? 'active' : ''} onClick={() => { setQueueTab(tab); setPage(0); setFocusRequest({}); }}>{tab === 'all' ? '全部' : tab === 'active' ? '进行中' : tab === 'completed' ? '完成' : '失败'}<span>{counts[tab]}</span></button>)}
+        {counts.unsaved > 0 && <button type="button" className="queue-unsaved-link" onClick={jumpToUnstored}>未入库 {counts.unsaved} 条 · 跳转</button>}
+        {!readOnly && mode !== 'prompt' && counts.safeRecoverable > 0 && <button type="button" className="queue-recover-safe" onClick={() => void recoverSafeTasks()} disabled={recovering}>{recovering ? <RefreshCw size={13} className="spin" /> : <RotateCcw size={13} />} {recovering ? '正在恢复…' : `一键恢复 ${counts.safeRecoverable} 条安全任务`}</button>}
       </div>
       {message && <div className="production-queue-message" role="status">{message}</div>}
       {loadError && <div className="production-queue-message queue-error" role="alert"><CircleAlert size={13} />{loadError}</div>}
@@ -369,16 +477,21 @@ export function ProductionQueue({ accountId, mode, focusTaskId: requestedFocusTa
           {task.promptMode !== 'manual' && task.promptFallbackProviders?.length ? <div className="queue-prompt-provider">提示词已自动退避，最终使用 {promptAttributionLabel(task)}</div> : null}
           {task.promptMode !== 'manual' && task.promptGenerationUsedTemplate ? <div className="queue-prompt-provider queue-prompt-warning">未能生成子提示词，已使用模板提示词</div> : null}
           <div className="production-queue-actions">
-             <Link href={reviewHref(task.accountId, mode, task.id)} className="queue-link">{mode === 'prompt' ? '恢复配置' : '审核'}</Link>
+             <Link href={reviewHref(task.accountId, mode, task.id)} className="queue-link" prefetch={false} onClick={saveNavigation}>{mode === 'prompt' ? '恢复配置' : '审核'}</Link>
               {mode !== 'prompt' && <button type="button" className="queue-link" onClick={() => void openPrompt(task)}>提示词</button>}
             {!readOnly && mode !== 'prompt' && <>{['queued', 'prompting', 'submitting', 'submitted', 'running', 'processing'].includes(task.status) && <button type="button" onClick={() => void action(task, 'pause')}><Pause size={13} /> 暂停</button>}{task.status === 'paused' && <button type="button" onClick={() => void action(task, 'resume')}><Play size={13} /> 继续</button>}</>}
              {!readOnly && mode === 'video' && task.status === 'failed' && task.error === 'provider_task_stale' && task.providerTaskId && <button type="button" onClick={() => void action(task, 'recover-provider')}><RefreshCw size={13} /> 查询上游结果</button>}
-             {!readOnly && mode !== 'prompt' && (task.status === 'failed' || task.status === 'cancelled') && <Link href={restoreHref(task.accountId, mode, task.id)} className="queue-link"><RotateCcw size={13} /> 恢复配置</Link>}
+             {!readOnly && mode !== 'prompt' && (task.status === 'failed' || task.status === 'cancelled') && <Link href={restoreHref(task.accountId, mode, task.id)} className="queue-link" prefetch={false} onClick={saveNavigation}><RotateCcw size={13} /> 恢复配置</Link>}
              {!readOnly && mode !== 'prompt' && <button type="button" onClick={() => void action(task, 'delete')} disabled={!['completed', 'failed', 'cancelled'].includes(task.status)} title={!['completed', 'failed', 'cancelled'].includes(task.status) ? '任务完成或失败后可删除' : '删除任务'}><Trash2 size={13} /> 删除</button>}
             {!readOnly && ACTIONABLE_ACTIVE_STATUSES.includes(task.status as (typeof ACTIONABLE_ACTIVE_STATUSES)[number]) && <button type="button" onClick={() => void action(task, 'cancel')}><Trash2 size={13} /> 取消</button>}
           </div>
         </article>)}
       </div>
+      {pagination.totalPages > 1 && <nav className="production-queue-tools" aria-label="队列分页" style={{ justifyContent: 'flex-end', padding: '12px 0', gap: 12 }}>
+        <button type="button" className="icon-button" aria-label="上一页" title="上一页" disabled={loading || pagination.page === 0} onClick={() => { setPage(pagination.page - 1); setFocusRequest({}); }}><ChevronLeft size={16} /></button>
+        <span style={{ minWidth: 76, textAlign: 'center', fontVariantNumeric: 'tabular-nums' }}>{pagination.page + 1} / {pagination.totalPages}</span>
+        <button type="button" className="icon-button" aria-label="下一页" title="下一页" disabled={loading || pagination.page + 1 >= pagination.totalPages} onClick={() => { setPage(pagination.page + 1); setFocusRequest({}); }}><ChevronRight size={16} /></button>
+      </nav>}
     </section>
     {promptTask && <div className="modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setPromptTask(null); }}>
       <section className="modal-card queue-prompt-modal" role="dialog" aria-modal="true" aria-labelledby="queue-prompt-title">

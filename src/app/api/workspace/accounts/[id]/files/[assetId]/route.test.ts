@@ -78,6 +78,42 @@ describe('workspace asset item API', () => {
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2]));
   });
 
+  it('returns selected asset metadata without opening its binary file', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123?metadata=1'), params);
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ success: true, data: { asset: imageAsset } });
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(mockGetAsset).toHaveBeenCalledWith('account-1', 'asset-123');
+    expect(mockGetAssetFileInfo).not.toHaveBeenCalled();
+    expect(mockReadAssetFile).not.toHaveBeenCalled();
+  });
+
+  it('does not let metadata override an explicit download', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123?metadata=1&download=1'), params);
+
+    expect(response.headers.get('content-disposition')).toContain('attachment');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
+  });
+
+  it('keeps metadata within the authenticated account scope', async () => {
+    mockCanAccessWorkspaceAccount.mockReturnValue(false);
+    const forbidden = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123?metadata=1'), params);
+
+    expect(forbidden.status).toBe(403);
+    expect(mockGetAsset).not.toHaveBeenCalled();
+    expect(mockGetAssetFileInfo).not.toHaveBeenCalled();
+  });
+
+  it('returns 404 for metadata of a missing asset', async () => {
+    mockGetAsset.mockReturnValue(null);
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123?metadata=1'), params);
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ success: false, error: 'asset_not_found' });
+    expect(mockGetAssetFileInfo).not.toHaveBeenCalled();
+  });
+
   it('returns prompt content as JSON instead of trying to read a file', async () => {
     const prompt = { ...imageAsset, kind: 'prompt' as const, content: 'Write a concise hook.' };
     mockGetAsset.mockReturnValue(prompt);

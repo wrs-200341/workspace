@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { listAssets } from './assetStore';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
-import { cacheVideoTaskOutputsBeforeCompletion, repairSavedVideoTaskInventory, saveVideoTaskOutputsToAssets } from './videoInventory';
+import { cacheVideoTaskOutputsBeforeCompletion, recoverPendingVideoTaskOutputCache, repairSavedVideoTaskInventory, saveVideoTaskOutputsToAssets } from './videoInventory';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
 const root = `D:\\all_projects\\workspace\\data\\video-inventory-test-${process.pid}`;
@@ -20,6 +20,16 @@ describe('video task inventory persistence', () => {
     fs.rmSync(root, { recursive: true, force: true });
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
+  });
+
+  it('preserves a pause recorded while the video downloads', async () => {
+    const pending = createProviderTask({ accountId: 'video-account', mode: 'video', provider: 'wan3-video', status: 'processing', outputUrls: ['https://cdn.example.test/pause.mp4'] });
+    const fetcher = vi.fn(async () => {
+      updateProviderTask(pending.id, { status: 'paused', metadata: { operatorPaused: true } });
+      return new Response(mp4Bytes, { headers: { 'content-type': 'video/mp4' } });
+    });
+    await recoverPendingVideoTaskOutputCache(pending.id, { fetcher, lookup: publicLookup });
+    expect(getProviderTask(pending.id)).toMatchObject({ status: 'paused', metadata: { operatorPaused: true } });
   });
 
   it('persists a completed base64 video as an inventory-video asset', async () => {

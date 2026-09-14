@@ -1,4 +1,4 @@
-import { listProviderTasks, type ProviderTask } from '@/lib/providers/taskStore';
+import { listProviderTaskSummaries, type ProviderTask } from '@/lib/providers/taskStore';
 import { businessDate } from './tasks';
 
 function taskImageStem(value: string): string {
@@ -39,7 +39,7 @@ function taskNameSequenceFor(task: TaskNameInput): number {
   if (!task.id || !task.accountId) return configured;
   try {
     const key = taskNameKey(task);
-    const occurrence = listProviderTasks({ accountId: task.accountId, mode: task.mode })
+    const occurrence = listProviderTaskSummaries({ accountId: task.accountId, mode: task.mode, createdBusinessDate: businessDate(task.createdAt) })
       .filter((candidate) => taskNameKey(candidate) === key)
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt)
         || taskSequence(left.metadata?.sequence) - taskSequence(right.metadata?.sequence)

@@ -5,7 +5,12 @@
   "scripts": {
     "dev": "next dev -H 0.0.0.0 -p 3000",
     "build": "node scripts/safe-next-build.mjs",
-    "start": "next start -H 0.0.0.0 -p 3000",
+    "start": "node scripts/start-production.mjs",
+    "start:deploy": "node scripts/start-production.mjs --restart-worker",
+    "worker": "node scripts/provider-worker-supervisor.mjs",
+    "worker:restart": "node scripts/start-production.mjs --restart-worker --no-web",
+    "worker:once": "node --import tsx scripts/provider-worker.ts --once",
+    "tasks:migrate": "node --import tsx scripts/migrate-provider-tasks.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -15,6 +20,8 @@
     "next": "15.5.25",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
+    "sharp": "^0.35.4",
+    "tsx": "^4.23.13",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

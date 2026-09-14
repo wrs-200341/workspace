@@ -157,6 +157,8 @@ export async function recoverPendingImageTaskOutputCache(taskId: string, depende
     : 0;
   const nextAttempts = attempts + 1;
   const cache = await cacheImageTaskOutputsBeforeCompletion(task.accountId, { ...task, status: 'completed', progress: 100 }, dependencies);
+  const latest = getProviderTask(task.id);
+  if (!latest || latest.updatedAt !== task.updatedAt) return latest;
   const attemptMetadata = {
     ...(task.metadata ?? {}),
     localCacheAttempts: nextAttempts,
@@ -173,12 +175,12 @@ export async function recoverPendingImageTaskOutputCache(taskId: string, depende
       outputBase64: [],
       error: undefined,
       metadata: attemptMetadata,
-    });
+    }, latest.updatedAt);
   }
   if (nextAttempts >= MAX_CACHE_RETRIES) {
-    return updateProviderTask(task.id, { status: 'failed', progress: 100, error: 'image_output_cache_failed', metadata: { ...attemptMetadata, localCacheExhausted: true, schedulerState: 'terminal' } });
+    return updateProviderTask(task.id, { status: 'failed', progress: 100, error: 'image_output_cache_failed', metadata: { ...attemptMetadata, localCacheExhausted: true, schedulerState: 'terminal' } }, latest.updatedAt);
   }
-  return updateProviderTask(task.id, { status: 'processing', progress: 99, metadata: attemptMetadata });
+  return updateProviderTask(task.id, { status: 'processing', progress: 99, metadata: attemptMetadata }, latest.updatedAt);
 }
 
 /** Return only persisted, readable image assets declared by this task. */

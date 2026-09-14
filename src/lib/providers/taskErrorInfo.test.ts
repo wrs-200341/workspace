@@ -2,6 +2,41 @@ import { describe, expect, it } from 'vitest';
 import { classifyTaskError } from './taskErrorInfo';
 
 describe('task error classification', () => {
+  it.each([undefined, 'upstream-uncertain'])('requires supplier verification for uncertain acceptance with provider ID %s', (providerTaskId) => {
+    const info = classifyTaskError({
+      mode: 'video',
+      error: 'provider_submission_uncertain',
+      providerResponse: undefined,
+      providerTaskId,
+      metadata: {},
+    });
+    expect(info).toMatchObject({ code: 'provider_submission_uncertain', category: 'submission_uncertain', title: '提交结果待供应商确认', safeToRetry: false });
+    expect(info?.message).toContain('重复提交扣费');
+    expect(info?.action).toContain('供应商');
+  });
+
+  it('does not classify an interrupted ambiguous submission as safe recovery', () => {
+    const info = classifyTaskError({
+      mode: 'video',
+      error: 'provider_submission_uncertain',
+      providerResponse: { body: 'temporarily unavailable' },
+      providerTaskId: undefined,
+      metadata: { schedulerInterruptedAt: '2026-09-14T01:00:00Z', promptGenerationPending: true, providerSubmissionUncertain: true },
+    });
+    expect(info).toMatchObject({ code: 'provider_submission_uncertain', category: 'submission_uncertain', safeToRetry: false });
+  });
+
+  it('honors the persisted uncertainty marker when a later generic error is recorded', () => {
+    const info = classifyTaskError({
+      mode: 'image',
+      error: 'provider_request_failed',
+      providerResponse: undefined,
+      providerTaskId: undefined,
+      metadata: { providerSubmissionUncertain: true },
+    });
+    expect(info).toMatchObject({ code: 'provider_submission_uncertain', category: 'submission_uncertain', safeToRetry: false });
+  });
+
   it('identifies a prompt task interrupted by a service restart as safe', () => {
     const info = classifyTaskError({
       mode: 'video',

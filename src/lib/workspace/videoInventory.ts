@@ -1,6 +1,6 @@
 import dns from 'node:dns/promises';
 import { createUploadedAsset, getAsset, getAssetFileInfo, listAssets, type WorkspaceAsset } from './assetStore';
-import { listProviderTasks, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
+import { getProviderTask, listProviderTasks, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
 import { downloadProviderVideoContent } from '@/lib/providers/client';
 import { readStoredVideoOutput, storeVideoOutput } from '@/lib/providers/outputStore';
 import { countVideoOutputs, dedupeVideoOutputUrls } from '@/lib/providers/videoOutputUrls';
@@ -163,7 +163,7 @@ export async function cacheVideoTaskOutputsBeforeCompletion(accountId: string, t
  * temporary provider or filesystem race does not strand the queue forever.
  */
 export async function recoverPendingVideoTaskOutputCache(taskId: string, dependencies: VideoInventoryDependencies = {}): Promise<ProviderTask | null> {
-  const task = listProviderTasks().find((candidate) => candidate.id === taskId) ?? null;
+  const task = getProviderTask(taskId);
   const recoverableCacheFailure = task?.status === 'failed' && task.error === 'video_output_cache_failed';
   if (!task || task.mode !== 'video' || (task.status !== 'processing' && !recoverableCacheFailure)) return task;
   // A terminal cache failure gets one immediate recovery pass, then remains
@@ -181,6 +181,8 @@ export async function recoverPendingVideoTaskOutputCache(taskId: string, depende
     : 0;
   const nextAttempts = attempts + 1;
   const cache = await cacheVideoTaskOutputsBeforeCompletion(task.accountId, { ...task, status: 'completed', progress: 100 }, dependencies);
+  const latest = getProviderTask(task.id);
+  if (!latest || latest.updatedAt !== task.updatedAt) return latest;
   const attemptMetadata = {
     ...(task.metadata ?? {}),
     localCacheAttempts: nextAttempts,
@@ -197,7 +199,7 @@ export async function recoverPendingVideoTaskOutputCache(taskId: string, depende
       outputBase64: [],
       error: undefined,
       metadata: attemptMetadata,
-    });
+    }, latest.updatedAt);
   }
   if (nextAttempts >= MAX_CACHE_RETRIES) {
     return updateProviderTask(task.id, {
@@ -205,9 +207,9 @@ export async function recoverPendingVideoTaskOutputCache(taskId: string, depende
       progress: 100,
       error: 'video_output_cache_failed',
       metadata: { ...attemptMetadata, localCacheExhausted: true, schedulerState: 'terminal' },
-    });
+    }, latest.updatedAt);
   }
-  return updateProviderTask(task.id, { status: 'processing', progress: 99, metadata: attemptMetadata });
+  return updateProviderTask(task.id, { status: 'processing', progress: 99, metadata: attemptMetadata }, latest.updatedAt);
 }
 
 /** Cache only one logical output for the review proxy. Concurrent requests for

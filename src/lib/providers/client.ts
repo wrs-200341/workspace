@@ -873,7 +873,7 @@ function canFallbackFromProviderError(error: unknown): boolean {
  */
 export async function submitVideoWithFallback(
   input: SubmitVideoInput,
-  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch; skipProviders?: readonly ProviderId[] } = {},
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch; skipProviders?: readonly ProviderId[]; preventAmbiguousResubmission?: boolean } = {},
 ): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; model: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackParameters?: Pick<SubmitVideoInput, 'duration' | 'aspectRatio' | 'resolution'> }> {
   const env = dependencies.env ?? process.env;
   const allCandidates = [input.provider, ...grokFallbackProviders(input.provider, input.model, env)];
@@ -889,6 +889,9 @@ export async function submitVideoWithFallback(
     try {
       const result = await submitVideo({ ...input, provider, model, ...parameters }, dependencies);
       const normalized = normalizeProviderResponse(provider, result.response);
+      if (dependencies.preventAmbiguousResubmission && normalized.providerTaskId) {
+        return { ...result, provider, model, ...(attemptedFallbacks.length ? { fallbackFrom: input.provider, fallbackProviders: attemptedFallbacks, fallbackParameters: parameters } : {}) };
+      }
       if (normalized.status === 'failed') {
         const code = normalized.error ?? 'provider_upstream_failed';
         if (!FALLBACK_PROVIDER_ERRORS.has(code) || provider === candidates.at(-1)) {
@@ -899,6 +902,11 @@ export async function submitVideoWithFallback(
       return { ...result, provider, model, ...(attemptedFallbacks.length ? { fallbackFrom: input.provider, fallbackProviders: attemptedFallbacks, fallbackParameters: parameters } : {}) };
     } catch (error) {
       lastError = error;
+      if (dependencies.preventAmbiguousResubmission) {
+        const info = providerErrorInfo(error);
+        const rejected = /^(provider_(400|401|403|404|422|429)|provider_not_configured|provider_unauthorized|provider_model_unavailable)$/.test(info.code);
+        if (!rejected) throw error;
+      }
       if (!canFallbackFromProviderError(error) || provider === candidates.at(-1)) throw error;
     }
   }

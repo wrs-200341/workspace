@@ -139,6 +139,17 @@ export function listAssets(accountId: string, kind?: AssetKind): WorkspaceAsset[
   return read(normalizedAccount).filter((asset) => !kind || asset.kind === kind).map(clone);
 }
 
+export function countAssetsByAccount(accountIds: readonly string[]): Record<string, Record<AssetKind, number>> {
+  const result: Record<string, Record<AssetKind, number>> = {};
+  for (const accountId of accountIds) {
+    const normalizedAccount = assertAssetAccountId(accountId);
+    const counts: Record<AssetKind, number> = { prompt: 0, image: 0, 'inventory-video': 0, audio: 0 };
+    for (const asset of read(normalizedAccount)) counts[asset.kind] += 1;
+    result[normalizedAccount] = counts;
+  }
+  return result;
+}
+
 export function getAsset(accountId: string, id: string): WorkspaceAsset | null {
   const normalizedAccount = assertAssetAccountId(accountId);
   const normalizedAsset = assertAssetId(id);

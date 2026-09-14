@@ -1,8 +1,9 @@
-import { getProviderTask, listProviderTasks, updateProviderTask, type ProviderTask, type ProviderTaskStatus } from './taskStore';
+import { getProviderTask, listProviderTaskSummaries, updateProviderTask, type ProviderTask, type ProviderTaskStatus, type ProviderTaskSummary } from './taskStore';
 import { isProviderLiveEnabled, type ProviderId } from './config';
 import { providerResponseSnapshot, syncProviderTask } from './client';
 import { canonicalTaskProgress } from './taskProgress';
 import { cacheVideoTaskOutputsBeforeCompletion, localVideoOutputUrls } from '@/lib/workspace/videoInventory';
+import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls } from '@/lib/workspace/imageInventory';
 import { workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 
 const ACTIVE_PROVIDER_STATUSES = new Set<ProviderTaskStatus>(['queued', 'submitting', 'submitted', 'processing', 'running', 'paused']);
@@ -60,7 +61,9 @@ export function ownerIdForProviderTask(task: Pick<ProviderTask, 'accountId' | 'm
   return typeof owner === 'string' && owner.trim() ? owner.trim() : task.accountId;
 }
 
-function providerActiveAnchorMs(task: ProviderTask): number {
+type RecoverableTaskView = Pick<ProviderTaskSummary, 'id' | 'accountId' | 'mode' | 'provider' | 'status' | 'providerTaskId' | 'metadata' | 'createdAt' | 'updatedAt' | 'error'>;
+
+function providerActiveAnchorMs(task: RecoverableTaskView): number {
   const candidates = [
     task.metadata?.providerTaskAcceptedAt,
     task.metadata?.schedulerStartedAt,
@@ -75,23 +78,23 @@ function providerActiveAnchorMs(task: ProviderTask): number {
   return Number.isFinite(updatedAt) ? updatedAt : Date.now();
 }
 
-function isProviderActive(task: ProviderTask): boolean {
-  if (!task.providerTaskId || task.mode !== 'video') return false;
+function isProviderActive(task: RecoverableTaskView): boolean {
+  if (!task.providerTaskId || (task.mode !== 'video' && task.mode !== 'image')) return false;
   if (!isProviderLiveEnabled(task.provider)) return false;
   if (task.status === 'queued') return task.metadata?.schedulerState === 'provider-active' || Boolean(task.providerTaskId);
   return ACTIVE_PROVIDER_STATUSES.has(task.status);
 }
 
-function isStaleActive(task: ProviderTask, now = Date.now()): boolean {
+function isStaleActive(task: RecoverableTaskView, now = Date.now()): boolean {
   return isProviderActive(task) && now - providerActiveAnchorMs(task) >= providerActiveStaleMs();
 }
 
-function shouldPollActive(task: ProviderTask): boolean {
+function shouldPollActive(task: RecoverableTaskView): boolean {
   return isProviderActive(task);
 }
 
-function shouldRecoverFailedStale(task: ProviderTask, now = Date.now()): boolean {
-  if (task.mode !== 'video' || task.status !== 'failed' || task.error !== 'provider_task_stale') return false;
+function shouldRecoverFailedStale(task: RecoverableTaskView, now = Date.now()): boolean {
+  if ((task.mode !== 'video' && task.mode !== 'image') || task.status !== 'failed' || task.error !== 'provider_task_stale') return false;
   if (!task.providerTaskId || !isProviderLiveEnabled(task.provider)) return false;
   const checkedAt = typeof task.metadata?.providerStaleRecoverCheckedAt === 'string'
     ? Date.parse(task.metadata.providerStaleRecoverCheckedAt)
@@ -137,7 +140,7 @@ function markProviderTaskStale(task: ProviderTask, detail?: { response?: unknown
       schedulerFinishedAt: now,
       ...(detail?.source ? { providerTaskFinalSyncSource: detail.source } : {}),
     },
-  });
+  }, task.updatedAt);
 }
 
 async function applyProviderStatus(
@@ -146,7 +149,7 @@ async function applyProviderStatus(
   options: ProviderTaskSyncOptions,
 ): Promise<ProviderTask | null> {
   const latest = getProviderTask(task.id);
-  if (!latest || latest.mode !== 'video' || latest.providerTaskId !== task.providerTaskId) return latest;
+  if (!latest || (latest.mode !== 'video' && latest.mode !== 'image') || latest.providerTaskId !== task.providerTaskId || latest.status === 'cancelled' || latest.status === 'paused') return latest;
   const now = new Date().toISOString();
   const normalizedStatus = status.status === 'unknown' ? latest.status : statusForProvider(status.status);
   const providerTaskId = status.providerTaskId ?? latest.providerTaskId;
@@ -172,14 +175,22 @@ async function applyProviderStatus(
       outputUrls: status.outputUrls,
       outputBase64: status.outputBase64,
     };
-    const cache = await cacheVideoTaskOutputsBeforeCompletion(latest.accountId, cacheTask);
+    // Preserve the supplier response before downloading anything. A worker
+    // crash during caching must resume these outputs, never the POST request.
+    const checkpoint = updateProviderTask(latest.id, { status: 'processing', outputUrls: status.outputUrls, outputBase64: status.outputBase64, metadata: { ...(latest.metadata ?? {}), ...baseMetadata, schedulerState: 'provider-active' } }, latest.updatedAt);
+    if (!checkpoint) return getProviderTask(latest.id);
+    const cache = latest.mode === 'image'
+      ? await cacheImageTaskOutputsBeforeCompletion(latest.accountId, cacheTask)
+      : await cacheVideoTaskOutputsBeforeCompletion(latest.accountId, cacheTask);
+    const afterCache = getProviderTask(latest.id);
+    if (!afterCache || afterCache.providerTaskId !== task.providerTaskId || afterCache.status === 'cancelled' || afterCache.status === 'paused') return afterCache;
     const noOutput = cache.expected === 0;
     const cachePending = cache.expected > 0 && !cache.ready;
     const finalStatus: ProviderTaskStatus = noOutput ? 'failed' : cachePending ? 'processing' : 'completed';
     return updateProviderTask(latest.id, {
       status: finalStatus,
       progress: canonicalTaskProgress({
-        mode: 'video',
+        mode: latest.mode,
         status: finalStatus,
         progress: status.progress,
         providerTaskId,
@@ -188,7 +199,7 @@ async function applyProviderStatus(
         localOutputPending: cachePending,
       }),
       providerTaskId,
-      outputUrls: cache.ready && cache.expected > 0 ? localVideoOutputUrls(latest.accountId, latest.id, cache.expected) : status.outputUrls,
+      outputUrls: cache.ready && cache.expected > 0 ? latest.mode === 'image' ? localImageOutputUrls(latest.accountId, cacheTask) : localVideoOutputUrls(latest.accountId, latest.id, cache.expected) : status.outputUrls,
       outputBase64: cache.ready && cache.expected > 0 ? [] : status.outputBase64,
       error: noOutput ? 'provider_upstream_failed' : undefined,
       providerResponse: noOutput
@@ -196,6 +207,7 @@ async function applyProviderStatus(
         : undefined,
       metadata: {
         ...baseMetadata,
+        ...(afterCache.metadata ?? {}),
         schedulerState: finalStatus === 'completed' || finalStatus === 'failed' ? 'terminal' : 'provider-active',
         ...(finalStatus === 'completed' || finalStatus === 'failed' ? { schedulerFinishedAt: now } : {}),
         localOutputCount: cache.cached,
@@ -203,7 +215,7 @@ async function applyProviderStatus(
         localOutputReady: cache.ready,
         ...(options.recoverStaleFailed ? { providerStaleRecoveredAt: now } : {}),
       },
-    });
+    }, afterCache.updatedAt);
   }
 
   if (normalizedStatus === 'failed' || normalizedStatus === 'cancelled') {
@@ -222,7 +234,7 @@ async function applyProviderStatus(
         lastProviderFailure: latest.provider,
         ...(options.recoverStaleFailed ? { providerStaleRecoveredAt: now } : {}),
       },
-    });
+    }, latest.updatedAt);
   }
 
   if (options.finalIfStale) return markProviderTaskStale(latest, { response: status.response, source: options.source });
@@ -238,11 +250,11 @@ async function applyProviderStatus(
         providerStaleRecoverCheckedAt: now,
         providerStaleRecoverStatus: status.status,
       },
-    });
+    }, latest.updatedAt);
   }
 
   const nextProgress = canonicalTaskProgress({
-    mode: 'video',
+    mode: latest.mode,
     status: normalizedStatus,
     progress: status.progress,
     providerTaskId,
@@ -257,12 +269,12 @@ async function applyProviderStatus(
     outputBase64: status.outputBase64.length ? status.outputBase64 : latest.outputBase64,
     error: undefined,
     metadata: baseMetadata,
-  });
+  }, latest.updatedAt);
 }
 
-export function syncVideoProviderTask(taskOrId: ProviderTask | string, options: ProviderTaskSyncOptions = {}): Promise<ProviderTask | null> {
+export function syncMediaProviderTask(taskOrId: ProviderTask | string, options: ProviderTaskSyncOptions = {}): Promise<ProviderTask | null> {
   const initial = typeof taskOrId === 'string' ? getProviderTask(taskOrId) : taskOrId;
-  if (!initial || initial.mode !== 'video' || !initial.providerTaskId || !isProviderLiveEnabled(initial.provider)) return Promise.resolve(initial ?? null);
+  if (!initial || (initial.mode !== 'video' && initial.mode !== 'image') || !initial.providerTaskId || !isProviderLiveEnabled(initial.provider)) return Promise.resolve(initial ?? null);
   const key = syncKey(initial);
   const existing = syncInFlight.get(key);
   if (existing) return existing;
@@ -271,7 +283,7 @@ export function syncVideoProviderTask(taskOrId: ProviderTask | string, options: 
   syncLastStartedAt.set(key, now);
   const run = (async () => {
     const latest = getProviderTask(initial.id);
-    if (!latest || latest.mode !== 'video' || !latest.providerTaskId) return latest;
+    if (!latest || (latest.mode !== 'video' && latest.mode !== 'image') || !latest.providerTaskId) return latest;
     try {
       const status = await syncProviderTask(latest.provider, latest.providerTaskId);
       const updated = await applyProviderStatus(latest, status, options);
@@ -279,6 +291,7 @@ export function syncVideoProviderTask(taskOrId: ProviderTask | string, options: 
     } catch (error) {
       const current = getProviderTask(latest.id);
       if (!current) return null;
+      if (current.status === 'cancelled' || current.status === 'paused' || current.providerTaskId !== latest.providerTaskId) return current;
       if (options.finalIfStale) return markProviderTaskStale(current, { error, source: options.source });
       if (options.recoverStaleFailed && current.status === 'failed' && current.error === 'provider_task_stale') {
         return updateProviderTask(current.id, {
@@ -291,7 +304,7 @@ export function syncVideoProviderTask(taskOrId: ProviderTask | string, options: 
             providerStaleRecoverCheckedAt: new Date().toISOString(),
             providerStaleRecoverStatus: 'sync_failed',
           },
-        });
+        }, current.updatedAt);
       }
       return current;
     }
@@ -302,8 +315,10 @@ export function syncVideoProviderTask(taskOrId: ProviderTask | string, options: 
   return run;
 }
 
-function fairSelect(tasks: ProviderTask[], limit: number): ProviderTask[] {
-  const groups = new Map<string, ProviderTask[]>();
+export const syncVideoProviderTask = syncMediaProviderTask;
+
+function fairSelect<T extends RecoverableTaskView>(tasks: T[], limit: number): T[] {
+  const groups = new Map<string, T[]>();
   for (const task of tasks) {
     const key = `${ownerIdForProviderTask(task)}:${task.provider}`;
     const group = groups.get(key) ?? [];
@@ -313,7 +328,7 @@ function fairSelect(tasks: ProviderTask[], limit: number): ProviderTask[] {
   for (const group of groups.values()) {
     group.sort((a, b) => Date.parse(a.updatedAt) - Date.parse(b.updatedAt));
   }
-  const selected: ProviderTask[] = [];
+  const selected: T[] = [];
   while (selected.length < limit && groups.size > 0) {
     for (const [key, group] of groups) {
       const task = group.shift();
@@ -326,10 +341,15 @@ function fairSelect(tasks: ProviderTask[], limit: number): ProviderTask[] {
 }
 
 export async function runProviderTaskRecoveryPass(options: { limit?: number } = {}): Promise<ProviderTask[]> {
-  if (process.env.NODE_ENV === 'test') return [];
+  if (process.env.NODE_ENV === 'test' || process.env.WORKSPACE_PROVIDER_WORKER !== 'true') return [];
   const now = Date.now();
   const limit = options.limit ?? recoveryBatchSize();
-  const tasks = listProviderTasks({ mode: 'video' });
+  // This worker runs periodically while users are clicking through the UI.
+  // Never read/clone full provider tasks here: production tasks can contain
+  // megabytes of prompt/provider metadata, and cloning them blocks the Node
+  // event loop. Use the bounded summary projection and load full records only
+  // for the small selected batch.
+  const tasks = listProviderTaskSummaries({ statuses: [...ACTIVE_PROVIDER_STATUSES, 'failed'] });
   const staleActive = tasks.filter((task) => isStaleActive(task, now));
   const active = tasks.filter((task) => shouldPollActive(task) && !isStaleActive(task, now));
   const failedStale = tasks.filter((task) => shouldRecoverFailedStale(task, now));
@@ -341,7 +361,7 @@ export async function runProviderTaskRecoveryPass(options: { limit?: number } = 
 
   const updated: ProviderTask[] = [];
   for (const task of selected) {
-    const next = await syncVideoProviderTask(task, {
+    const next = await syncMediaProviderTask(task.id, {
       force: isStaleActive(task, now) || task.status === 'failed',
       finalIfStale: isStaleActive(task, now),
       recoverStaleFailed: task.status === 'failed' && task.error === 'provider_task_stale',
@@ -355,7 +375,7 @@ export async function runProviderTaskRecoveryPass(options: { limit?: number } = 
 
 export function ensureProviderTaskRecoveryWorker(callbacks: RecoveryCallbacks = {}): void {
   workerCallbacks = { ...workerCallbacks, ...callbacks };
-  if (process.env.NODE_ENV === 'test' || workerTimer) return;
+  if (process.env.NODE_ENV === 'test' || process.env.WORKSPACE_PROVIDER_WORKER !== 'true' || workerTimer) return;
   const tick = () => {
     if (workerRunning) return;
     workerRunning = true;

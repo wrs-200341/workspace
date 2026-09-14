@@ -6,7 +6,10 @@ import {
   getNextShanghaiMidnight,
   importProductImages,
   listProductImageAssets,
+  listProductImageFolders,
   listProductImages,
+  readProductImageAsset,
+  readProductImageFolder,
   productSourceErrorDetail,
   queryProductGallery,
 } from './productImages';
@@ -21,6 +24,7 @@ beforeEach(() => {
   fs.rmSync(root, { recursive: true, force: true });
 });
 afterEach(() => {
+  vi.restoreAllMocks();
   fs.rmSync(root, { recursive: true, force: true });
   if (previousRoot === undefined) delete process.env.WORKSPACE_DATA_ROOT; else process.env.WORKSPACE_DATA_ROOT = previousRoot;
   if (previousBase === undefined) delete process.env.WORKSPACE_8765_BASE_URL; else process.env.WORKSPACE_8765_BASE_URL = previousBase;
@@ -139,6 +143,62 @@ describe('8765 product image adapter', () => {
   it('calculates next midnight in Asia/Shanghai', () => {
     const next = getNextShanghaiMidnight(new Date('2026-09-02T01:00:00+08:00'));
     expect(next.toISOString()).toBe('2026-09-02T16:00:00.000Z');
+  });
+
+  it('indexes requested assets without statting or rebuilding every image for each preview', () => {
+    const directory = getWorkspacePath('product-images', 'shared', '2026-09-02', 'P1');
+    fs.mkdirSync(directory, { recursive: true });
+    for (let index = 0; index < 100; index += 1) fs.writeFileSync(`${directory}\\${index}.png`, 'image');
+    const stat = vi.spyOn(fs, 'statSync');
+    const assetId = 'product-image:shared:2026-09-02:P1:50.png';
+    expect(readProductImageAsset(assetId)).toMatchObject({ id: assetId, thumbnailUrl: expect.stringContaining('thumbnail=1&v=') });
+    expect(stat.mock.calls.filter(([target]) => String(target).endsWith('.png'))).toHaveLength(1);
+    const readDirectory = vi.spyOn(fs, 'readdirSync');
+    expect(readProductImageAsset(assetId)?.id).toBe(assetId);
+    expect(readProductImageAsset('product-image:shared:2026-09-02:P1:missing.png')).toBeNull();
+    expect(readDirectory).not.toHaveBeenCalled();
+    expect(stat.mock.calls.filter(([target]) => String(target).endsWith('.png'))).toHaveLength(1);
+  });
+
+  it('keeps account caches isolated and folder summaries free of image details', () => {
+    for (const [account, pid] of [['account-1', 'P1'], ['account-2', 'P2']]) {
+      const directory = getWorkspacePath('product-images', account, '2026-09-02', pid);
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(`${directory}\\001.jpg`, 'image');
+    }
+    expect(listProductImages('account-1').map((record) => record.pid)).toEqual(['P1']);
+    expect(listProductImageAssets('account-1').map((asset) => asset.pid)).toEqual(['P1']);
+    expect(listProductImageAssets().map((asset) => asset.pid)).toEqual(['P1', 'P2']);
+    const summaries = listProductImageFolders('account-1');
+    expect(summaries.map((folder) => folder.pid)).toEqual(['P1']);
+    expect(summaries[0].images).toBeUndefined();
+    expect(summaries[0].coverUrl).toContain('thumbnail=1&v=');
+    expect(listProductImageFolders().map((folder) => folder.pid)).toEqual(['P1', 'P2']);
+    expect(listProductImageFolders('account-2').map((folder) => folder.pid)).toEqual(['P2']);
+    expect(readProductImageFolder(undefined, 'P2')?.images).toHaveLength(1);
+    expect(listProductImageFolders('account-1', { includeImages: true })[0].images).toHaveLength(1);
+    expect(listProductImageFolders('account-1')[0].images).toBeUndefined();
+  });
+
+  it('invalidates the asset index for imports, cleanup, and data-root changes', async () => {
+    const directory = getWorkspacePath('product-images', 'account-1', '2026-09-02', 'P1');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(`${directory}\\001.jpg`, 'old');
+    const assetId = 'product-image:account-1:2026-09-02:P1:001.jpg';
+    const old = readProductImageAsset(assetId);
+    const zip = createStoredZip([{ name: 'P1/001.jpg', bytes: Buffer.from('new image') }]);
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => String(input).endsWith('/check-pids')
+      ? new Response(JSON.stringify({ valid: ['P1'] }), { status: 200 })
+      : new Response(zip as unknown as BodyInit, { status: 200, headers: { 'content-type': 'application/zip' } }));
+    await importProductImages('account-1', ['P1'], fetcher, new Date('2026-09-02T08:00:00.000Z'));
+    expect(readProductImageAsset(assetId)?.size).toBe(9);
+    expect(readProductImageAsset(assetId)?.version).not.toBe(old?.version);
+    process.env.WORKSPACE_DATA_ROOT = `${root}\\alternate`;
+    expect(readProductImageAsset(assetId)).toBeNull();
+    process.env.WORKSPACE_DATA_ROOT = root;
+    expect(readProductImageAsset(assetId)).not.toBeNull();
+    cleanupExpiredProductImages(new Date('2026-09-06T00:00:00+08:00'));
+    expect(readProductImageAsset(assetId)).toBeNull();
   });
 });
 
