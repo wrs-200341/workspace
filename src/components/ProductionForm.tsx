@@ -116,7 +116,7 @@ const VIDEO_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers:
 const IMAGE_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers: ProviderId[] }> = [
   { id: 'grok-image', label: 'Grok', providers: ['mgrouter-grok-image', 'origin-grok-image'] },
   { id: 'gemini-image', label: 'Gemini', providers: ['pomoai-gemini-image', 'origin-nano-image', 'junze-gemini-image'] },
-  { id: 'gpt-image', label: 'GPT Image', providers: ['aicloud-gpt-image', 'origin-gpt-image', 'junze-gpt-image', 'yuanai-image'] },
+  { id: 'gpt-image', label: 'GPT Image', providers: ['yuanai-image', 'aicloud-gpt-image', 'origin-gpt-image', 'junze-gpt-image'] },
   { id: 'seedream', label: 'Seedream', providers: ['seedream'] },
 ];
 
@@ -135,7 +135,7 @@ export function ProductionForm({ accountId, mode }: Props) {
   const restoredTaskRef = useRef<string | null>(null);
   const providers = useMemo(() => getProviderCatalog().filter((provider) => provider.kind === mode), [mode]);
   const promptProviders = useMemo(() => getProviderCatalog().filter((provider) => provider.kind === 'prompt'), []);
-  const initialProvider = (mode === 'image' ? providers.find((item) => item.id === 'aicloud-gpt-image') ?? providers.find((item) => item.id === 'yuanai-image') : providers[0])?.id ?? 'grok-video';
+  const initialProvider = (mode === 'image' ? providers.find((item) => item.id === 'yuanai-image') ?? providers.find((item) => item.id === 'aicloud-gpt-image') : providers[0])?.id ?? 'grok-video';
   const initialProviderEntry = providers.find((item) => item.id === initialProvider) ?? providers[0];
   const [prompt, setPrompt] = useState('');
   const promptDraftKey = `workspace-production-prompt:${accountId}:${mode}`;
@@ -225,7 +225,7 @@ export function ProductionForm({ accountId, mode }: Props) {
 
   useEffect(() => {
     const next = mode === 'image'
-      ? providers.find((item) => item.id === 'aicloud-gpt-image') ?? providers.find((item) => item.id === 'yuanai-image') ?? providers[0]
+      ? providers.find((item) => item.id === 'yuanai-image') ?? providers.find((item) => item.id === 'aicloud-gpt-image') ?? providers[0]
       : providers[0];
     if (!next) return;
     setProvider(next.id);
