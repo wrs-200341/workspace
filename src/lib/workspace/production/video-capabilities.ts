@@ -61,6 +61,17 @@ const none: ReferenceCapability = Object.freeze({ min: 0, max: 0, required: fals
 const imageRefs = (max: number, min = 0, required = false): ReferenceCapability => Object.freeze({ min, max, required });
 
 const CAPABILITIES: Record<string, VideoCapability> = {
+  'dola-sd2:dola-sd2': {
+    duration: { min: 4, max: 15, values: Array.from({ length: 12 }, (_, index) => index + 4) },
+    aspectRatios: ['9:16'],
+    defaultAspectRatio: '9:16',
+    resolutions: ['720p'],
+    defaultResolution: '720p',
+    defaultDuration: 5,
+    referenceImages: imageRefs(1, 1, true),
+    referenceVideos: none,
+    referenceAudios: none,
+  },
   // Historical 9999/OAIRegBox contract: one optional image, fixed 10s/720p.
   'oairegbox:omni': {
     duration: { min: 10, max: 10, values: [10] },
@@ -86,6 +97,17 @@ const CAPABILITIES: Record<string, VideoCapability> = {
     resolutions: ['480p', '720p'],
     defaultResolution: '720p',
     resolutionByDuration: { 5: ['480p'], 10: ['480p', '720p'], 15: ['480p'] },
+    referenceImages: imageRefs(9),
+    referenceVideos: imageRefs(3),
+    referenceAudios: imageRefs(3),
+  },
+  'apiaw-seedance-video:seedance2.0-mini': {
+    duration: { min: 4, max: 15, values: Array.from({ length: 12 }, (_, index) => index + 4) },
+    aspectRatios: ['1:1', '16:9', '9:16'],
+    defaultAspectRatio: '9:16',
+    resolutions: ['480p', '720p'],
+    defaultResolution: '720p',
+    defaultDuration: 10,
     referenceImages: imageRefs(9),
     referenceVideos: imageRefs(3),
     referenceAudios: imageRefs(3),
@@ -359,6 +381,7 @@ function cloneCapability(capability: VideoCapability): VideoCapability {
     defaultAspectRatio: capability.defaultAspectRatio,
     resolutions: [...capability.resolutions],
     defaultResolution: capability.defaultResolution,
+    defaultDuration: capability.defaultDuration,
     resolutionByDuration: capability.resolutionByDuration
       ? Object.fromEntries(Object.entries(capability.resolutionByDuration).map(([duration, resolutions]) => [duration, [...resolutions]]))
       : undefined,

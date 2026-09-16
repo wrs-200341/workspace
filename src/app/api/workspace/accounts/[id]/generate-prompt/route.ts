@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
-import { generateGeminiPrompt, generateGPTPrompt, generateBigSnakePrompt, generateOAIRegboxGPTPrompt, generatePromptWithFallback } from '@/lib/providers/client';
+import { generateGeminiPrompt, generateGPTPrompt, generateBigSnakePrompt, generateOAIRegboxGPTPrompt, generateSecureSkillGPTPrompt, generatePromptWithFallback } from '@/lib/providers/client';
 import { providerResponseSnapshot } from '@/lib/providers/client';
 import { getProviderConfig, type ProviderId } from '@/lib/providers/config';
 import { createProviderTask } from '@/lib/providers/taskStore';
 import { readAssetFile } from '@/lib/workspace/assetStore';
-import { getProductImageAbsolutePath, listProductImageAssets } from '@/lib/workspace/productImages';
+import { getProductImageAbsolutePath, readProductImageAsset } from '@/lib/workspace/productImages';
 import { appendProductSummary, lookupProductSummary } from '@/lib/workspace/productSummary';
 import * as productSummaryModule from '@/lib/workspace/productSummary';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
@@ -55,10 +55,11 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // future UI can pass one directly; all other values must be Gemini models.
   const isPomoFallback = requestedPromptModel === 'pomoai-gpt' || requestedPromptModel === 'pomoai-gpt-prompt' || requestedPromptModel.startsWith('pomoai:');
   const isOAIRegbox = requestedPromptModel === 'oairegbox-gpt' || requestedPromptModel === 'oairegbox-gpt-prompt';
+  const isSecureSkill = requestedPromptModel === 'secure-skill-gpt' || requestedPromptModel === 'secure-skill-gpt-prompt';
   const isBigSnake = requestedPromptModel === 'bigsnake' || requestedPromptModel.startsWith('bigsnake:');
   const isGpt = requestedPromptModel === 'gpt-2999' || /^gpt[-_]/i.test(requestedPromptModel);
   const isGemini = /^gemini[-_]/i.test(requestedPromptModel);
-  if (!isPomoFallback && !isOAIRegbox && !isGpt && !isGemini && !isBigSnake) {
+  if (!isPomoFallback && !isOAIRegbox && !isSecureSkill && !isGpt && !isGemini && !isBigSnake) {
     return NextResponse.json({ success: false, error: 'prompt_model_invalid' }, { status: 400 });
   }
 
@@ -74,6 +75,8 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     ? 'pomoai-gpt-prompt'
     : isOAIRegbox
       ? 'oairegbox-gpt-prompt'
+      : isSecureSkill
+        ? 'secure-skill-gpt-prompt'
       : isBigSnake
     ? 'bigsnake-prompt'
     : isGpt
@@ -83,7 +86,7 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     ? 'BigSnake'
     : selectedProvider === 'gpt-2999-prompt'
       ? 'GPT-2999'
-      : selectedProvider === 'oairegbox-gpt-prompt' ? 'OAIRegBox GPT-5.5' : selectedProvider === 'pomoai-gpt-prompt' ? 'PomoAI GPT-5.5' : 'Gemini';
+      : selectedProvider === 'oairegbox-gpt-prompt' ? 'OAIRegBox GPT-5.5' : selectedProvider === 'secure-skill-gpt-prompt' ? 'secure-skill GPT-5.5 Medium' : selectedProvider === 'pomoai-gpt-prompt' ? 'PomoAI GPT-5.5' : 'Gemini';
   let attemptedModel = '';
   try {
     const referenceImageName = firstReferenceImageName({ accountId: id, referenceAssetIds, productImageAssetIds });
@@ -113,6 +116,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     } else if (isOAIRegbox) {
       provider = 'oairegbox-gpt-prompt';
       const generated = await generateOAIRegboxGPTPrompt({ prompt: generationPrompt, attachments: references });
+      model = generated.model;
+      attemptedModel = model;
+      generatedText = generated.text;
+      source = generated.mode;
+    } else if (isSecureSkill) {
+      provider = 'secure-skill-gpt-prompt';
+      const generated = await generateSecureSkillGPTPrompt({ prompt: generationPrompt, attachments: references });
       model = generated.model;
       attemptedModel = model;
       generatedText = generated.text;
@@ -246,9 +256,8 @@ function readPromptImageReferences(accountId: string, referenceAssetIds: readonl
     if (totalBytes > MAX_REFERENCE_BYTES) throw new Error('reference_images_too_large');
     references.push({ name: stored.asset.name, mimeType: stored.asset.mimeType || 'image/png', dataBase64: Buffer.from(stored.bytes).toString('base64') });
   }
-  const products = listProductImageAssets();
   for (const assetId of productImageAssetIds) {
-    const product = products.find((candidate) => candidate.id === assetId);
+    const product = readProductImageAsset(assetId);
     if (!product) throw new Error('reference_asset_not_found');
     // Shared product images are workspace-wide assets. Do not require them to
     // belong to the current account lane here; the preview/import layer already

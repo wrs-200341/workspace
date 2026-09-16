@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
+import { randomUUID } from 'node:crypto';
 import { getWorkspacePath } from '../storagePaths';
 import { productImageFileVersion, productImageThumbnailUrl } from './productImageThumbnails';
 import { publishFileReference, publishFileReferences, type PublishedAssetReference } from './referenceBridge';
@@ -57,6 +58,7 @@ let sourceTokenBase = '';
 type ProductImageDirectoryCache = {
   root: string;
   mtimeMs: number;
+  revision: string;
   records: ProductImageRecord[];
   assetSources: Map<string, { record: ProductImageRecord; file: string }>;
   assets: Map<string, ProductImageAsset>;
@@ -127,6 +129,31 @@ export function productSourceErrorDetail(error: unknown): string | undefined {
 function clone<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
 
 function productImagesRoot(): string { return getWorkspacePath('product-images'); }
+
+function productImagesRevision(root: string): string {
+  try {
+    const stat = fs.statSync(path.join(root, '.revision'));
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return '';
+  }
+}
+
+function invalidateProductImageDirectoryCache(): void {
+  directoryCache = null;
+  const root = productImagesRoot();
+  fs.mkdirSync(root, { recursive: true });
+  const revision = randomUUID();
+  const temporary = path.join(root, `.revision-${process.pid}-${revision}.tmp`);
+  try {
+    fs.writeFileSync(temporary, revision, { encoding: 'utf8', mode: 0o600 });
+    // Nested PID changes do not update the root mtime. Publish an atomic token
+    // so independently running web and provider-worker caches both refresh.
+    fs.renameSync(temporary, path.join(root, '.revision'));
+  } finally {
+    fs.rmSync(temporary, { force: true });
+  }
+}
 
 function rootMtimeMs(root: string): number {
   try {
@@ -297,22 +324,25 @@ export async function importProductImages(
   const imported: ProductImageRecord[] = [];
   // Partial imports also change the index, including when extraction later fails.
   directoryCache = null;
-  for (const pid of pids) {
-    const destination = getWorkspacePath('product-images', accountId, date, pid);
-    fs.mkdirSync(destination, { recursive: true });
-    try {
-      const files = extractZipForPid(bytes, pid, destination, new Set(pids));
-      if (!files.length) throw new Error('product_archive_no_images');
-      const now = new Date(importedAt).toISOString();
-      const manifest = { accountId, pid, importedAt: now, importDate: date, files };
-      fs.writeFileSync(path.join(destination, 'manifest.json'), JSON.stringify(manifest, null, 2), { encoding: 'utf8', mode: 0o600 });
-      imported.push({ ...manifest, relativePath: path.relative(getWorkspacePath(), destination).replace(/\\/g, '/') });
-    } catch (error) {
-      fs.rmSync(destination, { recursive: true, force: true });
-      throw error;
+  try {
+    for (const pid of pids) {
+      const destination = getWorkspacePath('product-images', accountId, date, pid);
+      fs.mkdirSync(destination, { recursive: true });
+      try {
+        const files = extractZipForPid(bytes, pid, destination, new Set(pids));
+        if (!files.length) throw new Error('product_archive_no_images');
+        const now = new Date(importedAt).toISOString();
+        const manifest = { accountId, pid, importedAt: now, importDate: date, files };
+        fs.writeFileSync(path.join(destination, 'manifest.json'), JSON.stringify(manifest, null, 2), { encoding: 'utf8', mode: 0o600 });
+        imported.push({ ...manifest, relativePath: path.relative(getWorkspacePath(), destination).replace(/\\/g, '/') });
+      } catch (error) {
+        fs.rmSync(destination, { recursive: true, force: true });
+        throw error;
+      }
     }
+  } finally {
+    invalidateProductImageDirectoryCache();
   }
-  directoryCache = null;
   return imported.map(clone);
 }
 
@@ -453,7 +483,8 @@ function getProductImageDirectoryCache(): ProductImageDirectoryCache {
   const root = productImagesRoot();
   const cached = directoryCache;
   const rootStat = rootMtimeMs(root);
-  if (cached && cached.root === root && cached.mtimeMs === rootStat) return cached;
+  const revision = productImagesRevision(root);
+  if (cached && cached.root === root && cached.mtimeMs === rootStat && cached.revision === revision) return cached;
   const records: ProductImageRecord[] = [];
   const accounts = readDirectories(root);
   for (const accountId of accounts) {
@@ -472,6 +503,7 @@ function getProductImageDirectoryCache(): ProductImageDirectoryCache {
   directoryCache = {
     root,
     mtimeMs: rootStat,
+    revision,
     records,
     assetSources: new Map(records.flatMap((record) => record.files.map((file) => [productImageAssetId(record, file), { record, file }] as const))),
     assets: new Map(),
@@ -553,36 +585,79 @@ export function publishProductImageReferences(assetIds: readonly string[], accou
 export function readProductImageAsset(assetId: string): ProductImageAsset | null {
   const cache = getProductImageDirectoryCache();
   const source = cache.assetSources.get(assetId);
-  if (!source) return null;
-  const asset = buildProductImageAsset(source.record, source.file);
+  const asset = source ? buildProductImageAsset(source.record, source.file) : readProductImageAssetDirect(assetId);
   return asset ? clone(asset) : null;
 }
 
+function readProductImageAssetDirect(assetId: string): ProductImageAsset | null {
+  const parsed = parseProductImageAssetId(assetId);
+  if (!parsed) return null;
+  const root = path.resolve(productImagesRoot());
+  const directory = path.resolve(root, parsed.accountId, parsed.importDate, parsed.pid);
+  const absolutePath = path.resolve(directory, ...parsed.file.split('/'));
+  if (!absolutePath.startsWith(`${root}${path.sep}`)) return null;
+  let stat: fs.Stats;
+  try { stat = fs.statSync(absolutePath); } catch { return null; }
+  if (!stat.isFile() || !stat.size) return null;
+  let importedAt = new Date(`${parsed.importDate}T00:00:00.000Z`).toISOString();
+  try { const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8')) as { importedAt?: string }; if (typeof manifest.importedAt === 'string') importedAt = manifest.importedAt; } catch { /* manifest is optional */ }
+  return buildProductImageAsset({
+    accountId: parsed.accountId,
+    pid: parsed.pid,
+    importedAt,
+    importDate: parsed.importDate,
+    relativePath: path.relative(getWorkspacePath(), directory).replace(/\\/g, '/'),
+    files: [parsed.file],
+  }, parsed.file);
+}
+
+function parseProductImageAssetId(assetId: string): { accountId: string; importDate: string; pid: string; file: string } | null {
+  const prefix = 'product-image:';
+  if (!assetId.startsWith(prefix)) return null;
+  const parts = assetId.slice(prefix.length).split(':');
+  if (parts.length < 4) return null;
+  const [accountId, importDate, pid, ...fileParts] = parts;
+  const file = fileParts.join(':').replace(/\\/g, '/');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(importDate)) return null;
+  try {
+    safeSegment(accountId, 'account_id_invalid');
+    safeSegment(pid, 'product_pid_invalid');
+  } catch {
+    return null;
+  }
+  if (!file || path.posix.isAbsolute(file) || file.split('/').some((segment) => !segment || segment === '.' || segment === '..') || !IMAGE_EXTENSIONS.has(path.extname(file).toLowerCase())) return null;
+  return { accountId, importDate, pid, file };
+}
+
 function readDirectories(directory: string): string[] { try { return fs.readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => entry.name).sort((left, right) => left.localeCompare(right, undefined, { numeric: true })); } catch { return []; } }
+function readDirectoryEntries(directory: string): fs.Dirent[] { try { return fs.readdirSync(directory, { withFileTypes: true }); } catch { return []; } }
 function listImageFiles(directory: string): string[] { try { return fs.readdirSync(directory, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name, undefined, { numeric: true })).flatMap((entry) => entry.isDirectory() ? listImageFiles(path.join(directory, entry.name)).map((child) => `${entry.name}/${child}`) : IMAGE_EXTENSIONS.has(path.extname(entry.name).toLowerCase()) ? [entry.name] : []); } catch { return []; } }
 
 export function cleanupExpiredProductImages(now: Date | number = new Date(), options: { dryRun?: boolean } = {}): ProductImageCleanupResult {
   const cutoffDate = subtractDays(dateInShanghai(now), 3);
   const result: ProductImageCleanupResult = { cutoffDate, dryRun: options.dryRun === true, scannedDateDirectories: 0, deletedDirectories: 0, deletedFiles: 0, deletedIndexes: 0, failures: 0 };
   const root = productImagesRoot();
-  for (const accountId of readDirectories(root)) {
-    const accountDir = path.join(root, accountId);
-    for (const date of readDirectories(accountDir)) {
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > cutoffDate) continue;
-      result.scannedDateDirectories += 1;
-      const dateDir = path.join(accountDir, date);
-      for (const pid of readDirectories(dateDir)) {
-        const target = path.join(dateDir, pid);
-        try { result.deletedFiles += countFiles(target); if (!options.dryRun) fs.rmSync(target, { recursive: true, force: true }); result.deletedDirectories += 1; } catch { result.failures += 1; }
+  try {
+    for (const accountId of readDirectories(root)) {
+      const accountDir = path.join(root, accountId);
+      for (const date of readDirectories(accountDir)) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || date > cutoffDate) continue;
+        result.scannedDateDirectories += 1;
+        const dateDir = path.join(accountDir, date);
+        for (const pid of readDirectories(dateDir)) {
+          const target = path.join(dateDir, pid);
+          try { result.deletedFiles += countFiles(target); if (!options.dryRun) fs.rmSync(target, { recursive: true, force: true }); result.deletedDirectories += 1; } catch { result.failures += 1; }
+        }
+        for (const entry of readDirectoryEntries(dateDir)) {
+          const target = path.join(dateDir, entry.name);
+          try { if (entry.isFile()) { result.deletedFiles += 1; if (/(pid|hash|thumb|import|manifest|index)/i.test(entry.name)) result.deletedIndexes += 1; if (!options.dryRun) fs.rmSync(target, { force: true }); } else if (entry.isDirectory() && !options.dryRun) fs.rmSync(target, { recursive: true, force: true }); } catch { result.failures += 1; }
+        }
+        if (!options.dryRun) { try { fs.rmSync(dateDir, { recursive: true, force: true }); } catch { result.failures += 1; } }
       }
-      for (const entry of fs.existsSync(dateDir) ? fs.readdirSync(dateDir, { withFileTypes: true }) : []) {
-        const target = path.join(dateDir, entry.name);
-        try { if (entry.isFile()) { result.deletedFiles += 1; if (/(pid|hash|thumb|import|manifest|index)/i.test(entry.name)) result.deletedIndexes += 1; if (!options.dryRun) fs.rmSync(target, { force: true }); } else if (entry.isDirectory() && !options.dryRun) fs.rmSync(target, { recursive: true, force: true }); } catch { result.failures += 1; }
-      }
-      if (!options.dryRun) { try { fs.rmSync(dateDir, { recursive: true, force: true }); } catch { result.failures += 1; } }
     }
+  } finally {
+    if (!options.dryRun && result.scannedDateDirectories > 0) invalidateProductImageDirectoryCache();
   }
-  directoryCache = null;
   return result;
 }
 

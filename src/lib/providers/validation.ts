@@ -65,8 +65,12 @@ export function validateGenerationRequest(input: GenerationValidationInput): Gen
   if (referenceImages.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
   if (referenceVideos.length > (config.supports.referenceVideos ?? 0)) throw new Error('too_many_reference_videos');
   if (referenceAudios.length > config.supports.referenceAudios) throw new Error('too_many_reference_audios');
+  if (input.provider === 'dola-sd2' && referenceImages.length === 0) throw new Error('reference_images_required');
   if (input.provider === 'wan-3-nsfw' && referenceAudios.length > 0 && referenceImages.length === 0 && referenceVideos.length === 0) {
     throw new Error('wan_reference_audio_requires_visual');
+  }
+  if (input.provider === 'apiaw-seedance-video' && referenceAudios.length > 0 && referenceImages.length === 0 && referenceVideos.length === 0) {
+    throw new Error('seedance_reference_audio_requires_visual');
   }
   const isSdMini = input.provider === 'grok-video' && isSdMiniModel(input.model);
   const isQualityV4 = input.provider === 'quality-v4';
@@ -89,6 +93,7 @@ export function validateGenerationRequest(input: GenerationValidationInput): Gen
     // snumom's按秒 Grok model accepts any integer duration >= 6 (the
     // fixed-price Imagine model remains restricted to its documented values).
     const isGrokPerSecond = input.provider === 'grok-video' && isGrokPerSecondModel(input.model);
+    if (input.provider === 'dola-sd2' && !Number.isInteger(durationInput)) throw new Error('unsupported_duration');
     if (isSdMini) {
       // sd-mini accepts exactly 5, 10 or 15 seconds.
       if (!Number.isInteger(durationInput) || ![5, 10, 15].includes(duration)) throw new Error('unsupported_duration');

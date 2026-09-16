@@ -33,5 +33,6 @@ describe('production queue attribution labels', () => {
 
   it('does not repeat the prompt model in the supplier name', () => {
     expect(promptAttributionLabel({ promptMode: 'asset-template-child-prompt', promptProvider: 'pomoai-gpt-prompt', promptModel: 'gpt-5.5' })).toBe('PomoAI · gpt-5.5');
+    expect(promptAttributionLabel({ promptMode: 'asset-template-child-prompt', promptProvider: 'secure-skill-gpt-prompt', promptModel: 'gpt-5.5' })).toBe('secure-skill · gpt-5.5');
   });
 });

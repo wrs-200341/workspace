@@ -151,6 +151,7 @@ function baseBody(overrides: Record<string, unknown> = {}): Record<string, unkno
 
 describe('generate-video automatic child prompt queueing', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     tasks = new Map();
     queuedIds = [];
     mockRequireApiRole.mockResolvedValue({ role: 'admin', username: 'admin' });
@@ -213,6 +214,36 @@ describe('generate-video automatic child prompt queueing', () => {
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ success: false, error: 'task_name_reference_required' });
     expect(mockCreateProviderTasks).not.toHaveBeenCalled();
+  });
+
+  it('queues dola sd2 with its pinned supplier model, local reference and five-second default', async () => {
+    mockGetProviderConfig.mockReturnValue({ model: 'api_hmstudio_seedance_v2_0', supports: { durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], ratios: ['9:16'], resolutions: ['720p'] } });
+    const response = await POST(request(baseBody({ provider: 'dola-sd2', model: 'dola sd2', modelId: 'dola-sd2', count: 1, duration: undefined, promptMode: 'manual', referenceAssetIds: ['image-1'] })), params);
+    expect(response.status).toBe(202);
+    expect(mockValidateGenerationRequest).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'dola-sd2', model: 'api_hmstudio_seedance_v2_0', duration: 5,
+      referenceImages: ['https://pending.invalid/reference-image'],
+    }));
+    expect(tasks.get('task-1')).toMatchObject({ provider: 'dola-sd2', model: 'api_hmstudio_seedance_v2_0', metadata: { duration: 5, referenceAssetIds: ['image-1'] } });
+    expect(queuedIds).toEqual(['task-1']);
+    expect(mockSubmitVideo).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ referenceAssetIds: [] }, 'reference_images_required'],
+    [{ referenceAssetIds: ['image-1', 'image-2'] }, 'too_many_reference_images'],
+    [{ referenceVideoAssetIds: ['video-1'] }, 'too_many_reference_videos'],
+    [{ referenceAudios: ['https://assets.example/reference.mp3'] }, 'too_many_reference_audios'],
+    [{ duration: 5.5 }, 'unsupported_duration'],
+  ])('rejects an invalid dola request before queueing: %s', async (overrides, error) => {
+    const { validateGenerationRequest } = await vi.importActual<typeof import('@/lib/providers/validation')>('@/lib/providers/validation');
+    mockGetProviderConfig.mockReturnValue({ kind: 'video', model: 'api_hmstudio_seedance_v2_0', supports: { durations: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15], ratios: ['9:16'], resolutions: ['720p'], referenceImages: 1, referenceVideos: 0, referenceAudios: 0 } });
+    mockValidateGenerationRequest.mockImplementation(validateGenerationRequest);
+    const response = await POST(request(baseBody({ provider: 'dola-sd2', count: 1, promptMode: 'manual', referenceAssetIds: ['image-1'], ...overrides })), params);
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ success: false, error });
+    expect(mockCreateProviderTasks).not.toHaveBeenCalled();
+    expect(mockSubmitVideo).not.toHaveBeenCalled();
   });
 
   it('rejects manual naming without a task name', async () => {

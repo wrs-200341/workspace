@@ -5,7 +5,7 @@ import { getProviderConfig, type ProviderId } from '@/lib/providers/config';
 import { createProviderTasks, flushProviderTaskStore, getProviderTask } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
 import { assertAssetReference } from '@/lib/workspace/referenceBridge';
-import { listProductImageAssets } from '@/lib/workspace/productImages';
+import { readProductImageAsset } from '@/lib/workspace/productImages';
 import { getDefaultImageResolution, getDefaultProductionAspectRatio } from '@/lib/workspace/production/defaults';
 import { firstReferenceImageName } from '@/lib/workspace/taskMetadata';
 import { enqueueProviderTask, SCHEDULER_RUNTIME_ID } from '@/lib/providers/concurrency';
@@ -42,10 +42,9 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const normalized = validateGenerationRequest({ provider, model, aspectRatio, resolution, referenceImages: rawImages, referenceAudios: [] });
     if (rawImages.length + orderedImageAssets.length > config.supports.referenceImages) throw new Error('too_many_reference_images');
     // Only validate identifiers here. Publishing references and reading image bytes belong to the worker.
-    const products = orderedImageAssets.some((item) => item.kind === 'product-image') ? listProductImageAssets() : [];
     for (const asset of orderedImageAssets) {
       if (asset.kind === 'image') assertAssetReference(id, asset.id, ['image']);
-      else if (!products.some((product) => product.id === asset.id)) throw new Error('reference_asset_not_found');
+      else if (!readProductImageAsset(asset.id)) throw new Error('reference_asset_not_found');
     }
     const referenceImageName = firstReferenceImageName({ accountId: id, assetIds: orderedImageAssets.filter((item) => item.kind === 'image').map((item) => item.id), productImageAssetIds: orderedImageAssets.filter((item) => item.kind === 'product-image').map((item) => item.id), referenceAssetOrder: orderedImageAssets, rawReferenceImages: rawImages });
     const baseMetadata = {

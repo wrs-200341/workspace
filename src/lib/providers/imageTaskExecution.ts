@@ -7,7 +7,7 @@ import { processMockProviderTask } from './taskProcessor';
 import { assertAssetReference, publishAssetReferences } from '@/lib/workspace/referenceBridge';
 import { getWorkspacePath } from '@/lib/storagePaths';
 import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls } from '@/lib/workspace/imageInventory';
-import { getProductImageAbsolutePath, listProductImageAssets, publishProductImageReferences } from '@/lib/workspace/productImages';
+import { getProductImageAbsolutePath, readProductImageAsset, publishProductImageReferences } from '@/lib/workspace/productImages';
 
 type ImageAsset = { id: string; kind: 'image' | 'product-image' };
 type ReferenceFile = { bytes: Uint8Array; mimeType: string; fileName: string };
@@ -103,14 +103,13 @@ function rebuildImageSubmission(task: ProviderTask): ImageSubmissionInput {
   const images = [...rawImages, ...published.urls];
   const normalized = validateGenerationRequest({ provider, model, aspectRatio: typeof metadata.aspectRatio === 'string' ? metadata.aspectRatio : undefined, resolution: typeof metadata.resolution === 'string' ? metadata.resolution : undefined, referenceImages: images, referenceAudios: [] });
   const needsFiles = ['yuanai-image', 'aicloud-gpt-image', 'pomoai-gemini-image', 'junze-gemini-image', 'origin-gpt-image', 'origin-nano-image'].includes(provider);
-  const products = needsFiles && assets.some((asset) => asset.kind === 'product-image') ? listProductImageAssets() : [];
   const files = needsFiles && assets.length ? assets.map((asset): ReferenceFile => {
     if (asset.kind === 'image') {
       const reference = assertAssetReference(task.accountId, asset.id, ['image']);
       if (!reference.relativePath) throw new Error('reference_asset_not_found');
       return { bytes: new Uint8Array(fs.readFileSync(getWorkspacePath(reference.relativePath))), mimeType: reference.mimeType || 'image/png', fileName: reference.name || `${reference.id}.png` };
     }
-    const product = products.find((candidate) => candidate.id === asset.id);
+    const product = readProductImageAsset(asset.id);
     if (!product) throw new Error('reference_asset_not_found');
     return { bytes: new Uint8Array(fs.readFileSync(getProductImageAbsolutePath(asset.id))), mimeType: product.mimeType, fileName: product.name };
   }) : undefined;

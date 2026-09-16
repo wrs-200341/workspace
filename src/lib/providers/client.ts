@@ -1,6 +1,11 @@
-import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildSeedreamImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, GPT_RESPONSES_MAX_OUTPUT_TOKENS, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildApiawSeedanceVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildSeedreamImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, GPT_RESPONSES_MAX_OUTPUT_TOKENS, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, isProviderLiveEnabled, POMOAI_PROMPT_FALLBACK_MODELS, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
+import { buildDolaSd2VideoPayload } from './payloads';
+import { randomUUID } from 'node:crypto';
+import dns from 'node:dns/promises';
+import sharp from 'sharp';
+import { assertPublicTarget } from '@/lib/workspace/externalImageImport';
 
 // A 4K image response can legitimately contain several megabytes of Base64
 // JSON. Keep a bounded limit, but do not reject normal 4K generations.
@@ -24,9 +29,43 @@ const POMOAI_PROMPT_GENERATION_TIMEOUT_MS = 180 * 1000;
 const BIGSNAKE_PROMPT_GENERATION_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_VIDEO_CONTENT_BYTES = 200 * 1024 * 1024;
 const MAX_ERROR_RESPONSE_BYTES = 1 * 1024 * 1024;
+const YUANAI_REFERENCE_OPTIMIZE_THRESHOLD_BYTES = 4 * 1024 * 1024;
+const YUANAI_REFERENCE_MAX_EDGE = 2048;
+
+async function optimizeYuanAIReference(reference: MultipartReference): Promise<MultipartReference> {
+  if (reference.bytes.byteLength <= YUANAI_REFERENCE_OPTIMIZE_THRESHOLD_BYTES) return reference;
+  try {
+    const bytes = await sharp(reference.bytes, { animated: false, limitInputPixels: 100_000_000 })
+      .rotate()
+      .resize({
+        width: YUANAI_REFERENCE_MAX_EDGE,
+        height: YUANAI_REFERENCE_MAX_EDGE,
+        fit: 'inside',
+        withoutEnlargement: true,
+      })
+      .flatten({ background: '#ffffff' })
+      .jpeg({ quality: 92, chromaSubsampling: '4:4:4' })
+      .toBuffer();
+    if (bytes.byteLength >= reference.bytes.byteLength) return reference;
+    return {
+      bytes: new Uint8Array(bytes),
+      mimeType: 'image/jpeg',
+      fileName: reference.fileName.replace(/\.[^.]+$/, '') + '.jpg',
+    };
+  } catch {
+    // The asset was already validated before submission. If optimization is
+    // unavailable, preserve the original request instead of losing the task.
+    return reference;
+  }
+}
 
 export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' | 'content', env: Readonly<Record<string, string | undefined>> = process.env): string {
   const base = getProviderConfig(id, env).baseUrl.replace(/\/$/, '');
+  if (id === 'dola-sd2') {
+    const dolaBase = /\/open-api\/v1$/i.test(base) ? base : `${base}/open-api/v1`;
+    if (operation === 'content') throw new Error('provider_content_unsupported');
+    return operation === 'create' ? `${dolaBase}/generations` : `${dolaBase}/tasks/{id}`;
+  }
   if (id === 'grok-video') return operation === 'create' ? `${base}/videos` : `${base}/videos/{id}` + (operation === 'content' ? '/content' : '');
   if (id === 'yuanai-grok-video') {
     const yuanaiBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
@@ -61,6 +100,12 @@ export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' 
     // is never polled after a successful generation response.
     return `${base}/v1/images/generations`;
   }
+  if (id === 'apiaw-seedance-video') {
+    const apiawBase = /\/v1$/i.test(base) ? base : `${base}/v1`;
+    if (operation === 'create') return `${apiawBase}/videos`;
+    if (operation === 'content') return `${apiawBase}/videos/{id}/content`;
+    return `${apiawBase}/videos/{id}`;
+  }
   if (id === 'minimax-h3' || id === 'miku-minimax') {
     // MiniMax H3 uses secure-skill's OpenAI-compatible async video contract.
     // MikuAPI serves the same shape (`/v1/videos` + poll + `/content`) from a
@@ -76,7 +121,7 @@ export function providerEndpoint(id: ProviderId, operation: 'create' | 'status' 
   if (id === 'aicloud-gpt-image') return operation === 'create' ? `${base}/v1/images/generations` : `${base}/v1/images/{id}`;
   if (id === 'pomoai-gemini-image') return `${base}/v1beta/models/${encodeURIComponent(getProviderConfig(id, env).model)}:generateContent`;
   if (id === 'gpt-2999-prompt') return `${base}/v1/responses`;
-  if (id === 'pomoai-gpt-prompt' || id === 'oairegbox-gpt-prompt') return `${base}/responses`;
+  if (id === 'pomoai-gpt-prompt' || id === 'oairegbox-gpt-prompt' || id === 'secure-skill-gpt-prompt') return `${base}/responses`;
   if (id === 'oairegbox-omni') return operation === 'create' ? `${base}/videos` : `${base}/videos/{id}` + (operation === 'content' ? '/content' : '');
   if (id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'junze-gpt-image') return operation === 'create' ? `${base}/images/generations` : `${base}/images/{id}`;
   if (id === 'origin-nano-image') return operation === 'create' ? `${base}/chat/completions` : `${base}/chat/completions`;
@@ -241,7 +286,10 @@ export function providerErrorInfo(error: unknown, fallback?: { body?: unknown; e
  * the HTTP boundary; this second guard protects the task store as well.
  */
 export function providerResponseSnapshot(error: unknown, fallback?: { body?: unknown; endpoint?: string; method?: string }): Record<string, unknown> {
-  const info = providerErrorInfo(error, fallback);
+  const baseInfo = providerErrorInfo(error, fallback);
+  const info = error === undefined && fallback?.body !== undefined && !looksLikeFailedProviderBody(fallback.body)
+    ? { ...baseInfo, code: 'provider_response_received' }
+    : baseInfo;
   const redactRaw = (value: string): string => value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
     .replace(/((?:authorization|api[-_]?key|apikey|access[_-]?token|token|secret|password|cookie|set[-_]?cookie|session|jwt)\s*[=:]\s*)(["']?)[^&\s,"'}]+/gi, '$1$2[redacted]')
@@ -289,6 +337,13 @@ export function providerResponseSnapshot(error: unknown, fallback?: { body?: unk
   };
 }
 
+function looksLikeFailedProviderBody(value: unknown): boolean {
+  const root = asRecord(value);
+  const data = asRecord(root?.data) ?? root;
+  const status = (firstString(data, ['status', 'state', 'phase']) ?? firstString(root, ['status', 'state', 'phase']))?.toLowerCase().replace(/[\s-]+/g, '_');
+  return status === 'failed' || status === 'failure' || status === 'error' || Boolean(data?.error || root?.error);
+}
+
 /**
  * Convert the different response envelopes used by the historical providers
  * into the workspace task contract. The parser is deliberately permissive on
@@ -296,17 +351,21 @@ export function providerResponseSnapshot(error: unknown, fallback?: { body?: unk
  */
 export function normalizeProviderResponse(_provider: ProviderId, payload: unknown): NormalizedProviderStatus {
   const root = asRecord(payload);
-  const data = asRecord(root?.data) ?? root;
+  const data = (_provider === 'dola-sd2' ? asRecord(root?.task) : asRecord(root?.data)) ?? root;
   const providerTaskId = firstString(data, ['id', 'task_id', 'taskId', 'request_id', 'requestId'])
     ?? firstString(root, ['id', 'task_id', 'taskId', 'request_id', 'requestId']);
   const rawStatus = firstString(data, ['status', 'state', 'phase']) ?? firstString(root, ['status', 'state', 'phase']);
-  const normalizedStatus = normalizeStatus(rawStatus);
+  const normalizedStatus = _provider === 'dola-sd2' && root?.ok === false ? 'failed'
+    : _provider === 'dola-sd2' && rawStatus === 'review' ? 'running'
+    : _provider === 'dola-sd2' && rawStatus === 'submitting' ? 'queued'
+      : normalizeStatus(rawStatus);
   const rawProgress = firstNumber(data, ['progress', 'progress_percent', 'percentage']) ?? firstNumber(root, ['progress', 'progress_percent', 'percentage']);
   // snumom returns finished Grok videos in top-level `url`, `result_url`, or
   // `video_url` fields. Those URLs may not include a .mp4 suffix (for example
   // signed CDN URLs), so collect these explicit output fields before applying
   // the extension filter used for generic nested provider envelopes.
   const explicitOutputUrls = [
+    ...(_provider === 'dola-sd2' && typeof data?.output_url === 'string' ? [data.output_url] : []),
     ...collectExplicitOutputUrls(data, _provider === 'quality-v4'),
     ...collectExplicitOutputUrls(root, _provider === 'quality-v4'),
     ...(_provider === 'pro666-video' ? [...collectNestedOutputUrls(data), ...collectNestedOutputUrls(root)] : []),
@@ -321,11 +380,11 @@ export function normalizeProviderResponse(_provider: ProviderId, payload: unknow
       ...collectMGRouterVideoPaths(root).map(normalizeMGRouterVideoUrl),
     ].filter(Boolean)
     : explicitOutputUrls;
-  const outputUrls = dedupeVideoOutputUrls(_provider, [...new Set([...normalizedExplicit, ...collectUrls(root)])])
+  const outputUrls = dedupeVideoOutputUrls(_provider, [...new Set([...normalizedExplicit, ...collectUrls(_provider === 'dola-sd2' ? undefined : root)])])
     .filter((url) => _provider === 'quality-v4' ? /^https?:\/\//i.test(url) : /^https:\/\//i.test(url))
     .map((url) => _provider === 'quality-v4' ? normalizeQualityV4Url(url) : url)
     .filter(Boolean);
-  const outputBase64 = [...collectBase64(root), ...collectInlineImageData(root)];
+  const outputBase64 = _provider === 'dola-sd2' ? [] : [...collectBase64(root), ...collectInlineImageData(root)];
   // Image providers commonly return a successful data envelope without a
   // task status (for example Gemini inlineData or OpenAI b64_json). Treat a
   // validated output as completed so the workspace does not leave finished
@@ -381,6 +440,7 @@ function normalizeProviderErrorCode(code: string | undefined, message?: string, 
   if (provider === 'pro666-video' && (normalized.includes('video_urls is not enabled') || (normalized.includes('video url') && normalized.includes('not enabled')))) {
     return 'pro666_reference_video_unsupported';
   }
+  if (/prompt[_\s-]?too[_\s-]?long/.test(normalized) || (/(字节|utf-?8)/i.test(normalized) && /(最长|超过|超出|too long|at most)/i.test(normalized) && /(prompt|提示词)/i.test(normalized))) return 'video_prompt_too_long';
   if (normalized.includes('image_rejected') || normalized.includes('reference_rejected')) return 'provider_reference_rejected';
   if (normalized.includes('content_policy') || normalized.includes('content review') || normalized.includes('content_review')) return 'provider_content_policy';
   if (normalized.includes('invalid_token') || normalized.includes('invalid_api_key') || normalized.includes('unauthorized')) return 'provider_unauthorized';
@@ -512,7 +572,7 @@ export function sanitizeProviderError(message: string): string {
  * the workspace UI to tell configuration, model availability, and upstream
  * execution failures apart.
  */
-async function providerHttpError(response: Response, request?: { endpoint?: string; method?: string }): Promise<Error> {
+async function providerHttpError(response: Response, request?: { endpoint?: string; method?: string }): Promise<ProviderRequestError> {
   let code = `provider_${response.status}`;
   let rawBody = '';
   let body: unknown;
@@ -523,7 +583,9 @@ async function providerHttpError(response: Response, request?: { endpoint?: stri
     const nested = payload.error && typeof payload.error === 'object' ? payload.error as Record<string, unknown> : undefined;
     const upstreamCode = String(nested?.code ?? payload.code ?? '').toLowerCase();
     const upstreamMessage = String(nested?.message ?? payload.message ?? '').toLowerCase();
+    const diagnostic = `${upstreamCode} ${upstreamMessage}`;
     if (response.status === 401 || upstreamCode.includes('invalid_token') || upstreamCode.includes('invalid_api_key') || upstreamMessage.includes('invalid token')) code = 'provider_unauthorized';
+    else if (/prompt[_\s-]?too[_\s-]?long/.test(diagnostic) || (/(字节|utf-?8)/i.test(diagnostic) && /(最长|超过|超出|too long|at most)/i.test(diagnostic) && /(prompt|提示词)/i.test(diagnostic))) code = 'video_prompt_too_long';
     else if (upstreamCode.includes('image_rejected') || upstreamCode.includes('reference_rejected')) code = 'provider_reference_rejected';
     else if (upstreamCode.includes('content_policy') || upstreamCode.includes('content_review') || upstreamMessage.includes('content review')) code = 'provider_content_policy';
     else if (upstreamCode.includes('model_not_found') || upstreamMessage.includes('no available channel')) code = 'provider_model_unavailable';
@@ -623,10 +685,10 @@ async function requestProvider(url: string, apiKey: string, body: Record<string,
   return requestProviderWithFetcher(fetch, url, apiKey, body, timeoutMs);
 }
 
-async function requestProviderWithFetcher(fetcher: typeof fetch, url: string, apiKey: string, body: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS): Promise<unknown> {
+async function requestProviderWithFetcher(fetcher: typeof fetch, url: string, apiKey: string, body: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS, extraHeaders: Record<string, string> = {}): Promise<unknown> {
   let response: Response;
   try {
-    response = await fetcher(url, { method: 'POST', headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+    response = await fetcher(url, { method: 'POST', headers: { ...extraHeaders, accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
   } catch (error) {
     if (isProviderTimeoutError(error)) {
       throw new ProviderRequestError({ code: 'provider_408', endpoint: url, method: 'POST', receivedAt: new Date().toISOString() });
@@ -650,7 +712,26 @@ export async function syncProviderTask(provider: ProviderId, providerTaskId: str
     const pending = { request_id: providerTaskId, status: 'queued' };
     return { ...normalizeProviderResponse(provider, pending), providerTaskId, response: pending };
   }
-  if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'GET' });
+  if (!response.ok) {
+    const error = await providerHttpError(response, { endpoint, method: 'GET' });
+    // MGRouter returns HTTP 400 after an accepted xAI video job has failed
+    // upstream. Treating this as a transport error leaves the persisted task
+    // looking queued until the six-hour stale timeout, even though no output
+    // can ever become available. Preserve the response as terminal failure so
+    // the durable worker can move the same logical task to its next supplier.
+    if (provider === 'mgrouter-grok-video' && response.status === 400) {
+      return {
+        providerTaskId,
+        status: 'failed',
+        progress: 100,
+        outputUrls: [],
+        outputBase64: [],
+        error: 'provider_upstream_failed',
+        response: error.info.body ?? { error: { message: 'MGRouter upstream returned status 400' } },
+      };
+    }
+    throw error;
+  }
   const contentType = response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() || '';
   if (provider === 'seedream' && contentType.startsWith('image/')) {
     const bytes = await readBinaryLimited(response, MAX_RESPONSE_BYTES);
@@ -660,7 +741,7 @@ export async function syncProviderTask(provider: ProviderId, providerTaskId: str
     return { providerTaskId, status: 'completed', progress: 100, outputUrls: [], outputBase64: [dataUrl], response: payload };
   }
   const payload = await readJsonLimited(response);
-  return { ...normalizeProviderResponse(provider, payload), ...(provider === 'yuanai-grok-video' || provider === 'seedream' ? { providerTaskId } : {}), response: payload };
+  return { ...normalizeProviderResponse(provider, payload), ...(provider === 'yuanai-grok-video' || provider === 'seedream' || provider === 'apiaw-seedance-video' ? { providerTaskId } : {}), response: payload };
 }
 
 /**
@@ -675,7 +756,7 @@ export async function downloadProviderVideoContent(
   providerTaskId: string,
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
 ): Promise<{ bytes: Uint8Array; mimeType: string }> {
-  if (provider !== 'grok-video' && provider !== 'yuanai-grok-video' && provider !== 'mgrouter-grok-video' && provider !== 'oairegbox-omni' && provider !== 'minimax-h3' && provider !== 'miku-minimax' && provider !== 'wan-3-nsfw') throw new Error('provider_content_unsupported');
+  if (provider !== 'grok-video' && provider !== 'yuanai-grok-video' && provider !== 'mgrouter-grok-video' && provider !== 'oairegbox-omni' && provider !== 'minimax-h3' && provider !== 'miku-minimax' && provider !== 'wan-3-nsfw' && provider !== 'apiaw-seedance-video') throw new Error('provider_content_unsupported');
   const env = dependencies.env ?? process.env;
   const fetcher = dependencies.fetch ?? fetch;
   const config = getProviderConfig(provider, env);
@@ -724,17 +805,60 @@ export async function downloadProviderVideoContent(
   return { bytes, mimeType };
 }
 
-export type SubmitVideoInput = { provider: Extract<ProviderId, 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni'>; model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; referenceImages?: string[]; referenceFiles?: MultipartReference[]; referenceAudios?: string[]; referenceVideos?: string[]; media?: Array<{ type: 'reference_image' | 'reference_video' | 'audio'; url: string }> };
+export type SubmitVideoInput = { provider: Extract<ProviderId, 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'apiaw-seedance-video' | 'dola-sd2' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni'>; model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; requestId?: string; referenceImages?: string[]; referenceFiles?: MultipartReference[]; referenceAudios?: string[]; referenceVideos?: string[]; media?: Array<{ type: 'reference_image' | 'reference_video' | 'audio'; url: string }> };
+
+async function submitDolaSd2Video(input: SubmitVideoInput, dependencies: { env: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch }): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
+  const config = getProviderConfig('dola-sd2', dependencies.env);
+  if (isLiveProvidersAllowed(dependencies.env) && !config.apiKey) throw new Error('provider_not_configured');
+  if (input.referenceVideos?.length || input.media?.some((item) => item.type === 'reference_video')) throw new Error('too_many_reference_videos');
+  if (input.referenceAudios?.length || input.media?.some((item) => item.type === 'audio')) throw new Error('too_many_reference_audios');
+  const urls = validateReferenceUrls(input.referenceImages?.length ? input.referenceImages : (input.media ?? []).filter((item) => item.type === 'reference_image').map((item) => item.url));
+  const references = [...(input.referenceFiles ?? [])];
+  if (urls.length + references.length > 1) throw new Error('too_many_reference_images');
+  const fetcher = dependencies.fetch ?? fetch;
+  for (const value of urls) {
+    try {
+      const target = await assertPublicTarget(value, (hostname) => dns.lookup(hostname, { all: true, verbatim: true }));
+      const response = await fetcher(target.toString(), { method: 'GET', redirect: 'error', signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS), cache: 'no-store' });
+      if (!response.ok) throw new Error('reference_asset_file_invalid');
+      const mimeType = (response.headers.get('content-type') || '').split(';', 1)[0].trim().toLowerCase();
+      if (!mimeType.startsWith('image/')) throw new Error('reference_asset_file_invalid');
+      const bytes = await readBinaryLimited(response, 50 * 1024 * 1024);
+      references.push({ bytes, mimeType, fileName: target.pathname.split('/').pop() || 'reference.png' });
+    } catch (error) {
+      if (error instanceof Error && ['image_url_invalid', 'image_url_target_blocked'].includes(error.message)) throw error;
+      throw new Error('reference_asset_file_invalid');
+    }
+  }
+  const body = buildDolaSd2VideoPayload({ prompt: input.prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, requestId: input.requestId || randomUUID(), references });
+  if (!config.apiKey) return { mode: 'mock', provider: 'dola-sd2', response: { task: { id: `mock_${body.request_id}`, status: 'submitting' } } };
+  const response = await requestProviderWithFetcher(fetcher, providerEndpoint('dola-sd2', 'create', dependencies.env), config.apiKey, body, REQUEST_TIMEOUT_MS, { 'Idempotency-Key': String(body.request_id) });
+  return { mode: 'live', provider: 'dola-sd2', response };
+}
+
+const SNUMOM_GROK_PROMPT_MAX_UTF8_BYTES = 4_096;
+
+function validateVideoPromptLimit(input: Pick<SubmitVideoInput, 'provider' | 'model' | 'prompt'>): void {
+  const isSnumomGrok = input.provider === 'grok-video'
+    && input.model.trim().toLowerCase().startsWith('grok-imagine-video-1.5');
+  if (!isSnumomGrok) return;
+  if (Buffer.byteLength(input.prompt.trim(), 'utf8') > SNUMOM_GROK_PROMPT_MAX_UTF8_BYTES) {
+    throw new Error('video_prompt_too_long');
+  }
+}
 
 export async function submitVideo(input: SubmitVideoInput, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
   const env = dependencies.env ?? process.env;
+  if (input.provider === 'dola-sd2') return submitDolaSd2Video(input, { ...dependencies, env });
   const isSdMini = input.provider === 'grok-video' && input.model === 'sd-mini';
   const isYuanAIGrok = input.provider === 'yuanai-grok-video';
   const isMiniMax = input.provider === 'minimax-h3';
   const isMiku = input.provider === 'miku-minimax';
   const isPro666 = input.provider === 'pro666-video';
   const isWanRelay = input.provider === 'wan-3-nsfw';
+  const isApiawSeedance = input.provider === 'apiaw-seedance-video';
   const config = getProviderConfig(input.provider, env);
+  validateVideoPromptLimit(input);
   if (input.provider === 'mgrouter-grok-video' && (input.referenceAudios?.length || input.media?.some((item) => item.type === 'audio'))) {
     throw new Error('mgrouter_reference_audio_unsupported');
   }
@@ -755,6 +879,11 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
     && (input.referenceVideos?.length ?? 0) === 0) {
     throw new Error('wan_reference_audio_requires_visual');
   }
+  if (isApiawSeedance && (input.referenceAudios?.length ?? 0) > 0
+    && (input.referenceImages?.length ?? 0) === 0
+    && (input.referenceVideos?.length ?? 0) === 0) {
+    throw new Error('seedance_reference_audio_requires_visual');
+  }
   if (input.provider === 'oairegbox-omni' && (input.referenceImages ?? []).length > 0 && !(input.referenceFiles?.length)) throw new Error('reference_files_required');
   const sdMediaReferences = isSdMini && (!input.referenceImages || input.referenceImages.length === 0)
     ? (input.media ?? []).filter((item) => item.type === 'reference_image').map((item) => item.url)
@@ -764,7 +893,9 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
     ? validateQualityV4References(rawReferenceImages)
     : isSdMini ? validateHttpReferenceUrls(rawReferenceImages) : validateReferenceUrls(input.referenceImages ?? []);
   const hasOaiFiles = input.provider === 'oairegbox-omni' && Boolean(input.referenceFiles?.length);
-  const body = isWanRelay
+  const body = isApiawSeedance
+    ? buildApiawSeedanceVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+    : isWanRelay
     ? buildWanRelayVideoPayload({ model: input.model, prompt: input.prompt.trim(), seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
     : input.provider === 'quality-v4'
     ? buildQualityV4VideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, resolution: input.resolution, size: input.aspectRatio, referenceImages: references, referenceVideos: validateQualityV4References(input.referenceVideos ?? []), referenceAudios: validateQualityV4References(input.referenceAudios ?? []) })
@@ -1034,7 +1165,7 @@ export async function generateGPTPrompt(input: { model: string; messages: readon
   return { mode: 'live', provider: 'gpt-2999-prompt', text: normalized.text, incompleteReason: normalized.incompleteReason, response };
 }
 
-type ResponsesPromptProvider = Extract<ProviderId, 'pomoai-gpt-prompt' | 'oairegbox-gpt-prompt'>;
+type ResponsesPromptProvider = Extract<ProviderId, 'pomoai-gpt-prompt' | 'oairegbox-gpt-prompt' | 'secure-skill-gpt-prompt'>;
 export type PromptGenerationResult = { mode: 'live' | 'mock'; provider: ProviderId; model: string; text: string; incompleteReason?: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackModels?: string[] };
 
 /** OpenAI Responses-compatible child-prompt provider (PomoAI or OAIRegBox). */
@@ -1046,7 +1177,10 @@ export async function generateResponsesPrompt(
   const env = dependencies.env ?? process.env;
   const config = getProviderConfig(provider, env);
   const model = input.model?.trim() || config.model;
-  const payload = buildGPTResponsesPayload(model, [{ role: 'user', content: input.prompt.trim() }], input.attachments ?? []);
+  const payload = {
+    ...buildGPTResponsesPayload(model, [{ role: 'user', content: input.prompt.trim() }], input.attachments ?? []),
+    ...(provider === 'secure-skill-gpt-prompt' ? { reasoning: { effort: 'medium' } } : {}),
+  };
   if (!config.apiKey) {
     if (isLiveProvidersAllowed(env)) throw new Error('provider_not_configured');
     return { mode: 'mock', provider, model, text: '', response: { id: `mock_${provider}_${Date.now()}`, status: 'queued', payload } };
@@ -1069,6 +1203,13 @@ export async function generateOAIRegboxGPTPrompt(
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
 ): Promise<PromptGenerationResult> {
   return generateResponsesPrompt('oairegbox-gpt-prompt', input, dependencies);
+}
+
+export async function generateSecureSkillGPTPrompt(
+  input: { model?: string; prompt: string; attachments?: readonly GPTPromptAttachment[] },
+  dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {},
+): Promise<PromptGenerationResult> {
+  return generateResponsesPrompt('secure-skill-gpt-prompt', input, dependencies);
 }
 
 /**
@@ -1223,7 +1364,8 @@ export async function generateYuanAIImage(input: { model: string; prompt: string
   const fetcher = dependencies.fetch ?? fetch;
   const config = getProviderConfig('yuanai-image', env);
   const references = validateReferenceUrls(input.referenceImages ?? []);
-  const fileReferences = input.referenceFiles ?? [];
+  const sourceFileReferences = input.referenceFiles ?? [];
+  const fileReferences = await Promise.all(sourceFileReferences.map(optimizeYuanAIReference));
   if (fileReferences.length > 0 && references.length > 0) throw new Error('yuanai_reference_sources_conflict');
   const body = fileReferences.length > 0
     ? buildYuanAIImageEditFormData({

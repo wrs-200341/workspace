@@ -1,4 +1,4 @@
-export type ProviderId = 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-image' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'seedream' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'yuanai-gemini-prompt' | 'yuanai-image' | 'aicloud-gpt-image' | 'pomoai-gemini-image' | 'pomoai-gpt-prompt' | 'oairegbox-gpt-prompt' | 'gpt-2999-prompt' | 'oairegbox-omni' | 'origin-gpt-image' | 'origin-grok-image' | 'origin-nano-image' | 'junze-gpt-image' | 'junze-gemini-image' | 'bigsnake-prompt';
+export type ProviderId = 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-image' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'seedream' | 'apiaw-seedance-video' | 'dola-sd2' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'yuanai-gemini-prompt' | 'yuanai-image' | 'aicloud-gpt-image' | 'pomoai-gemini-image' | 'pomoai-gpt-prompt' | 'oairegbox-gpt-prompt' | 'secure-skill-gpt-prompt' | 'gpt-2999-prompt' | 'oairegbox-omni' | 'origin-gpt-image' | 'origin-grok-image' | 'origin-nano-image' | 'junze-gpt-image' | 'junze-gemini-image' | 'bigsnake-prompt';
 
 export type ProviderCatalogEntry = {
   id: ProviderId;
@@ -80,12 +80,14 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
   // cached locally in the same request instead of being polled as a video.
   // Keep the measured 1086x1448 canvas as an explicit option alongside 1K.
   { id: 'seedream', name: 'Seedream 5 / apiaw', kind: 'image', model: 'dola-seedream-5-0-pro-260628', baseUrl: 'https://newapi.apiaw.com', liveEnv: 'SEEDREAM_API_KEY', supports: { referenceImages: 10, referenceVideos: 0, referenceAudios: 0, ratios: ['9:16', '16:9', '1:1', '3:4'], resolutions: ['1086x1448', '1k'] } },
+  { id: 'apiaw-seedance-video', name: 'Seedance 2.0 Mini（可生情趣） / apiaw', kind: 'video', model: 'seedance2.0-mini', baseUrl: 'https://newapi.apiaw.com', liveEnv: 'SEEDREAM_API_KEY', supports: { referenceImages: 9, referenceVideos: 3, referenceAudios: 3, durations: Array.from({ length: 12 }, (_, index) => index + 4), ratios: ['1:1', '16:9', '9:16'], resolutions: ['480p', '720p'] } },
   { id: 'yuanai-gemini-prompt', name: 'YuanAI Gemini', kind: 'prompt', model: process.env.GEMINI_PROMPT_MODEL || 'gemini-2.5-flash', baseUrl: 'https://yuanai.uk', liveEnv: 'GEMINI_PROMPT_API_KEY', supports: { referenceImages: 0, referenceVideos: 0, referenceAudios: 0, ratios: [], resolutions: [] } },
   { id: 'yuanai-image', name: 'YuanAI Image', kind: 'image', model: process.env.YUANAI_IMAGE_MODEL || 'gpt-image-2', baseUrl: 'https://yuanai.uk', liveEnv: 'YUANAI_API_KEY', supports: { referenceImages: 4, referenceVideos: 0, referenceAudios: 0, ratios: ['9:16', '16:9', '1:1'], resolutions: ['1k', '2k', '4k'] } },
   { id: 'aicloud-gpt-image', name: 'aicloud（大梦）', kind: 'image', model: 'gpt-image-2.5', baseUrl: 'https://aiclound.vip', liveEnv: 'AICLOUD_API_KEY', modelOptions: ['gpt-image-2.5', 'gpt-image-2.5-plus'], modelResolutions: { 'gpt-image-2.5': ['1k'], 'gpt-image-2.5-plus': ['2k', '4k'] }, supports: { referenceImages: 10, referenceVideos: 0, referenceAudios: 0, ratios: ['9:16', '16:9', '1:1'], resolutions: ['1k', '2k', '4k'] } },
   { id: 'pomoai-gemini-image', name: 'PomoAI Gemini Image', kind: 'image', model: process.env.POMOAI_MODEL || 'gemini-3.1-flash-image', baseUrl: 'https://www.pomoai.ai', liveEnv: 'POMOAI_API_KEY', supports: { referenceImages: 3, referenceVideos: 0, referenceAudios: 0, ratios: ['9:16', '16:9', '1:1'], resolutions: ['1k'] } },
   { id: 'pomoai-gpt-prompt', name: 'GPT / PomoAI', kind: 'prompt', model: process.env.POMOAI_GPT_PROMPT_MODEL || 'gpt-5.5', baseUrl: 'https://www.pomoai.ai/v1', liveEnv: 'POMOAI_GPT_PROMPT_API_KEY', promptModelOptions: POMOAI_CHAT_MODELS, promptFallbackModels: POMOAI_PROMPT_FALLBACK_MODELS, supports: { referenceImages: 10, referenceVideos: 0, referenceAudios: 0, ratios: [], resolutions: [] } },
   { id: 'oairegbox-gpt-prompt', name: 'GPT-5.5 / OAIRegBox', kind: 'prompt', model: process.env.OAIREGBOX_GPT_PROMPT_MODEL || 'gpt-5.5', baseUrl: 'https://newapi-2.oairegbox.cc/v1', liveEnv: 'OAIREGBOX_GPT_PROMPT_API_KEY', supports: { referenceImages: 10, referenceVideos: 0, referenceAudios: 0, ratios: [], resolutions: [] } },
+  { id: 'secure-skill-gpt-prompt', name: 'GPT-5.5 Medium / secure-skill', kind: 'prompt', model: process.env.SECURE_SKILL_GPT_MODEL || 'gpt-5.5', baseUrl: 'https://token.secure-skill.com/v1', liveEnv: 'SECURE_SKILL_GPT_API_KEY', supports: { referenceImages: 10, referenceVideos: 0, referenceAudios: 0, ratios: [], resolutions: [] } },
   { id: 'gpt-2999-prompt', name: 'GPT / 2999 API (Responses)', kind: 'prompt', model: process.env.GPT_PROMPT_MODEL || 'gpt-5.5', baseUrl: 'https://2999api.com', liveEnv: 'GPT_PROMPT_API_KEY', supports: { referenceImages: 10, referenceVideos: 0, referenceAudios: 0, ratios: [], resolutions: [] } },
   { id: 'oairegbox-omni', name: 'OAIRegBox Omni', kind: 'video', model: process.env.OAIREGBOX_MODEL || 'omni-fast-no-water', baseUrl: 'https://newapi-2.oairegbox.cc/v1', liveEnv: 'OAIREGBOX_API_KEY', supports: { referenceImages: 5, referenceVideos: 0, referenceAudios: 0, durations: [10], ratios: ['9:16', '16:9'], resolutions: ['720p'] } },
   // OriginGateway's customer document formally specifies the GPT Image 2
@@ -109,6 +111,7 @@ const CATALOG: readonly ProviderCatalogEntry[] = [
   // table and request validator.
   { id: 'minimax-h3', name: 'MiniMax H3 / secure-skill', kind: 'video', model: process.env.MINIMAX_MODEL || 'minimax-h3', baseUrl: 'https://token.secure-skill.com', liveEnv: 'MINIMAX_API_KEY', supports: { referenceImages: 5, referenceVideos: 0, referenceAudios: 3, durations: [4, 6, 8, 10, 12, 15], ratios: ['21:9', '16:9', '4:3', '1:1', '3:4', '9:16'], resolutions: ['720p'] } },
   { id: 'pro666-video', name: 'Pro666 / sd2-933-mini', kind: 'video', model: 'sd2-933-mini', baseUrl: 'https://api.pro666.top', liveEnv: 'PRO666_VIDEO_API_KEY', supports: { referenceImages: 1, referenceVideos: 0, referenceAudios: 1, durations: [12], ratios: ['9:16'], resolutions: ['720p'] } },
+  { id: 'dola-sd2', name: 'dola sd2 / yuansucang', kind: 'video', model: 'dola-sd2', baseUrl: 'https://mj.yuansucang.cn/open-api/v1', liveEnv: 'DOLA_SD2_API_KEY', supports: { referenceImages: 1, referenceVideos: 0, referenceAudios: 0, durations: Array.from({ length: 12 }, (_, index) => index + 4), ratios: ['9:16'], resolutions: ['720p'] } },
 ];
 
 function cloneProvider(provider: ProviderCatalogEntry): ProviderCatalogEntry {
@@ -124,17 +127,18 @@ function cloneProvider(provider: ProviderCatalogEntry): ProviderCatalogEntry {
 export function getProviderCatalog(): ProviderCatalogEntry[] { return CATALOG.map(cloneProvider); }
 export function isLiveProvidersAllowed(env: Readonly<Record<string, string | undefined>> = process.env): boolean { return env.WORKSPACE_ENABLE_LIVE_PROVIDERS === 'true'; }
 export function getProviderConfig(id: ProviderId, env: Readonly<Record<string, string | undefined>> = process.env): ProviderCatalogEntry & { apiKey?: string } { const provider = CATALOG.find((candidate) => candidate.id === id); if (!provider) throw new Error('provider_not_found'); const envBase = providerBaseEnv(id, env); const baseUrl = envBase && isExactOrigin(envBase, provider.baseUrl) ? envBase.replace(/\/$/, '') : provider.baseUrl; return { ...cloneProvider(provider), baseUrl, apiKey: isLiveProvidersAllowed(env) ? env[provider.liveEnv] || undefined : undefined }; }
-export function isLiveProviderEnabled(env: Readonly<Record<string, string | undefined>> = process.env): boolean { return isLiveProvidersAllowed(env) && Boolean(env.GROK_VIDEO_API_KEY || env.YUANAI_GROK_VIDEO_API_KEY || env.MGROUTER_API_KEY || env.WAN_API_KEY || env.WAN_3_NSFW_API_KEY || env.SEEDREAM_API_KEY || env.MINIMAX_API_KEY || env.MIKU_API_KEY || env.PRO666_VIDEO_API_KEY || env.QUALITY_V4_API_KEY || env.GEMINI_PROMPT_API_KEY || env.YUANAI_API_KEY || env.AICLOUD_API_KEY || env.POMOAI_API_KEY || env.POMOAI_GPT_PROMPT_API_KEY || env.GPT_PROMPT_API_KEY || env.OAIREGBOX_GPT_PROMPT_API_KEY || env.OAIREGBOX_API_KEY || env.ORIGIN_GPTIMAGE_API_KEY || env.ORIGIN_GROK_API_KEY || env.ORIGIN_NANO_API_KEY || env.JUNZE_API_KEY || env.BIGSNAKE_API_KEY); }
+export function isLiveProviderEnabled(env: Readonly<Record<string, string | undefined>> = process.env): boolean { return isLiveProvidersAllowed(env) && Boolean(env.GROK_VIDEO_API_KEY || env.YUANAI_GROK_VIDEO_API_KEY || env.MGROUTER_API_KEY || env.WAN_API_KEY || env.WAN_3_NSFW_API_KEY || env.SEEDREAM_API_KEY || env.DOLA_SD2_API_KEY || env.MINIMAX_API_KEY || env.MIKU_API_KEY || env.PRO666_VIDEO_API_KEY || env.QUALITY_V4_API_KEY || env.GEMINI_PROMPT_API_KEY || env.YUANAI_API_KEY || env.AICLOUD_API_KEY || env.POMOAI_API_KEY || env.POMOAI_GPT_PROMPT_API_KEY || env.GPT_PROMPT_API_KEY || env.OAIREGBOX_GPT_PROMPT_API_KEY || env.SECURE_SKILL_GPT_API_KEY || env.OAIREGBOX_API_KEY || env.ORIGIN_GPTIMAGE_API_KEY || env.ORIGIN_GROK_API_KEY || env.ORIGIN_NANO_API_KEY || env.JUNZE_API_KEY || env.BIGSNAKE_API_KEY); }
 export function isProviderLiveEnabled(id: ProviderId, env: Readonly<Record<string, string | undefined>> = process.env): boolean { const config = getProviderConfig(id, env); return isLiveProvidersAllowed(env) && Boolean(config.apiKey); }
 export function validateProviderUrl(id: ProviderId, value: string): boolean { try { const url = new URL(value); if (url.protocol !== 'https:') return false; const provider = CATALOG.find((candidate) => candidate.id === id); if (!provider) return false; const base = new URL(provider.baseUrl); return url.origin === base.origin; } catch { return false; } }
 function isExactOrigin(value: string, expected: string): boolean { try { const actual = new URL(value); const base = new URL(expected); return actual.protocol === 'https:' && actual.origin === base.origin; } catch { return false; } }
 function providerBaseEnv(id: ProviderId, env: Readonly<Record<string, string | undefined>>): string | undefined {
+  if (id === 'dola-sd2') return env.DOLA_SD2_BASE_URL;
   if (id === 'grok-video') return env.GROK_VIDEO_BASE_URL;
   if (id === 'yuanai-grok-video') return env.YUANAI_GROK_VIDEO_BASE_URL;
   if (id === 'mgrouter-grok-image' || id === 'mgrouter-grok-video') return env.MGROUTER_BASE_URL;
   if (id === 'wan3-video') return env.WAN_BASE_URL || env.WAN_VIDEO_BASE_URL;
   if (id === 'wan-3-nsfw') return env.WAN_3_NSFW_BASE_URL;
-  if (id === 'seedream') return env.SEEDREAM_BASE_URL;
+  if (id === 'seedream' || id === 'apiaw-seedance-video') return env.SEEDREAM_BASE_URL;
   if (id === 'yuanai-image') return env.YUANAI_IMAGE_BASE_URL;
   if (id === 'aicloud-gpt-image') return env.AICLOUD_BASE_URL;
   if (id === 'pomoai-gemini-image') return env.POMOAI_BASE_URL;
@@ -146,6 +150,7 @@ function providerBaseEnv(id: ProviderId, env: Readonly<Record<string, string | u
   if (id === 'gpt-2999-prompt') return env.GPT_PROMPT_BASE_URL;
   if (id === 'pomoai-gpt-prompt') return env.POMOAI_GPT_PROMPT_BASE_URL;
   if (id === 'oairegbox-gpt-prompt') return env.OAIREGBOX_GPT_PROMPT_BASE_URL;
+  if (id === 'secure-skill-gpt-prompt') return env.SECURE_SKILL_GPT_BASE_URL;
   if (id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image') return env.ORIGIN_BASE_URL;
   if (id === 'junze-gpt-image' || id === 'junze-gemini-image') return env.JUNZE_BASE_URL;
   if (id === 'bigsnake-prompt') return env.BIGSNAKE_BASE_URL;

@@ -1,9 +1,10 @@
 import fs from 'node:fs';
-import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUploadedAsset, listAssets } from './assetStore';
 import { cacheImageTaskOutputsBeforeCompletion, recoverPendingImageTaskOutputCache, repairSavedImageTaskInventory, saveImageTaskOutputsToAssets } from './imageInventory';
-import { storeImageOutput } from '@/lib/providers/outputStore';
-import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
+import { readStoredOutput, storeImageOutput } from '@/lib/providers/outputStore';
+import { closeProviderTaskStore, createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
 const root = `D:\\all_projects\\workspace\\data\\image-inventory-test-${process.pid}`;
@@ -11,14 +12,21 @@ const previous = process.env.WORKSPACE_DATA_ROOT;
 const accountId = 'image-inventory-account';
 const publicLookup = async () => [{ address: '93.184.216.34', family: 4 }];
 const providerBenchmarkLookup = async () => [{ address: '198.18.0.191', family: 4 }];
+let pngBytes: Buffer<ArrayBuffer>;
+
+beforeAll(async () => {
+  pngBytes = Buffer.from(await sharp({ create: { width: 8, height: 8, channels: 3, background: '#4488cc' } }).png().toBuffer());
+});
 
 beforeEach(() => {
+  closeProviderTaskStore();
   process.env.WORKSPACE_DATA_ROOT = root;
   fs.rmSync(root, { recursive: true, force: true });
   vi.unstubAllGlobals();
 });
 
 afterAll(() => {
+  closeProviderTaskStore();
   fs.rmSync(root, { recursive: true, force: true });
   if (previous === undefined) delete process.env.WORKSPACE_DATA_ROOT;
   else process.env.WORKSPACE_DATA_ROOT = previous;
@@ -37,14 +45,13 @@ describe('image task inventory persistence', () => {
     const pending = createProviderTask({ accountId, mode: 'image', provider: 'mgrouter-grok-image', status: 'processing', outputUrls: ['https://cdn.example.test/cancel.png'] });
     const fetcher = vi.fn(async () => {
       updateProviderTask(pending.id, { status: 'cancelled', metadata: { operatorCancelled: true } });
-      return new Response(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]), { headers: { 'content-type': 'image/png' } });
+      return new Response(pngBytes, { headers: { 'content-type': 'image/png' } });
     });
     await recoverPendingImageTaskOutputCache(pending.id, { fetcher, lookup: publicLookup });
     expect(getProviderTask(pending.id)).toMatchObject({ status: 'cancelled', metadata: { operatorCancelled: true } });
   });
 
   it('caches mixed Base64 and URL outputs in distinct local slots', async () => {
-    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
     const fetcher = vi.fn().mockResolvedValue(new Response(pngBytes, { status: 200, headers: { 'content-type': 'image/png' } }));
     const result = await cacheImageTaskOutputsBeforeCompletion(accountId, task({ outputBase64: [`data:image/png;base64,${pngBytes.toString('base64')}`], outputUrls: ['https://cdn.example.test/remote.png'] }), { fetcher, lookup: publicLookup });
     expect(result).toEqual({ cached: 2, expected: 2, ready: true });
@@ -52,7 +59,7 @@ describe('image task inventory persistence', () => {
   });
 
   it('writes completed base64 output as a current account image asset', async () => {
-    const assets = await saveImageTaskOutputsToAssets(accountId, task({ outputBase64: ['data:image/png;base64,aGVsbG8='] }));
+    const assets = await saveImageTaskOutputsToAssets(accountId, task({ outputBase64: [`data:image/png;base64,${pngBytes.toString('base64')}`] }));
     expect(assets).toHaveLength(1);
     expect(assets[0].kind).toBe('image');
     expect(assets[0].name).toBe('product.png');
@@ -60,14 +67,13 @@ describe('image task inventory persistence', () => {
   });
 
   it('downloads a remote image URL before writing it to the D-drive asset store', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(Buffer.from([137, 80, 78, 71]), { status: 200, headers: { 'content-type': 'image/png' } })));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(pngBytes, { status: 200, headers: { 'content-type': 'image/png' } })));
     const assets = await saveImageTaskOutputsToAssets(accountId, task({ outputUrls: ['https://cdn.example.test/image.png'] }), { lookup: publicLookup });
     expect(assets).toHaveLength(1);
     expect(vi.mocked(fetch)).toHaveBeenCalledWith('https://cdn.example.test/image.png', expect.objectContaining({ redirect: 'error', cache: 'no-store' }));
   });
 
   it('allows trusted provider image hosts resolved through the LAN benchmark range', async () => {
-    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
     const fetcher = vi.fn().mockResolvedValue(new Response(pngBytes, { status: 200, headers: { 'content-type': 'image/png' } }));
     const result = await cacheImageTaskOutputsBeforeCompletion(accountId, task({
       provider: 'mgrouter-grok-image',
@@ -84,7 +90,6 @@ describe('image task inventory persistence', () => {
   });
 
   it('recovers a task left at 99% when a later cache attempt succeeds', async () => {
-    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
     const fetcher = vi.fn().mockResolvedValue(new Response(pngBytes, { status: 200, headers: { 'content-type': 'image/png' } }));
     const pending = createProviderTask(task({ status: 'processing', progress: 99, outputUrls: ['https://cdn.example.test/retry.png'], metadata: { localOutputReady: false } }));
     const recovered = await recoverPendingImageTaskOutputCache(pending.id, { fetcher, lookup: publicLookup });
@@ -95,7 +100,6 @@ describe('image task inventory persistence', () => {
   });
 
   it('repairs a terminal cache failure when the output was persisted before the status race', async () => {
-    const pngBytes = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 0]);
     const failed = createProviderTask(task({
       id: 'image-task-raced-cache',
       status: 'failed',
@@ -117,9 +121,59 @@ describe('image task inventory persistence', () => {
     expect(await saveImageTaskOutputsToAssets(accountId, task({ metadata: { inventoryAssetIds: [existing.id] }, outputBase64: ['data:image/png;base64,aGVsbG8='] }))).toEqual([]);
   });
 
+  it('preserves a large Base64 acceptance checkpoint through SQLite and local decoding', async () => {
+    const original = await sharp({ create: { width: 256, height: 256, channels: 3, background: '#4488cc' } }).png({ compressionLevel: 0 }).toBuffer();
+    const encoded = original.toString('base64');
+    expect(encoded.length).toBeGreaterThan(32_000);
+    const pending = createProviderTask(task({ status: 'processing', progress: 99, metadata: { localOutputReady: false } }));
+    updateProviderTask(pending.id, { outputBase64: [encoded] });
+    closeProviderTaskStore();
+    const checkpoint = getProviderTask(pending.id)!;
+    expect(checkpoint.outputBase64[0]).toBe(encoded);
+    const recovered = await recoverPendingImageTaskOutputCache(pending.id);
+    expect(recovered).toMatchObject({ status: 'completed', progress: 100, outputBase64: [], metadata: { localOutputReady: true } });
+    const local = readStoredOutput(accountId, pending.id, 0)!;
+    expect(local.bytes).toEqual(original);
+    expect(await sharp(local.bytes).raw().toBuffer()).toEqual(await sharp(original).raw().toBuffer());
+  });
+
+  it('does not mark a truncated Base64 PNG complete or clear the recovery data', async () => {
+    const original = await sharp({ create: { width: 256, height: 256, channels: 3, background: '#4488cc' } }).png({ compressionLevel: 0 }).toBuffer();
+    const encoded = original.toString('base64').slice(0, 32_000);
+    const pending = createProviderTask(task({ status: 'processing', progress: 99, outputBase64: [encoded], metadata: { localOutputReady: false } }));
+    const recovered = await recoverPendingImageTaskOutputCache(pending.id);
+    expect(recovered).toMatchObject({ status: 'processing', progress: 99, outputBase64: [encoded], metadata: { localOutputReady: false, localOutputCount: 0 } });
+    expect(readStoredOutput(accountId, pending.id, 0)).toBeNull();
+  });
+
+  it('does not count a legacy truncated local PNG as a usable output', async () => {
+    const truncated = pngBytes.subarray(0, 40);
+    expect(storeImageOutput(accountId, 'legacy-truncated', 0, truncated)).not.toBeNull();
+    const result = await cacheImageTaskOutputsBeforeCompletion(accountId, task({ id: 'legacy-truncated', outputUrls: ['/api/workspace/accounts/test/image-tasks/legacy-truncated/outputs/0'] }));
+    expect(result).toEqual({ cached: 0, expected: 1, ready: false });
+  });
+
+  it('rejects a truncated remote PNG before exposing a completed task', async () => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(pngBytes.subarray(0, 40), { headers: { 'content-type': 'image/png' } }));
+    const result = await cacheImageTaskOutputsBeforeCompletion(accountId, task({ outputUrls: ['https://cdn.example.test/truncated.png'] }), { fetcher, lookup: publicLookup });
+    expect(result).toEqual({ cached: 0, expected: 1, ready: false });
+    expect(readStoredOutput(accountId, 'image-task-1', 0)).toBeNull();
+  });
+
+  it('does not import truncated Base64 or URL outputs from legacy completed tasks', async () => {
+    const truncated = pngBytes.subarray(0, 40);
+    const fetcher = vi.fn().mockResolvedValue(new Response(truncated, { headers: { 'content-type': 'image/png' } }));
+    const assets = await saveImageTaskOutputsToAssets(accountId, task({
+      outputBase64: [`data:image/png;base64,${truncated.toString('base64')}`],
+      outputUrls: ['https://cdn.example.test/truncated.png'],
+    }), { fetcher, lookup: publicLookup });
+    expect(assets).toEqual([]);
+    expect(listAssets(accountId, 'image')).toEqual([]);
+  });
+
   it('does not recreate outputs whose readable asset is already linked', async () => {
     const existing = createUploadedAsset(accountId, 'image', { name: 'product.png', type: 'image/png', size: 5, arrayBuffer: Uint8Array.from([1, 2, 3, 4, 5]).buffer });
-    const assets = await saveImageTaskOutputsToAssets(accountId, task({ metadata: { inventoryAssetIds: ['asset-missing', existing.id] }, outputBase64: ['data:image/png;base64,aGVsbG8='] }));
+    const assets = await saveImageTaskOutputsToAssets(accountId, task({ metadata: { inventoryAssetIds: ['asset-missing', existing.id] }, outputBase64: [`data:image/png;base64,${pngBytes.toString('base64')}`] }));
     expect(assets).toEqual([]);
     expect(listAssets(accountId, 'image')).toHaveLength(1);
   });
@@ -128,7 +182,7 @@ describe('image task inventory persistence', () => {
     const persisted = createProviderTask(task({
       id: undefined,
       inventorySavedAt: '2026-09-03T01:00:00.000Z',
-      outputBase64: ['data:image/png;base64,aGVsbG8='],
+      outputBase64: [`data:image/png;base64,${pngBytes.toString('base64')}`],
       metadata: { inventoryAssetIds: ['asset-missing'] },
     }));
 

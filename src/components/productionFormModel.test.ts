@@ -1,9 +1,44 @@
 import { describe, expect, it } from 'vitest';
+import { getProviderCatalog } from '@/lib/providers/config';
 import { getVideoCapability } from '@/lib/workspace/production/video-capabilities';
 import { buildGenerationPayload, normalizeReferenceList, validateProductionInput } from './productionFormModel';
 import { modelIdForVideoProvider, promptProviderLabel, providerOptionsForVideoModel, providersForVideoModel, VIDEO_MODELS, videoModelsForProvider } from './ProductionForm';
+import { generationAttributionLabel } from './ProductionQueue';
 
 describe('production form historical fields', () => {
+  it('lists dola sd2 and routes it only to yuansucang', () => {
+    const catalog = getProviderCatalog();
+    expect(VIDEO_MODELS).toContainEqual({ id: 'dola-sd2', label: 'dola sd2' });
+    expect(videoModelsForProvider('dola-sd2')).toEqual([{ id: 'dola-sd2', label: 'dola sd2' }]);
+    expect(modelIdForVideoProvider('dola-sd2', 'seedance2.0-mini')).toBe('dola-sd2');
+    expect(providersForVideoModel(catalog, 'dola-sd2').map((item) => item.id)).toEqual(['dola-sd2']);
+    expect(providerOptionsForVideoModel(catalog, 'dola-sd2').map((item) => item.id)).toEqual(['dola-sd2']);
+    expect(generationAttributionLabel({ mode: 'video', provider: 'dola-sd2', model: 'dola-sd2' })).toBe('yuansucang · dola sd2');
+  });
+
+  it('validates the selected dola sd2 image and preserves its model in submissions', () => {
+    const capability = getVideoCapability('dola-sd2', 'dola-sd2');
+    const values = {
+      provider: 'dola-sd2' as const,
+      model: modelIdForVideoProvider('dola-sd2'),
+      modelId: 'dola-sd2',
+      prompt: 'Keep the outfit and move naturally.',
+      duration: 5,
+      aspectRatio: '9:16',
+      resolution: '720p',
+      referenceAssetIds: ['image-1'],
+      referenceImageCount: 1,
+    };
+    expect(validateProductionInput('video', values, capability)).toBeNull();
+    expect(validateProductionInput('video', { ...values, referenceImageCount: 0 }, capability)).toMatchObject({ code: 'VIDEO_CAPABILITY_INVALID' });
+    expect(validateProductionInput('video', { ...values, referenceAudioCount: 1 }, capability)).toMatchObject({ code: 'VIDEO_CAPABILITY_INVALID' });
+    expect(buildGenerationPayload('video', values)).toMatchObject({
+      provider: 'dola-sd2', supplierId: 'dola-sd2', model: 'dola-sd2', modelId: 'dola-sd2',
+      duration: 5, aspectRatio: '9:16', resolution: '720p', referenceAssetIds: ['image-1'],
+      referenceVideos: [], referenceAudios: [],
+    });
+  });
+
   it('labels prompt provider errors using the selected prompt model', () => {
     expect(promptProviderLabel('bigsnake')).toBe('BigSnake');
     expect(promptProviderLabel(' BigSnake ')).toBe('BigSnake');
@@ -11,6 +46,7 @@ describe('production form historical fields', () => {
     expect(promptProviderLabel('gemini-2.5-flash')).toBe('Gemini');
     expect(promptProviderLabel('pomoai-gpt')).toContain('PomoAI');
     expect(promptProviderLabel('oairegbox-gpt')).toContain('OAIRegBox');
+    expect(promptProviderLabel('secure-skill-gpt')).toBe('secure-skill GPT-5.5 Medium');
   });
 
   it('lists Quality V4 independently and routes sd-mini through snumom Grok', () => {
@@ -61,6 +97,15 @@ describe('production form historical fields', () => {
       { id: 'grok-video', name: 'Grok / snumom', kind: 'video', model: 'grok', baseUrl: 'https://snumom.com/v1', liveEnv: 'GROK_VIDEO_API_KEY', supports: { referenceImages: 7, referenceAudios: 0, ratios: [], resolutions: [] } },
     ], 'omni-fast-no-water');
     expect(providers.map((item) => item.id)).toEqual(['oairegbox-omni']);
+  });
+  it('shows Seedance through apiaw and removes Wan 3 NSFW from new task choices', () => {
+    expect(VIDEO_MODELS).toEqual(expect.arrayContaining([{ id: 'seedance2.0-mini', label: 'Seedance 2.0 Mini（可生情趣）' }]));
+    expect(VIDEO_MODELS.some((item) => item.id === 'wan-3')).toBe(false);
+    expect(modelIdForVideoProvider('apiaw-seedance-video')).toBe('seedance2.0-mini');
+    expect(videoModelsForProvider('apiaw-seedance-video').map((item) => item.id)).toEqual(['seedance2.0-mini']);
+    expect(providersForVideoModel([
+      { id: 'apiaw-seedance-video', name: 'Seedance / apiaw', kind: 'video', model: 'seedance2.0-mini', baseUrl: 'https://newapi.apiaw.com', liveEnv: 'SEEDREAM_API_KEY', supports: { referenceImages: 9, referenceVideos: 3, referenceAudios: 3, ratios: ['9:16'], resolutions: ['720p'] } },
+    ], 'seedance2.0-mini').map((item) => item.id)).toEqual(['apiaw-seedance-video']);
   });
   it('normalizes URL or pasted asset lists without mutating input', () => {
     const source = ' https://assets.example/a.jpg,\nhttps://assets.example/b.jpg  ';

@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
 import { NextRequest } from 'next/server';
 import type { ProviderTask } from './taskStore';
 
-const state = vi.hoisted(() => ({ task: null as ProviderTask | null, events: [] as string[], generate: vi.fn(), flush: vi.fn(), cache: vi.fn(), enqueue: vi.fn(), publish: vi.fn(), assertAsset: vi.fn() }));
+const state = vi.hoisted(() => ({ task: null as ProviderTask | null, events: [] as string[], generate: vi.fn(), flush: vi.fn(), cache: vi.fn(), enqueue: vi.fn(), publish: vi.fn(), assertAsset: vi.fn(), readProduct: vi.fn(), productPath: vi.fn() }));
 
 vi.mock('./taskStore', () => ({
   getProviderTask: (id: string) => state.task?.id === id ? structuredClone(state.task) : null,
@@ -38,7 +39,7 @@ vi.mock('./validation', () => ({ validateGenerationRequest: (input: { aspectRati
 vi.mock('./taskProcessor', () => ({ processMockProviderTask: vi.fn() }));
 vi.mock('./concurrency', () => ({ enqueueProviderTask: state.enqueue, SCHEDULER_RUNTIME_ID: 'test-runtime' }));
 vi.mock('@/lib/workspace/referenceBridge', () => ({ assertAssetReference: state.assertAsset, publishAssetReferences: state.publish }));
-vi.mock('@/lib/workspace/productImages', () => ({ listProductImageAssets: () => [], publishProductImageReferences: state.publish, getProductImageAbsolutePath: vi.fn() }));
+vi.mock('@/lib/workspace/productImages', () => ({ readProductImageAsset: state.readProduct, publishProductImageReferences: state.publish, getProductImageAbsolutePath: state.productPath }));
 vi.mock('@/lib/workspace/imageInventory', () => ({ cacheImageTaskOutputsBeforeCompletion: state.cache, localImageOutputUrls: () => ['/api/local-image'] }));
 vi.mock('@/lib/auth/server', () => ({ requireApiRole: async () => ({ role: 'admin' }) }));
 vi.mock('@/lib/workspace/access', () => ({ canAccessWorkspaceAccount: () => true, workspaceOwnerIdForAccount: () => 'owner' }));
@@ -68,6 +69,8 @@ describe('persisted image execution', () => {
     });
     state.enqueue.mockReturnValue(true);
     state.assertAsset.mockReturnValue({ id: 'asset', name: 'reference.png', relativePath: 'not-read.png', mimeType: 'image/png' });
+    state.readProduct.mockReset().mockReturnValue(null);
+    state.productPath.mockReset();
   });
 
   it('does not resubmit an existing upstream task ID', async () => {
@@ -75,6 +78,41 @@ describe('persisted image execution', () => {
     await executePersistedImageTask('task');
     expect(state.generate).not.toHaveBeenCalled();
     expect(state.task?.providerTaskId).toBe('upstream-id');
+  });
+
+  it('reads only selected product images and preserves their order with account references', async () => {
+    const productId = 'product-image:other-account:2026-09-14:1731260011305600841:001_main.jpg';
+    seed({ metadata: {
+      productImageAssetIds: [productId], assetIds: ['asset'],
+      referenceAssetOrder: [{ id: productId, kind: 'product-image' }, { id: 'asset', kind: 'image' }],
+    } });
+    state.readProduct.mockReturnValue({ id: productId, name: '001_main.jpg', mimeType: 'image/jpeg' });
+    state.productPath.mockReturnValue('selected-product.jpg');
+    const fileRead = vi.spyOn(fs, 'readFileSync').mockImplementation(() => Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    try {
+      await executePersistedImageTask('task');
+      expect(state.readProduct).toHaveBeenCalledTimes(1);
+      expect(state.readProduct).toHaveBeenCalledWith(productId);
+      expect(state.productPath).toHaveBeenCalledTimes(1);
+      expect(state.productPath).toHaveBeenCalledWith(productId);
+      expect(state.generate).toHaveBeenCalledWith(expect.objectContaining({
+        referenceFiles: [
+          expect.objectContaining({ fileName: '001_main.jpg', mimeType: 'image/jpeg' }),
+          expect.objectContaining({ fileName: 'reference.png', mimeType: 'image/png' }),
+        ],
+      }));
+      expect(state.task?.status).toBe('completed');
+    } finally {
+      fileRead.mockRestore();
+    }
+  });
+
+  it('does not submit without a selected product reference', async () => {
+    const productId = 'product-image:other-account:2026-09-14:missing:001_main.jpg';
+    seed({ metadata: { productImageAssetIds: [productId], assetIds: [] } });
+    await executePersistedImageTask('task');
+    expect(state.task).toMatchObject({ status: 'failed', error: 'reference_asset_not_found' });
+    expect(state.generate).not.toHaveBeenCalled();
   });
 
   it('uses the current Seedream model when executing a saved legacy selection', async () => {

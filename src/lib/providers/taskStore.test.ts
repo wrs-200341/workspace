@@ -1,10 +1,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
+import sharp from 'sharp';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getWorkspacePath } from '../storagePaths';
 import {
   createProviderTask,
+  createProviderTasks,
+  closeProviderTaskStore,
   deleteProviderTask,
   getProviderTask,
   listProviderTasks,
@@ -26,10 +30,12 @@ const { DatabaseSync } = createRequire(import.meta.url)('node:sqlite') as typeof
 
 beforeEach(() => {
   process.env.WORKSPACE_DATA_ROOT = testRoot;
+  closeProviderTaskStore();
   fs.rmSync(testRoot, { recursive: true, force: true });
 });
 
 afterAll(() => {
+  closeProviderTaskStore();
   fs.rmSync(testRoot, { recursive: true, force: true });
   if (previousRoot === undefined) delete process.env.WORKSPACE_DATA_ROOT;
   else process.env.WORKSPACE_DATA_ROOT = previousRoot;
@@ -100,6 +106,66 @@ describe('indexed provider task store', () => {
     });
     expect(new Date(updated!.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(task.updatedAt).getTime());
     expect(getProviderTask(task.id)).toEqual(updated);
+  });
+
+  it.each([false, true])('preserves complete PNG outputs through create, update and reopen (data URL: %s)', async (dataUrl) => {
+    const pixels = randomBytes(128 * 128 * 3);
+    const png = await sharp(pixels, { raw: { width: 128, height: 128, channels: 3 } }).png().toBuffer();
+    const base64 = png.toString('base64');
+    const output = dataUrl ? `data:image/png;base64,${base64}` : base64;
+    expect(base64.length).toBeGreaterThan(32_000);
+
+    const created = seed({ mode: 'image', provider: 'yuanai-image', status: 'processing', outputBase64: [output] });
+    expect(created.outputBase64).toEqual([output]);
+    closeProviderTaskStore();
+    expect(getProviderTask(created.id)?.outputBase64).toEqual([output]);
+
+    const updated = updateProviderTask(created.id, { status: 'completed', progress: 100, outputBase64: [output] });
+    expect(updated?.outputBase64).toEqual([output]);
+    closeProviderTaskStore();
+    const persisted = getProviderTask(created.id)!;
+    expect(persisted.outputBase64).toEqual([output]);
+    const decoded = Buffer.from(dataUrl ? persisted.outputBase64[0].split(',')[1] : persisted.outputBase64[0], 'base64');
+    expect(decoded.equals(png)).toBe(true);
+    expect((await sharp(decoded).raw().toBuffer()).equals(pixels)).toBe(true);
+    expect(listProviderTaskSummaries({ ids: [created.id] })[0]).not.toHaveProperty('outputBase64');
+  });
+
+  it('rejects oversized binary outputs without partially creating or updating tasks', () => {
+    const original = seed({ id: 'original', status: 'processing', progress: 90 });
+    const revision = getProviderTaskStoreRevision();
+    const oversized = 'A'.repeat(Math.ceil((50 * 1024 * 1024 + 1) / 3) * 4);
+    expect(() => createProviderTasks([
+      { id: 'batch-first', accountId: 'a', provider: 'yuanai-image', mode: 'image' },
+      { id: 'too-large', accountId: 'a', provider: 'yuanai-image', mode: 'image', outputBase64: [oversized] },
+    ])).toThrow('output_base64_too_large');
+    expect(getProviderTask('batch-first')).toBeNull();
+    expect(getProviderTask('too-large')).toBeNull();
+    expect(() => updateProviderTask(original.id, {
+      status: 'completed', progress: 100, outputBase64: [oversized],
+    })).toThrow('output_base64_too_large');
+    expect(getProviderTask(original.id)).toEqual(original);
+    expect(getProviderTaskStoreRevision()).toBe(revision);
+  });
+
+  it('rejects excessive aggregate binary output size or count without replacing existing data', () => {
+    const original = seed({ status: 'processing', outputBase64: ['aGVsbG8='] });
+    const revision = getProviderTaskStoreRevision();
+    const output = 'A'.repeat(4 * Math.ceil(41 * 1024 * 1024 / 3));
+    expect(() => updateProviderTask(original.id, {
+      status: 'completed', outputBase64: Array(5).fill(output),
+    })).toThrow('output_base64_total_too_large');
+    expect(() => updateProviderTask(original.id, {
+      status: 'completed', outputBase64: Array(65).fill('aGVsbG8='),
+    })).toThrow('output_base64_too_many_items');
+    expect(getProviderTask(original.id)).toEqual(original);
+    expect(getProviderTaskStoreRevision()).toBe(revision);
+  });
+
+  it('retains ordinary text and URL limits separately from binary outputs', () => {
+    const task = seed({ prompt: 'x'.repeat(33_000), outputUrls: ['https://example.com/' + 'x'.repeat(33_000)] });
+    expect(task.prompt).toHaveLength(32_000);
+    expect(task.outputUrls[0]).toHaveLength(32_000);
   });
 
   it('clears optional provider fields when a patch explicitly sets them to undefined', () => {

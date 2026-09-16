@@ -85,6 +85,7 @@ function promptProviderName(provider: string): string {
   const names: Record<string, string> = {
     'pomoai-gpt-prompt': 'PomoAI',
     'oairegbox-gpt-prompt': 'OAIRegBox',
+    'secure-skill-gpt-prompt': 'secure-skill',
     'bigsnake-prompt': 'BigSnake',
     'gpt-2999-prompt': 'GPT-2999',
     'yuanai-gemini-prompt': 'YuanAI Gemini',
@@ -107,6 +108,8 @@ function videoProviderName(provider?: string): string {
     'mgrouter-grok-video': 'MGRouter',
     'wan3-video': 'ManjuAI',
     'wan-3-nsfw': '808relay',
+    'apiaw-seedance-video': 'apiaw',
+    'dola-sd2': 'yuansucang',
     seedream: 'apiaw',
     'minimax-h3': 'secure-skill',
     'miku-minimax': 'MikuAPI',
@@ -139,7 +142,7 @@ function videoProviderName(provider?: string): string {
 }
 
 export function generationAttributionLabel(task: Pick<QueueTask, 'mode' | 'provider' | 'model'>): string {
-  const model = task.model || task.provider || 'Unknown model';
+  const model = task.model === 'dola-sd2' ? 'dola sd2' : task.model || task.provider || 'Unknown model';
   if (task.mode === 'video') return `${videoProviderName(task.provider)} · ${model}`;
   if (task.mode === 'image' && task.provider) return `${videoProviderName(task.provider)} · ${model}`;
   return model;

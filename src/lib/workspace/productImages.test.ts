@@ -152,12 +152,12 @@ describe('8765 product image adapter', () => {
     const stat = vi.spyOn(fs, 'statSync');
     const assetId = 'product-image:shared:2026-09-02:P1:50.png';
     expect(readProductImageAsset(assetId)).toMatchObject({ id: assetId, thumbnailUrl: expect.stringContaining('thumbnail=1&v=') });
-    expect(stat.mock.calls.filter(([target]) => String(target).endsWith('.png'))).toHaveLength(1);
+    expect(stat.mock.calls.filter(([target]) => String(target).endsWith('50.png'))).toHaveLength(1);
     const readDirectory = vi.spyOn(fs, 'readdirSync');
     expect(readProductImageAsset(assetId)?.id).toBe(assetId);
     expect(readProductImageAsset('product-image:shared:2026-09-02:P1:missing.png')).toBeNull();
     expect(readDirectory).not.toHaveBeenCalled();
-    expect(stat.mock.calls.filter(([target]) => String(target).endsWith('.png'))).toHaveLength(1);
+    expect(stat.mock.calls.filter(([target]) => String(target).endsWith('50.png'))).toHaveLength(1);
   });
 
   it('keeps account caches isolated and folder summaries free of image details', () => {
@@ -200,7 +200,81 @@ describe('8765 product image adapter', () => {
     cleanupExpiredProductImages(new Date('2026-09-06T00:00:00+08:00'));
     expect(readProductImageAsset(assetId)).toBeNull();
   });
+
+  it('refreshes a separate worker cache after an import inside an existing account and date', async () => {
+    vi.resetModules();
+    const web = await import('./productImages');
+    const importedAt = new Date('2026-09-02T08:00:00.000Z');
+    await web.importProductImages('account-1', ['P1'], archiveFetcher([{ name: 'P1/001.jpg', bytes: Buffer.from('old') }]), importedAt);
+    const imageRoot = getWorkspacePath('product-images');
+    const fixedMtime = new Date('2026-09-02T00:00:00.000Z');
+    fs.utimesSync(imageRoot, fixedMtime, fixedMtime);
+    expect(listProductImageFolders().map((folder) => folder.pid)).toEqual(['P1']);
+    expect(readProductImageAsset('product-image:account-1:2026-09-02:P2:001.jpg')).toBeNull();
+
+    await web.importProductImages('account-1', ['P2'], archiveFetcher([{ name: 'P2/001.jpg', bytes: Buffer.from('new') }]), importedAt);
+    fs.utimesSync(imageRoot, fixedMtime, fixedMtime);
+
+    expect(listProductImageFolders().map((folder) => folder.pid)).toEqual(['P1', 'P2']);
+    expect(readProductImageFolder(undefined, 'P2')?.images).toHaveLength(1);
+    expect(readProductImageAsset('product-image:account-1:2026-09-02:P2:001.jpg')).toMatchObject({ size: 3 });
+    const readDirectory = vi.spyOn(fs, 'readdirSync');
+    expect(readProductImageAsset('product-image:account-1:2026-09-02:P2:001.jpg')).not.toBeNull();
+    expect(listProductImageFolders()).toHaveLength(2);
+    expect(readDirectory).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a separate worker cache after cleanup without invalidating it on a dry run', async () => {
+    vi.resetModules();
+    const web = await import('./productImages');
+    await web.importProductImages('account-1', ['P1'], archiveFetcher([{ name: 'P1/001.jpg', bytes: Buffer.from('expired') }]), new Date('2026-08-30T08:00:00.000Z'));
+    await web.importProductImages('account-1', ['P2'], archiveFetcher([{ name: 'P2/001.jpg', bytes: Buffer.from('current') }]), new Date('2026-09-02T08:00:00.000Z'));
+    const imageRoot = getWorkspacePath('product-images');
+    const fixedMtime = new Date('2026-09-02T00:00:00.000Z');
+    fs.utimesSync(imageRoot, fixedMtime, fixedMtime);
+    expect(listProductImageFolders()).toHaveLength(2);
+    const expiredAssetId = 'product-image:account-1:2026-08-30:P1:001.jpg';
+    expect(readProductImageAsset(expiredAssetId)).not.toBeNull();
+    const revision = fs.readFileSync(`${imageRoot}\\.revision`, 'utf8');
+
+    web.cleanupExpiredProductImages(new Date('2026-09-02T00:00:00+08:00'), { dryRun: true });
+    expect(fs.readFileSync(`${imageRoot}\\.revision`, 'utf8')).toBe(revision);
+    expect(readProductImageAsset(expiredAssetId)).not.toBeNull();
+    web.cleanupExpiredProductImages(new Date('2026-09-02T00:00:00+08:00'));
+    fs.utimesSync(imageRoot, fixedMtime, fixedMtime);
+
+    expect(readProductImageAsset(expiredAssetId)).toBeNull();
+    expect(readProductImageFolder(undefined, 'P1')).toBeNull();
+    expect(listProductImageFolders().map((folder) => folder.pid)).toEqual(['P2']);
+  });
+
+  it('publishes partial import changes and failed-folder cleanup to a separate worker cache', async () => {
+    vi.resetModules();
+    const web = await import('./productImages');
+    const importedAt = new Date('2026-09-02T08:00:00.000Z');
+    await web.importProductImages('account-1', ['P1'], archiveFetcher([{ name: 'P1/001.jpg', bytes: Buffer.from('old') }]), importedAt);
+    const imageRoot = getWorkspacePath('product-images');
+    const fixedMtime = new Date('2026-09-02T00:00:00.000Z');
+    fs.utimesSync(imageRoot, fixedMtime, fixedMtime);
+    const oldAssetId = 'product-image:account-1:2026-09-02:P1:001.jpg';
+    expect(readProductImageAsset(oldAssetId)).not.toBeNull();
+    expect(listProductImageFolders().map((folder) => folder.pid)).toEqual(['P1']);
+
+    await expect(web.importProductImages('account-1', ['P2', 'P1'], archiveFetcher([{ name: 'P2/001.jpg', bytes: Buffer.from('new') }]), importedAt)).rejects.toThrow('product_archive_no_images');
+    fs.utimesSync(imageRoot, fixedMtime, fixedMtime);
+
+    expect(readProductImageAsset(oldAssetId)).toBeNull();
+    expect(readProductImageAsset('product-image:account-1:2026-09-02:P2:001.jpg')).not.toBeNull();
+    expect(listProductImageFolders().map((folder) => folder.pid)).toEqual(['P2']);
+  });
 });
+
+function archiveFetcher(entries: Array<{ name: string; bytes: Buffer }>): typeof fetch {
+  const zip = createStoredZip(entries);
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => String(input).endsWith('/check-pids')
+    ? new Response(JSON.stringify({ valid: JSON.parse(String(init?.body)).pids }), { status: 200 })
+    : new Response(zip as unknown as BodyInit, { status: 200, headers: { 'content-type': 'application/zip' } }));
+}
 
 function createStoredZip(entries: Array<{ name: string; bytes: Buffer }>): Buffer {
   const chunks: Buffer[] = [];

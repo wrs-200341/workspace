@@ -10,6 +10,39 @@ import {
 } from './video-capabilities';
 
 describe('recovered video production capabilities', () => {
+  it('preserves dola sd2 default duration and image-only portrait limits', () => {
+    const capability = getVideoCapability('dola-sd2', 'dola-sd2');
+    expect(getVideoDurationOptions(capability)).toEqual(Array.from({ length: 12 }, (_, index) => index + 4));
+    expect(getDefaultVideoDuration(capability)).toBe(5);
+    expect(getDefaultVideoAspectRatio(capability.aspectRatios)).toBe('9:16');
+    expect(getDefaultVideoResolution(capability)).toBe('720p');
+    expect(capability.referenceImages).toEqual({ min: 1, max: 1, required: true });
+    expect(capability.referenceVideos.max).toBe(0);
+    expect(capability.referenceAudios.max).toBe(0);
+    for (const duration of getVideoDurationOptions(capability)) {
+      expect(() => validateVideoCapability(capability, { duration, aspectRatio: '9:16', resolution: '720p', referenceCount: 1 })).not.toThrow();
+    }
+    capability.defaultDuration = 15;
+    expect(getDefaultVideoDuration(getVideoCapability('dola-sd2', 'dola-sd2'))).toBe(5);
+  });
+
+  it.each([
+    { duration: 3 },
+    { duration: 16 },
+    { duration: 5.5 },
+    { aspectRatio: '16:9' },
+    { resolution: '1080p' },
+    { referenceCount: 0 },
+    { referenceCount: 2 },
+    { referenceVideoCount: 1 },
+    { referenceAudioCount: 1 },
+  ])('rejects unsupported dola sd2 settings: %j', (invalid) => {
+    const capability = getVideoCapability('dola-sd2', 'dola-sd2');
+    expect(() => validateVideoCapability(capability, {
+      duration: 5, aspectRatio: '9:16', resolution: '720p', referenceCount: 1, ...invalid,
+    })).toThrow();
+  });
+
   it('exposes the historical Grok contract', () => {
     const capability = getVideoCapability('grok-video', 'grok');
     expect(capability.duration).toEqual({ min: 6, max: 15, values: [6, 8, 10, 12, 15] });
@@ -75,6 +108,17 @@ describe('recovered video production capabilities', () => {
     expect(minimax.referenceImages.max).toBe(5);
     expect(minimax.referenceVideos.max).toBe(0);
     expect(minimax.referenceAudios.max).toBe(3);
+  });
+
+  it('uses apiaw Seedance 2.0 Mini defaults and multimodal limits', () => {
+    const capability = getVideoCapability('apiaw-seedance-video', 'seedance2.0-mini');
+    expect(getVideoDurationOptions(capability)).toEqual(Array.from({ length: 12 }, (_, index) => index + 4));
+    expect(getDefaultVideoDuration(capability)).toBe(10);
+    expect(getDefaultVideoAspectRatio(capability.aspectRatios)).toBe('9:16');
+    expect(getDefaultVideoResolution(capability)).toBe('720p');
+    expect(capability.referenceImages.max).toBe(9);
+    expect(capability.referenceVideos.max).toBe(3);
+    expect(capability.referenceAudios.max).toBe(3);
   });
 
   it('uses Pro666 sd2-933-mini fixed 12s/720p limits', () => {

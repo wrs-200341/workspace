@@ -34,6 +34,17 @@ export type WanRelayVideoInput = {
   referenceAudios?: readonly string[];
   soundEffects?: boolean;
 };
+/** apiaw OpenAI-compatible Seedance 2.0 Mini async video contract. */
+export type ApiawSeedanceVideoInput = {
+  model: string;
+  prompt: string;
+  duration: number;
+  aspectRatio: string;
+  resolution: string;
+  referenceImages?: readonly string[];
+  referenceVideos?: readonly string[];
+  referenceAudios?: readonly string[];
+};
 /** apiaw Seedream 5 asynchronous image contract. */
 export type SeedreamImageInput = {
   model: string;
@@ -79,6 +90,37 @@ export type GPTPromptAttachment = { name?: string; mimeType: string; dataBase64?
 
 /** A validated local file used to construct provider multipart requests. */
 export type MultipartReference = { bytes: Uint8Array; mimeType: string; fileName: string };
+export type DolaSd2VideoInput = {
+  prompt: string;
+  duration: number;
+  aspectRatio: string;
+  resolution: string;
+  requestId: string;
+  references: readonly MultipartReference[];
+};
+
+export function buildDolaSd2VideoPayload(input: DolaSd2VideoInput): Record<string, unknown> {
+  if (!input.prompt.trim()) throw new Error('prompt_required');
+  if (!input.requestId.trim()) throw new Error('request_id_required');
+  if (!Number.isInteger(input.duration) || input.duration < 4 || input.duration > 15) throw new Error('unsupported_duration');
+  if (input.aspectRatio !== '9:16') throw new Error('unsupported_aspect_ratio');
+  if (input.resolution.toLowerCase() !== '720p') throw new Error('unsupported_resolution');
+  if (!input.references.length) throw new Error('reference_images_required');
+  if (input.references.length > 1) throw new Error('too_many_reference_images');
+  const images = input.references.map((reference) => {
+    if (!reference.mimeType.startsWith('image/') || !reference.bytes.length || reference.bytes.length > 50 * 1024 * 1024) throw new Error('reference_asset_file_invalid');
+    return { name: reference.fileName || 'reference.png', type: reference.mimeType, data: Buffer.from(reference.bytes).toString('base64') };
+  });
+  return {
+    api_id: 'api_hmstudio_seedance_v2_0',
+    prompt: input.prompt.trim(),
+    duration: input.duration,
+    request_id: input.requestId.trim(),
+    face_processing: 'customer',
+    media_files: { images },
+  };
+}
+
 export type YuanAIImageEditInput = { model: string; prompt: string; size: string; quality?: 'low' | 'high'; n?: number; references: readonly MultipartReference[] };
 export type OAIRegboxInput = { model: string; prompt: string; duration: number; aspectRatio: string; references?: readonly MultipartReference[] };
 export type OpenAIImageInput = {
@@ -703,6 +745,42 @@ export function buildWanRelayVideoPayload(input: WanRelayVideoInput): Record<str
   };
 }
 
+export function buildApiawSeedanceVideoPayload(input: ApiawSeedanceVideoInput): Record<string, unknown> {
+  const prompt = input.prompt.trim();
+  if (!prompt) throw new Error('seedance_prompt_required');
+  if (input.model !== 'seedance2.0-mini') throw new Error('seedance_model_invalid');
+  if (!Number.isInteger(input.duration) || input.duration < 4 || input.duration > 15) throw new Error('seedance_invalid_duration');
+  if (!['1:1', '16:9', '9:16'].includes(input.aspectRatio)) throw new Error('seedance_invalid_aspect_ratio');
+  const resolution = input.resolution.trim().toLowerCase();
+  if (!['480p', '720p'].includes(resolution)) throw new Error('seedance_invalid_resolution');
+  const images = [...(input.referenceImages ?? [])];
+  const videos = [...(input.referenceVideos ?? [])];
+  const audios = [...(input.referenceAudios ?? [])];
+  if (images.length > 9) throw new Error('seedance_too_many_reference_images');
+  if (videos.length > 3) throw new Error('seedance_too_many_reference_videos');
+  if (audios.length > 3) throw new Error('seedance_too_many_reference_audios');
+  if (audios.length && !images.length && !videos.length) throw new Error('seedance_reference_audio_requires_visual');
+  for (const url of [...images, ...videos, ...audios]) {
+    let parsed: URL;
+    try { parsed = new URL(url); } catch { throw new Error('seedance_reference_urls_must_be_https'); }
+    if (parsed.protocol !== 'https:') throw new Error('seedance_reference_urls_must_be_https');
+  }
+  return {
+    model: 'seedance2.0-mini',
+    prompt,
+    seconds: String(input.duration),
+    duration: input.duration,
+    aspect_ratio: input.aspectRatio,
+    ratio: input.aspectRatio,
+    resolution,
+    images,
+    videos,
+    audios,
+    generate_audio: false,
+    watermark: false,
+  };
+}
+
 export function buildYuanAIImagePayload(input: YuanAIImageInput): Record<string, unknown> {
   return {
     model: input.model,
@@ -713,4 +791,4 @@ export function buildYuanAIImagePayload(input: YuanAIImageInput): Record<string,
     ...(input.referenceImages.length ? { images: input.referenceImages } : {}),
   };
 }
-export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'aicloud-gpt-image' || id === 'pomoai-gemini-image' || id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image' || id === 'junze-gpt-image' || id === 'junze-gemini-image' || id === 'seedream') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'pomoai-gpt-prompt' || id === 'oairegbox-gpt-prompt' || id === 'gpt-2999-prompt' || id === 'bigsnake-prompt') return 'prompt'; return 'video'; }
+export function providerKind(id: ProviderId): 'image' | 'video' | 'prompt' { if (id === 'mgrouter-grok-image' || id === 'yuanai-image' || id === 'aicloud-gpt-image' || id === 'pomoai-gemini-image' || id === 'origin-gpt-image' || id === 'origin-grok-image' || id === 'origin-nano-image' || id === 'junze-gpt-image' || id === 'junze-gemini-image' || id === 'seedream') return 'image'; if (id === 'yuanai-gemini-prompt' || id === 'pomoai-gpt-prompt' || id === 'oairegbox-gpt-prompt' || id === 'secure-skill-gpt-prompt' || id === 'gpt-2999-prompt' || id === 'bigsnake-prompt') return 'prompt'; return 'video'; }

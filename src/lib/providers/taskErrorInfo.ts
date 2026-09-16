@@ -56,6 +56,7 @@ function providerDisplayName(provider?: string): string {
     'mgrouter-grok-image': 'mgrouter',
     'wan3-video': 'manjuai',
     'wan-3-nsfw': '808relay',
+    'apiaw-seedance-video': 'apiaw',
     seedream: 'apiaw',
     'minimax-h3': 'secure-skill',
     'miku-minimax': 'mikuapi',
@@ -72,6 +73,7 @@ function providerDisplayName(provider?: string): string {
     'junze-gemini-image': 'junze',
     'pomoai-gpt-prompt': 'pomoai',
     'oairegbox-gpt-prompt': 'oairegbox',
+    'secure-skill-gpt-prompt': 'secure-skill',
     'gpt-2999-prompt': '2999',
     'bigsnake-prompt': 'bigsnake',
   };
@@ -108,6 +110,7 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
   if (!error) return undefined;
   const lower = error.toLowerCase();
   const response = responseText(task);
+  const diagnostic = `${lower} ${response}`;
   const metadata = task.metadata ?? {};
   // Restart and capacity metadata must not make an ambiguous paid request
   // eligible for the safe-recovery batch.
@@ -123,6 +126,21 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
       safeToRetry: false,
     };
   }
+  const promptTooLong = lower === 'video_prompt_too_long'
+    || /prompt[_\s-]?too[_\s-]?long/.test(diagnostic)
+    || (/(字节|utf-?8)/i.test(diagnostic)
+      && /(最长|超过|超出|too long|at most)/i.test(diagnostic)
+      && /(prompt|提示词)/i.test(diagnostic));
+  if (promptTooLong) {
+    return {
+      code: 'video_prompt_too_long',
+      category: 'invalid_request',
+      title: '提示词超长',
+      message: '',
+      action: '请缩短提示词后重新提交。',
+      safeToRetry: false,
+    };
+  }
   const promptPending = metadata.promptGenerationPending === true || metadata.promptGenerationFailed === true;
   const hasUpstreamId = Boolean(task.providerTaskId);
   const retryInterrupted = lower === 'scheduler_retry_interrupted';
@@ -135,9 +153,9 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
     return {
       code: 'scheduler_prompt_interrupted',
       category: 'service_restart',
-      title: '服务重启，子提示词生成被中断',
-      message: '任务还没有提交到视频供应商，服务重启时中断了子提示词生成。',
-      action: '可以安全恢复，系统会沿用原来的参考图和参数重新生成。',
+      title: '服务重启导致子提示词生成环节被中断',
+      message: '',
+      action: '',
       safeToRetry: !hasUpstreamId,
     };
   }
@@ -145,9 +163,9 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
     return {
       code: 'scheduler_retry_interrupted',
       category: 'service_restart',
-      title: '服务重启，自动重试被中断',
-      message: '任务之前尝试过一次，但服务重启后本地重试计时器已经结束，供应商没有收到新的任务编号。',
-      action: '可以安全恢复，系统会沿用原来的参考素材和参数重新提交。',
+      title: '服务重启导致自动重试环节被中断',
+      message: '',
+      action: '',
       safeToRetry: !hasUpstreamId,
     };
   }
@@ -155,9 +173,9 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
     return {
       code: 'scheduler_interrupted',
       category: 'service_restart',
-      title: '服务重启，任务被中断',
-      message: '任务还没有确认提交到供应商，服务重启时中断了本地调度。',
-      action: '可以安全恢复，系统会沿用原来的配置重新提交。',
+      title: '服务重启导致任务调度环节被中断',
+      message: '',
+      action: '',
       safeToRetry: !hasUpstreamId,
     };
   }
@@ -260,6 +278,16 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
       title: hasUpstreamId ? '供应商处理异常' : '提交供应商时发生网络异常',
       message: hasUpstreamId ? '任务可能已经在供应商处理中，但系统没有拿到完整状态。' : '系统没有确认供应商是否已经收到请求。',
       action: '请先查看供应商后台或任务详情，确认后再重试，避免重复扣费。',
+      safeToRetry: false,
+    };
+  }
+  if (lower === 'reference_images_required') {
+    return {
+      code: lower,
+      category: 'invalid_request',
+      title: '缺少参考图',
+      message: '该模型需要至少 1 张参考图。',
+      action: '选择参考图后重新提交。',
       safeToRetry: false,
     };
   }

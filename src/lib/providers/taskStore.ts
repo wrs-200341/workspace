@@ -85,6 +85,9 @@ export type ProviderTaskFilters = Partial<Pick<ProviderTask, 'accountId' | 'mode
 
 const MAX_TEXT_LENGTH = 32_000;
 const MAX_ARRAY_ITEMS = 64;
+const MAX_OUTPUT_BASE64_BYTES = 50 * 1024 * 1024;
+const MAX_OUTPUT_BASE64_TOTAL_BYTES = 200 * 1024 * 1024;
+const MAX_OUTPUT_BASE64_HEADER_LENGTH = 1024;
 const VALID_MODES: readonly ProviderTaskMode[] = ['image', 'video', 'prompt'];
 const VALID_STATUSES: readonly ProviderTaskStatus[] = ['draft', 'queued', 'prompting', 'submitting', 'submitted', 'processing', 'running', 'retrying', 'completed', 'failed', 'cancelled', 'paused'];
 const VALID_PROVIDERS = new Set<ProviderId>(getProviderCatalog().map((entry) => entry.id));
@@ -287,6 +290,31 @@ function normalizeStringArray(value: unknown): string[] {
     .slice(0, MAX_ARRAY_ITEMS);
 }
 
+function normalizeOutputBase64(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  if (value.length > MAX_ARRAY_ITEMS) throw new Error('output_base64_too_many_items');
+  let totalBytes = 0;
+  let totalLength = 0;
+  return value.filter((item): item is string => typeof item === 'string').map((item) => {
+    const output = item.trim();
+    // Binary outputs must stay complete; ordinary text truncation corrupts files.
+    if (output.length > Math.ceil(MAX_OUTPUT_BASE64_BYTES / 3) * 4 + MAX_OUTPUT_BASE64_HEADER_LENGTH) {
+      throw new Error('output_base64_too_large');
+    }
+    const payloadStart = output.startsWith('data:') ? output.indexOf(',') + 1 : 0;
+    if (payloadStart > MAX_OUTPUT_BASE64_HEADER_LENGTH) throw new Error('output_base64_header_too_large');
+    const bytes = Buffer.byteLength(output.slice(payloadStart), 'base64');
+    if (bytes > MAX_OUTPUT_BASE64_BYTES) throw new Error('output_base64_too_large');
+    totalBytes += bytes;
+    totalLength += output.length;
+    if (totalBytes > MAX_OUTPUT_BASE64_TOTAL_BYTES
+      || totalLength > Math.ceil(MAX_OUTPUT_BASE64_TOTAL_BYTES / 3) * 4 + MAX_ARRAY_ITEMS * MAX_OUTPUT_BASE64_HEADER_LENGTH) {
+      throw new Error('output_base64_total_too_large');
+    }
+    return output;
+  }).filter(Boolean);
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -312,7 +340,7 @@ function normalizeStoredTask(value: unknown): ProviderTask {
     progress: normalizeProgress(value.progress),
     ...(text(value.providerTaskId) ? { providerTaskId: text(value.providerTaskId) } : {}),
     outputUrls: validateMode(value.mode) === 'video' ? dedupeVideoOutputUrls(String(value.provider), normalizeStringArray(value.outputUrls)) : normalizeStringArray(value.outputUrls),
-    outputBase64: normalizeStringArray(value.outputBase64),
+    outputBase64: normalizeOutputBase64(value.outputBase64),
     ...(text(value.error) ? { error: text(value.error) } : {}),
     ...(record(value.providerResponse) ? { providerResponse: clone(value.providerResponse) } : {}),
     ...(text(value.inventorySavedAt) ? { inventorySavedAt: text(value.inventorySavedAt) } : {}),
@@ -449,7 +477,7 @@ function patchedTask(current: ProviderTask, patch: ProviderTaskPatch): ProviderT
     ...(candidate.progress !== undefined ? { progress: normalizeProgress(candidate.progress) } : {}),
     ...(hasOwn(candidate, 'providerTaskId') ? (text(candidate.providerTaskId) ? { providerTaskId: text(candidate.providerTaskId) } : { providerTaskId: undefined }) : {}),
     ...(candidate.outputUrls !== undefined ? { outputUrls: normalizeStringArray(candidate.outputUrls) } : {}),
-    ...(candidate.outputBase64 !== undefined ? { outputBase64: normalizeStringArray(candidate.outputBase64) } : {}),
+    ...(candidate.outputBase64 !== undefined ? { outputBase64: normalizeOutputBase64(candidate.outputBase64) } : {}),
     ...(hasOwn(candidate, 'error') ? (text(candidate.error) ? { error: text(candidate.error) } : { error: undefined }) : {}),
     ...(hasOwn(candidate, 'providerResponse') ? (record(candidate.providerResponse) ? { providerResponse: clone(candidate.providerResponse) } : { providerResponse: undefined }) : {}),
     ...(hasOwn(candidate, 'inventorySavedAt') ? (text(candidate.inventorySavedAt) ? { inventorySavedAt: text(candidate.inventorySavedAt) } : { inventorySavedAt: undefined }) : {}),

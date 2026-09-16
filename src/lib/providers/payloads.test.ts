@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildSeedreamImagePayload, seedreamImageSize, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditFormData, aicloudImageSize, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildApiawSeedanceVideoPayload, buildSeedreamImagePayload, seedreamImageSize, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditFormData, aicloudImageSize, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
 
 describe('provider payload contracts', () => {
+  it('builds the apiaw Seedance 2.0 Mini multimodal video payload', () => {
+    expect(buildApiawSeedanceVideoPayload({
+      model: 'seedance2.0-mini', prompt: ' portrait clip ', duration: 10, aspectRatio: '9:16', resolution: '720p',
+      referenceImages: ['https://assets.example/a.png'], referenceVideos: ['https://assets.example/a.mp4'], referenceAudios: ['https://assets.example/a.mp3'],
+    })).toEqual({
+      model: 'seedance2.0-mini', prompt: 'portrait clip', seconds: '10', duration: 10, aspect_ratio: '9:16', ratio: '9:16', resolution: '720p',
+      images: ['https://assets.example/a.png'], videos: ['https://assets.example/a.mp4'], audios: ['https://assets.example/a.mp3'], generate_audio: false, watermark: false,
+    });
+    expect(() => buildApiawSeedanceVideoPayload({ model: 'seedance2.0-mini', prompt: 'demo', duration: 10, aspectRatio: '9:16', resolution: '720p', referenceAudios: ['https://assets.example/a.mp3'] })).toThrow('seedance_reference_audio_requires_visual');
+  });
   it('builds Seedream async image payloads and the 808relay Wan 3 payload', () => {
     expect(seedreamImageSize('9:16', '1k')).toBe('936x1664');
     expect(seedreamImageSize('16:9', '1k')).toBe('1664x936');
@@ -131,6 +141,7 @@ describe('provider payload contracts', () => {
     expect(providerKind('yuanai-gemini-prompt')).toBe('prompt');
     expect(providerKind('pomoai-gpt-prompt')).toBe('prompt');
     expect(providerKind('oairegbox-gpt-prompt')).toBe('prompt');
+    expect(providerKind('secure-skill-gpt-prompt')).toBe('prompt');
     expect(providerKind('wan3-video')).toBe('video');
   });
 

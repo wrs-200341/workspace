@@ -41,8 +41,11 @@ function start() {
   child.on('error', (error) => console.error('Provider worker process error:', error.message));
   child.on('exit', (code, signal) => {
     child = undefined;
+    if (stopping || process.argv.includes('--once')) {
+      removeFileIfExists(paths.stateFile);
+      process.exit(code ?? 0);
+    }
     publishState({ childPid: undefined, lastChildExit: code ?? signal ?? 'unknown' });
-    if (stopping || process.argv.includes('--once')) { process.exitCode = code ?? 0; return; }
     console.error(`Provider worker exited (${code ?? signal}); restarting in 5 seconds.`);
     restartTimer = setTimeout(start, 5000);
   });

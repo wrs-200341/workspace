@@ -1,4 +1,5 @@
 import dns from 'node:dns/promises';
+import sharp from 'sharp';
 import { createUploadedAsset, getAsset, getAssetFileInfo, type WorkspaceAsset } from './assetStore';
 import { readStoredOutput, storeImageBase64Outputs, storeImageOutput } from '@/lib/providers/outputStore';
 import { getProviderTask, listProviderTasks, updateProviderTask, type ProviderTask } from '@/lib/providers/taskStore';
@@ -9,6 +10,18 @@ const MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
 const FETCH_TIMEOUT_MS = 30_000;
 const CACHE_RETRY_DELAY_MS = 5_000;
 const MAX_CACHE_RETRIES = 5;
+
+async function isCompleteImage(bytes: Buffer): Promise<boolean> {
+  if (!bytes.length || bytes.length > MAX_OUTPUT_BYTES) return false;
+  try {
+    // A valid file signature is not enough: truncated Base64 can retain the
+    // PNG/JPEG header. Decode once at the cache boundary, never on queue reads.
+    await sharp(bytes, { failOn: 'warning' }).stats();
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export type ImageInventoryDependencies = {
   fetcher?: typeof fetch;
@@ -55,11 +68,11 @@ function decodeBase64(value: string): { bytes: Buffer; mimeType: string } | null
 
 async function readOutput(accountId: string, task: ProviderTask, value: string, index: number, dependencies: ImageInventoryDependencies): Promise<{ bytes: Buffer; mimeType: string } | null> {
   const cachedAtIndex = readStoredOutput(accountId, task.id, index);
-  if (cachedAtIndex) return { bytes: cachedAtIndex.bytes, mimeType: cachedAtIndex.mimeType };
+  if (cachedAtIndex && await isCompleteImage(cachedAtIndex.bytes)) return { bytes: cachedAtIndex.bytes, mimeType: cachedAtIndex.mimeType };
   const local = value.match(/\/image-tasks\/[^/]+\/outputs\/(\d+)$/);
   if (local) {
     const stored = readStoredOutput(accountId, task.id, Number(local[1]));
-    return stored ? { bytes: stored.bytes, mimeType: stored.mimeType } : null;
+    return stored && await isCompleteImage(stored.bytes) ? { bytes: stored.bytes, mimeType: stored.mimeType } : null;
   }
   if (!/^https?:\/\//i.test(value)) return null;
   if (dependencies.localOnly) return null;
@@ -113,17 +126,24 @@ export async function cacheImageTaskOutputsBeforeCompletion(accountId: string, t
   let cached = 0;
   const expected = task.outputBase64.filter((value) => value.trim()).length + task.outputUrls.filter((value) => value.trim()).length;
   if (task.outputBase64.length > 0) {
-    cached += storeImageBase64Outputs(accountId, task.id, task.outputBase64).length;
+    const validBase64: string[] = [];
+    for (const value of task.outputBase64) {
+      const raw = value.replace(/^data:[^;]+;base64,/i, '').trim();
+      const valid = raw.length <= Math.ceil(MAX_OUTPUT_BYTES * 4 / 3)
+        && await isCompleteImage(Buffer.from(raw, 'base64'));
+      validBase64.push(valid ? value : '');
+    }
+    cached += storeImageBase64Outputs(accountId, task.id, validBase64).length;
   }
   const urlOffset = task.outputBase64.length;
   for (let index = 0; index < task.outputUrls.length; index += 1) {
     const existing = readStoredOutput(accountId, task.id, urlOffset + index);
-    if (existing) { cached += 1; continue; }
+    if (existing && await isCompleteImage(existing.bytes)) { cached += 1; continue; }
     // URL outputs occupy the slot range after Base64 outputs. Keep the
     // source slot distinct so a mixed provider response cannot reuse the
     // Base64 bytes at the same numeric index as the remote URL.
     const output = await readOutput(accountId, task, task.outputUrls[index], urlOffset + index, dependencies).catch(() => null);
-    if (output && storeImageOutput(accountId, task.id, urlOffset + index, output.bytes, output.mimeType)) cached += 1;
+    if (output && await isCompleteImage(output.bytes) && storeImageOutput(accountId, task.id, urlOffset + index, output.bytes, output.mimeType)) cached += 1;
   }
   // A completed response with no media is still a valid terminal task (for
   // example a provider-side no-op); there is nothing to cache in that case.
@@ -209,7 +229,7 @@ export async function saveImageTaskOutputsToAssets(accountId: string, task: Prov
   const outputs: Array<{ bytes: Buffer; mimeType: string; index: number }> = [];
   for (let index = 0; index < task.outputBase64.length; index += 1) {
     const decoded = decodeBase64(task.outputBase64[index]);
-    if (decoded) outputs.push({ ...decoded, index });
+    if (decoded && await isCompleteImage(decoded.bytes)) outputs.push({ ...decoded, index });
   }
   // Keep URL outputs in a separate deterministic slot range. Using the count
   // of successfully decoded Base64 values can collide when an earlier Base64
@@ -217,7 +237,7 @@ export async function saveImageTaskOutputsToAssets(accountId: string, task: Prov
   const urlOffset = task.outputBase64.length;
   for (let index = 0; index < task.outputUrls.length; index += 1) {
     const output = await readOutput(accountId, task, task.outputUrls[index], urlOffset + index, dependencies);
-    if (output) outputs.push({ ...output, index: urlOffset + index });
+    if (output && await isCompleteImage(output.bytes)) outputs.push({ ...output, index: urlOffset + index });
   }
   const assets: WorkspaceAsset[] = [];
   for (const output of outputs) {

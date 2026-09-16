@@ -20,7 +20,7 @@ import { cacheVideoTaskOutputsBeforeCompletion, localVideoOutputUrls } from '@/l
 import { canonicalTaskProgress } from '@/lib/providers/taskProgress';
 import { normalizeTaskName, parseTaskNameMode, validateTaskNaming } from '@/lib/workspace/taskNaming';
 
-type VideoProvider = 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni';
+type VideoProvider = 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'apiaw-seedance-video' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni' | 'dola-sd2';
 
 
 export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -105,11 +105,12 @@ function normalizePromptAttribution(provider?: string, model?: string): { provid
   const aliasProviders: Record<string, { provider: string; model: string }> = {
     'pomoai-gpt': { provider: 'pomoai-gpt-prompt', model: 'gpt-5.5' },
     'oairegbox-gpt': { provider: 'oairegbox-gpt-prompt', model: 'gpt-5.5' },
+    'secure-skill-gpt': { provider: 'secure-skill-gpt-prompt', model: 'gpt-5.5' },
     bigsnake: { provider: 'bigsnake-prompt', model: 'gpt-5.5' },
     'gpt-2999': { provider: 'gpt-2999-prompt', model: 'gpt-2999' },
   };
   const alias = normalizedModel ? aliasProviders[normalizedModel] : undefined;
-  if (alias && (!provider || provider === 'pomoai-gpt-prompt' || provider === 'oairegbox-gpt-prompt')) return alias;
+  if (alias && (!provider || provider === 'pomoai-gpt-prompt' || provider === 'oairegbox-gpt-prompt' || provider === 'secure-skill-gpt-prompt')) return alias;
   return { provider, model };
 }
 
@@ -119,12 +120,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (auth instanceof Response) return auth;
   const { id } = await params;
   if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
-  const body = await request.json().catch(() => ({})) as { prompt?: unknown; provider?: unknown; model?: unknown; duration?: unknown; seconds?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; referenceAudios?: unknown; assetIds?: unknown; productImageAssetIds?: unknown; referenceAssetOrder?: unknown; pid?: unknown; taskNameMode?: unknown; taskName?: unknown };
+  const body = await request.json().catch(() => ({})) as { prompt?: unknown; provider?: unknown; model?: unknown; duration?: unknown; seconds?: unknown; aspectRatio?: unknown; resolution?: unknown; referenceImages?: unknown; referenceVideos?: unknown; referenceAudios?: unknown; assetIds?: unknown; productImageAssetIds?: unknown; referenceAssetOrder?: unknown; pid?: unknown; taskNameMode?: unknown; taskName?: unknown };
   if (typeof body.prompt !== 'string' || !body.prompt.trim()) return NextResponse.json({ success: false, error: 'prompt_required' }, { status: 400 });
   const prompt = body.prompt.trim();
-  const VIDEO_PROVIDERS: readonly string[] = ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'wan3-video', 'wan-3-nsfw', 'minimax-h3', 'miku-minimax', 'pro666-video', 'quality-v4', 'oairegbox-omni'];
+  const VIDEO_PROVIDERS: readonly string[] = ['grok-video', 'yuanai-grok-video', 'mgrouter-grok-video', 'wan3-video', 'wan-3-nsfw', 'apiaw-seedance-video', 'minimax-h3', 'miku-minimax', 'pro666-video', 'quality-v4', 'oairegbox-omni', 'dola-sd2'];
   const requestedProvider: VideoProvider = VIDEO_PROVIDERS.includes(body.provider as string) ? body.provider as VideoProvider : 'grok-video';
   const rawReferenceImages = Array.isArray(body.referenceImages) && body.referenceImages.every((item) => typeof item === 'string') ? body.referenceImages as string[] : [];
+  const referenceVideos = Array.isArray(body.referenceVideos) && body.referenceVideos.every((item) => typeof item === 'string') ? body.referenceVideos as string[] : [];
   const referenceAudios = Array.isArray(body.referenceAudios) && body.referenceAudios.every((item) => typeof item === 'string') ? body.referenceAudios as string[] : [];
   const assetIds = Array.isArray(body.assetIds) && body.assetIds.every((item) => typeof item === 'string') ? body.assetIds as string[] : [];
   const productImageAssetIds = Array.isArray(body.productImageAssetIds) && body.productImageAssetIds.every((item) => typeof item === 'string') ? body.productImageAssetIds as string[] : [];
@@ -143,13 +145,13 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   // sd-mini is handled by snumom's grok-video endpoint, not Quality V4.
   const provider: VideoProvider = requestedProvider;
   const config = getProviderConfig(provider);
-  const model = provider === 'wan-3-nsfw' || provider === 'minimax-h3' || provider === 'miku-minimax' || provider === 'pro666-video' || provider === 'yuanai-grok-video'
+  const model = provider === 'wan-3-nsfw' || provider === 'apiaw-seedance-video' || provider === 'minimax-h3' || provider === 'miku-minimax' || provider === 'pro666-video' || provider === 'yuanai-grok-video' || provider === 'dola-sd2'
     ? config.model
     : provider === 'grok-video' && requestedModel === 'grok'
       ? config.model
       : requestedModel ?? config.model;
   const isSdMini = provider === 'grok-video' && model.toLowerCase() === 'sd-mini';
-  const duration = rawDuration !== undefined ? Math.round(rawDuration) : (isSdMini ? undefined : getDefaultProductionDuration(config.supports.durations));
+  const duration = provider === 'dola-sd2' ? rawDuration ?? 5 : rawDuration !== undefined ? Math.round(rawDuration) : (isSdMini ? undefined : getDefaultProductionDuration(config.supports.durations));
   const aspectRatio = typeof body.aspectRatio === 'string' && body.aspectRatio.trim()
     ? body.aspectRatio.trim()
     : getDefaultProductionAspectRatio(config.supports.ratios);
@@ -162,16 +164,16 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
     const accountLookup = (productSummaryModule as typeof productSummaryModule & { lookupProductSummaryForAccount?: typeof lookupProductSummary }).lookupProductSummaryForAccount;
     const productSummary = typeof accountLookup === 'function' ? accountLookup(id, referenceImageName) : lookupProductSummary(referenceImageName);
     const referenceImages = [...rawReferenceImages, ...assetIds.map(() => 'https://pending.invalid/reference-image'), ...productImageAssetIds.map(() => 'https://pending.invalid/reference-image')];
-    const normalized = validateGenerationRequest({ provider, model, duration, aspectRatio, resolution, referenceImages, referenceAudios });
-    const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt, status: 'queued', progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), ...(taskNameMode ? { taskNameMode } : {}), ...(taskNameMode === 'manual' && taskName ? { taskName } : {}), sequence: 1, execution: 'pending', duration: normalized.duration, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, externalReferenceImages: rawReferenceImages, externalReferenceAudios: referenceAudios, maxRetries: 2, schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'video', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, finalPrompt: prompt, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) } });
+    const normalized = validateGenerationRequest({ provider, model, duration, aspectRatio, resolution, referenceImages, referenceVideos, referenceAudios });
+    const task = createProviderTask({ accountId: id, mode: 'video', provider, model, prompt, status: 'queued', progress: 0, metadata: { ...(ownerId ? { ownerId } : {}), ...(referenceImageName ? { referenceImageName } : {}), ...(taskNameMode ? { taskNameMode } : {}), ...(taskNameMode === 'manual' && taskName ? { taskName } : {}), sequence: 1, execution: 'pending', duration: normalized.duration, aspectRatio: normalized.aspectRatio, resolution: normalized.resolution, externalReferenceImages: rawReferenceImages, externalReferenceVideos: referenceVideos, externalReferenceAudios: referenceAudios, maxRetries: 2, schedulerState: 'waiting', schedulerOwnerId: ownerId ?? id, schedulerMode: 'video', schedulerModel: model, schedulerRuntimeId: SCHEDULER_RUNTIME_ID, finalPrompt: prompt, ...(productSummary ? { productSummary } : { productSummaryLookup: referenceImageName ? 'not_found' : 'no_reference_name' }), ...(assetIds.length || productImageAssetIds.length ? { assetIds, productImageAssetIds, referenceAssetOrder } : {}), ...(typeof body.pid === 'string' && body.pid.trim() ? { pid: body.pid.trim() } : {}) } });
     const accepted = enqueueProviderTask({ taskId: task.id, ownerId: ownerId ?? id, mode: 'video', model });
     await flushProviderTaskStore();
     const queuedTask = getProviderTask(task.id) ?? task;
     return NextResponse.json({ success: accepted, data: { ...queuedTask, status: queuedTask.status }, ...(accepted ? {} : { error: queuedTask.error ?? 'scheduler_queue_full' }) }, { status: accepted ? 202 : 503 });
   } catch (error) {
     const message = error instanceof Error ? error.message : '';
-    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_asset_path_invalid', 'reference_asset_file_invalid', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'wan_reference_audio_requires_visual', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'yuanai_grok_reference_media_unsupported', 'yuanai_grok_prompt_required', 'yuanai_grok_invalid_duration', 'yuanai_grok_invalid_aspect_ratio', 'yuanai_grok_invalid_resolution', 'yuanai_grok_too_many_reference_images', 'yuanai_grok_reference_urls_must_be_https', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'pro666_reference_video_unsupported', 'pro666_prompt_required', 'pro666_too_many_reference_images', 'pro666_too_many_reference_audios', 'pro666_reference_urls_must_be_https', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];
-    const responseError = known.includes(message) || message.startsWith('provider_') ? message : 'provider_request_failed';
+    const known = ['provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable', 'provider_upstream_failed', 'provider_invalid_request', 'reference_public_base_invalid', 'reference_asset_not_found', 'reference_asset_kind_invalid', 'reference_asset_path_invalid', 'reference_asset_file_invalid', 'reference_images_must_be_https', 'reference_videos_must_be_https', 'reference_audios_must_be_https', 'too_many_reference_images', 'too_many_reference_videos', 'too_many_reference_audios', 'wan_reference_audio_requires_visual', 'seedance_reference_audio_requires_visual', 'unsupported_duration', 'unsupported_aspect_ratio', 'unsupported_resolution', 'duration_required', 'yuanai_grok_reference_media_unsupported', 'yuanai_grok_prompt_required', 'yuanai_grok_invalid_duration', 'yuanai_grok_invalid_aspect_ratio', 'yuanai_grok_invalid_resolution', 'yuanai_grok_too_many_reference_images', 'yuanai_grok_reference_urls_must_be_https', 'sdmini_reference_media_unsupported', 'sdmini_model_invalid', 'sdmini_prompt_required', 'sdmini_invalid_seconds', 'sdmini_invalid_resolution', 'sdmini_720p_requires_10s', 'sdmini_invalid_aspect_ratio', 'sdmini_too_many_reference_images', 'sdmini_reference_images_must_be_http', 'seedance_prompt_required', 'seedance_model_invalid', 'seedance_invalid_duration', 'seedance_invalid_aspect_ratio', 'seedance_invalid_resolution', 'seedance_too_many_reference_images', 'seedance_too_many_reference_videos', 'seedance_too_many_reference_audios', 'seedance_reference_urls_must_be_https', 'pro666_reference_video_unsupported', 'pro666_prompt_required', 'pro666_too_many_reference_images', 'pro666_too_many_reference_audios', 'pro666_reference_urls_must_be_https', 'qualityv4_prompt_required', 'qualityv4_invalid_duration', 'qualityv4_invalid_resolution', 'qualityv4_720p_requires_10s', 'qualityv4_invalid_aspect_ratio', 'qualityv4_invalid_size', 'qualityv4_too_many_reference_images', 'qualityv4_too_many_reference_videos', 'qualityv4_too_many_reference_audios'];
+    const responseError = message === 'reference_images_required' || known.includes(message) || message.startsWith('provider_') ? message : 'provider_request_failed';
     const status = responseError.startsWith('provider_') ? 502 : 400;
     return NextResponse.json({ success: false, error: responseError }, { status });
   }

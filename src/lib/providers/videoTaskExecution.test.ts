@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ProviderTask } from './taskStore';
 
-const state = vi.hoisted(() => ({ task: null as ProviderTask | null, events: [] as string[], submit: vi.fn(), prompt: vi.fn(), bigSnakePrompt: vi.fn(), flush: vi.fn(), cache: vi.fn(), appendSummary: vi.fn(), lookupSummary: vi.fn(), version: 0, nextBatch: 0, conflictOnAcceptance: false }));
+const state = vi.hoisted(() => ({ task: null as ProviderTask | null, events: [] as string[], submit: vi.fn(), prompt: vi.fn(), bigSnakePrompt: vi.fn(), flush: vi.fn(), cache: vi.fn(), appendSummary: vi.fn(), lookupSummary: vi.fn(), readAsset: vi.fn(), readProduct: vi.fn(), readFile: vi.fn(), publishAssets: vi.fn(), publishProducts: vi.fn(), live: false, version: 0, nextBatch: 0, conflictOnAcceptance: false }));
 
 vi.mock('./taskStore', () => ({
   getProviderTask: (id: string) => state.task?.id === id ? structuredClone(state.task) : null,
@@ -24,17 +24,19 @@ vi.mock('./client', () => ({
   generateGeminiPrompt: state.prompt,
   generateGPTPrompt: state.prompt,
   generateOAIRegboxGPTPrompt: state.prompt,
+  generateSecureSkillGPTPrompt: state.prompt,
   generatePromptWithFallback: state.prompt,
   normalizeProviderResponse: (_provider: string, response: Record<string, unknown>) => ({ status: 'unknown', progress: 0, outputUrls: [], outputBase64: [], ...response }),
   providerErrorInfo: (error: Error & { status?: number }) => ({ code: error?.message ?? 'provider_request_failed', status: error?.status }),
   providerResponseSnapshot: (_error: unknown, fallback?: { body?: unknown }) => ({ body: fallback?.body }),
   sanitizeProviderError: (message: string) => message,
 }));
-vi.mock('./config', () => ({ getProviderConfig: () => ({ model: 'video-model', supports: { durations: [6], ratios: ['9:16'], resolutions: ['720p'] } }), isProviderLiveEnabled: () => false }));
+vi.mock('./config', () => ({ getProviderConfig: (provider: string) => ({ model: provider === 'dola-sd2' ? 'api_hmstudio_seedance_v2_0' : 'video-model', supports: { durations: [6], ratios: ['9:16'], resolutions: ['720p'] } }), isProviderLiveEnabled: () => state.live }));
 vi.mock('./taskProcessor', () => ({ processMockProviderTask: vi.fn() }));
-vi.mock('@/lib/workspace/referenceBridge', () => ({ publishAssetReferences: vi.fn() }));
-vi.mock('@/lib/workspace/productImages', () => ({ listProductImageAssets: () => [], publishProductImageReferences: vi.fn(), getProductImageAbsolutePath: vi.fn() }));
-vi.mock('@/lib/workspace/assetStore', () => ({ listAssets: () => [], readAssetFile: vi.fn() }));
+vi.mock('@/lib/workspace/referenceBridge', () => ({ publishAssetReferences: state.publishAssets }));
+vi.mock('@/lib/workspace/productImages', () => ({ listProductImageAssets: () => [], publishProductImageReferences: state.publishProducts, getProductImageAbsolutePath: (id: string) => `/product-images/${id}.png`, readProductImageAsset: state.readProduct }));
+vi.mock('@/lib/workspace/assetStore', () => ({ listAssets: () => [], readAssetFile: state.readAsset }));
+vi.mock('node:fs', () => ({ default: { readFileSync: state.readFile } }));
 vi.mock('@/lib/workspace/videoInventory', () => ({ cacheVideoTaskOutputsBeforeCompletion: state.cache }));
 vi.mock('@/lib/workspace/productSummary', () => ({ appendProductSummary: state.appendSummary, lookupProductSummary: state.lookupSummary }));
 
@@ -57,6 +59,12 @@ describe('persisted video execution', () => {
     state.task = null;
     state.events = [];
     state.conflictOnAcceptance = false;
+    state.live = false;
+    state.readAsset.mockReset();
+    state.readProduct.mockReset();
+    state.readFile.mockReset();
+    state.publishAssets.mockReset().mockReturnValue([]);
+    state.publishProducts.mockReset().mockReturnValue([]);
     state.submit.mockReset().mockImplementation(async () => {
       state.events.push('submit');
       return { provider: 'grok-video', model: 'video-model', mode: 'live', response: { status: 'processing', providerTaskId: 'upstream-video' } };
@@ -76,6 +84,68 @@ describe('persisted video execution', () => {
     seed({ providerTaskId: 'existing-id', status: 'processing' });
     await executePersistedVideoTask('task');
     expect(state.submit).not.toHaveBeenCalled();
+  });
+
+  it.each(['image', 'product-image'] as const)('submits dola sd2 local %s bytes without publishing a public reference', async (kind) => {
+    state.live = true;
+    const bytes = new Uint8Array([1, 2, 3]);
+    state.readAsset.mockReturnValue({ bytes, asset: { mimeType: 'image/png', name: 'reference.png' } });
+    state.readProduct.mockReturnValue({ mimeType: 'image/png', name: 'reference.png' });
+    state.readFile.mockReturnValue(bytes);
+    seed({ provider: 'dola-sd2', model: 'dola-sd2', metadata: { referenceAssetOrder: [{ id: 'reference', kind }], ...(kind === 'image' ? { referenceAssetIds: ['reference'] } : { productImageAssetIds: ['reference'] }) } });
+    state.submit.mockResolvedValue({ provider: 'dola-sd2', model: 'api_hmstudio_seedance_v2_0', mode: 'live', response: { status: 'processing', providerTaskId: 'paid-task' } });
+
+    await executePersistedVideoTask('task');
+
+    expect(state.submit).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'dola-sd2', model: 'api_hmstudio_seedance_v2_0', requestId: 'task', duration: 5,
+      referenceImages: [], referenceFiles: [{ bytes, mimeType: 'image/png', fileName: 'reference.png' }],
+    }), expect.objectContaining({ preventAmbiguousResubmission: true }));
+    expect(state.publishAssets).not.toHaveBeenCalled();
+    expect(state.publishProducts).not.toHaveBeenCalled();
+    if (kind === 'image') expect(state.readAsset).toHaveBeenCalledWith('account', 'reference');
+    else expect(state.readFile).toHaveBeenCalledWith('/product-images/reference.png');
+    expect(state.task).toMatchObject({ status: 'processing', providerTaskId: 'paid-task' });
+  });
+
+  it('retains the workspace task id on a confirmed rejected dola retry', async () => {
+    seed({ provider: 'dola-sd2', metadata: { externalReferenceImages: ['https://assets.example/reference.png'] } });
+    state.submit.mockRejectedValueOnce(Object.assign(new Error('provider_invalid_request'), { status: 400 }));
+    await executePersistedVideoTask('task');
+    expect(state.task?.metadata?.providerSubmissionStartedAt).toBeUndefined();
+    state.task!.status = 'retrying';
+    await executePersistedVideoTask('task');
+    expect(state.submit).toHaveBeenCalledTimes(2);
+    expect(state.submit.mock.calls.map((call) => call[0].requestId)).toEqual(['task', 'task']);
+    expect(state.submit.mock.calls[0][0].referenceImages).toEqual(['https://assets.example/reference.png']);
+  });
+
+  it('skips every supplier that already failed when resuming an asynchronous Grok failure', async () => {
+    seed({
+      provider: 'mgrouter-grok-video',
+      metadata: {
+        aspectRatio: '9:16', resolution: '720p', duration: 6,
+        lastProviderFailure: 'mgrouter-grok-video',
+        providerAttemptHistory: [
+          { provider: 'grok-video', status: 'failed' },
+          { provider: 'yuanai-grok-video', status: 'completed' },
+        ],
+      },
+    });
+
+    await executePersistedVideoTask('task');
+
+    expect(state.submit).toHaveBeenCalledWith(expect.objectContaining({ provider: 'mgrouter-grok-video' }), expect.objectContaining({
+      preventAmbiguousResubmission: true,
+      skipProviders: ['grok-video', 'mgrouter-grok-video'],
+    }));
+  });
+
+  it('does not mark dola image preparation failures as an uncertain paid submission', async () => {
+    seed({ provider: 'dola-sd2', metadata: { externalReferenceImages: ['https://assets.example/reference.png'] } });
+    state.submit.mockRejectedValue(new Error('reference_asset_file_invalid'));
+    await executePersistedVideoTask('task');
+    expect(state.task).toMatchObject({ status: 'failed', error: 'reference_asset_file_invalid', metadata: { providerSubmissionUncertain: false, providerSubmissionStartedAt: undefined } });
   });
 
   it('exhausts retries on an uncertain POST and does not submit it again', async () => {
@@ -155,6 +225,18 @@ describe('persisted video execution', () => {
     expect(state.task?.metadata?.providerSubmissionStartedAt).toBeUndefined();
   });
 
+  it('records an overlength prompt as a local preflight failure instead of an uncertain submission', async () => {
+    seed();
+    state.submit.mockRejectedValue(new Error('video_prompt_too_long'));
+    await executePersistedVideoTask('task');
+    expect(state.submit).toHaveBeenCalledTimes(1);
+    expect(state.task).toMatchObject({
+      status: 'failed',
+      error: 'video_prompt_too_long',
+      metadata: { providerSubmissionUncertain: false, providerSubmissionStartedAt: undefined },
+    });
+  });
+
   it('clears the submission marker when cancelled after its flush but before POST', async () => {
     seed();
     state.flush.mockImplementationOnce(async () => { state.task!.status = 'cancelled'; });
@@ -210,6 +292,15 @@ describe('persisted video execution', () => {
     expect(state.appendSummary).toHaveBeenCalledWith(expect.stringContaining('Requested product title'), summary);
     expect(state.prompt.mock.calls[0][0].prompt).toContain('EXCEL:Workbook product facts');
     expect(state.submit.mock.calls[0][0].prompt).toBe('generated child prompt');
+  });
+
+  it('instructs the child-prompt model to return only a body within 3600 UTF-8 bytes', async () => {
+    seedPrompt();
+    await executePersistedVideoTask('task');
+    const generationPrompt = String(state.prompt.mock.calls[0][0].prompt);
+    expect(generationPrompt).toContain('最多 3600 UTF-8 字节');
+    expect(generationPrompt).toContain('只输出可以直接提交给视频模型的提示词正文');
+    expect(generationPrompt).toContain('不要开场说明，不要结尾总结，不要字符数说明，不要 Markdown 代码块');
   });
 
   it('restores the BigSnake provider selector instead of treating its canonical model as GPT', async () => {

@@ -7,6 +7,7 @@ type View = { scale: number; x: number; y: number };
 const MIN_SCALE = 1;
 const MAX_SCALE = 8;
 const ZOOM_SENSITIVITY = 0.0015;
+const DEFAULT_REVIEW_VIDEO_PLAYBACK_RATE = 2;
 
 /**
  * Chrome-free media viewer used by the task review page.
@@ -18,6 +19,7 @@ const ZOOM_SENSITIVITY = 0.0015;
  */
 export default function ReviewZoomableMedia({ src, alt, video = false }: { src: string; alt: string; video?: boolean }) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const dragStart = useRef<{ px: number; py: number; ox: number; oy: number } | null>(null);
   const [view, setView] = useState<View>({ scale: MIN_SCALE, x: 0, y: 0 });
   const [dragging, setDragging] = useState(false);
@@ -38,6 +40,17 @@ export default function ReviewZoomableMedia({ src, alt, video = false }: { src: 
     setFailed(false);
     setView({ scale: MIN_SCALE, x: 0, y: 0 });
   }, [src]);
+
+  const applyDefaultVideoPlaybackRate = useCallback(() => {
+    const element = videoRef.current;
+    if (!element) return;
+    element.defaultPlaybackRate = DEFAULT_REVIEW_VIDEO_PLAYBACK_RATE;
+    element.playbackRate = DEFAULT_REVIEW_VIDEO_PLAYBACK_RATE;
+  }, []);
+
+  useEffect(() => {
+    if (video) applyDefaultVideoPlaybackRate();
+  }, [applyDefaultVideoPlaybackRate, src, video]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -116,7 +129,7 @@ export default function ReviewZoomableMedia({ src, alt, video = false }: { src: 
       {failed ? (
         <div className="task-media-fallback" role="img" aria-label={`${alt} 不可用`}>图片不可用</div>
       ) : video ? (
-        <video src={src} controls preload="metadata" playsInline aria-label={alt} style={{ ...mediaStyle, background: '#10151e' }} onError={() => setFailed(true)} />
+        <video ref={videoRef} src={src} controls preload="metadata" playsInline aria-label={alt} style={{ ...mediaStyle, background: '#10151e' }} onLoadedMetadata={applyDefaultVideoPlaybackRate} onError={() => setFailed(true)} />
       ) : (
         <img src={src} alt={alt} draggable={false} style={mediaStyle} onError={() => setFailed(true)} />
       )}

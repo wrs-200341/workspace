@@ -1,5 +1,6 @@
 /** User-facing Chinese messages for provider and task error codes. */
 const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
+  reference_images_required: '该模型需要至少 1 张参考图，请选择参考图后提交。',
   pro666_reference_video_unsupported: 'Pro666 sd2-933-mini 暂不支持参考视频。',
   pro666_prompt_required: 'Pro666 视频提示词不能为空。',
   pro666_too_many_reference_images: 'Pro666 sd2-933-mini 最多支持 1 张参考图。',
@@ -22,6 +23,7 @@ const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   provider_model_unavailable: '供应商当前没有可用的模型通道，请稍后重试或联系供应商。',
   provider_upstream_failed: '供应商上游生成失败，任务没有产出可用内容；如已预扣费，请以供应商账单为准。',
   provider_invalid_request: '供应商拒绝了请求参数，请检查模型支持的时长、比例、分辨率和参考素材。',
+  video_prompt_too_long: '提示词超长，请缩短后重新提交。',
   provider_content_policy: '供应商内容审核拒绝了本次请求，请修改提示词后重试。',
   provider_reference_rejected: '供应商内容审核拒绝了参考图，请更换参考图后重试。',
   provider_response_too_large: '供应商返回内容超过本地限制，常见于 4K 图片结果过大；请重试，或暂时选择较低分辨率。',
@@ -36,7 +38,7 @@ const PROVIDER_ERROR_MESSAGES: Readonly<Record<string, string>> = {
   provider_resume_unsupported: '该任务已提交给供应商，不能本地重复提交；请等待当前任务完成。',
   scheduler_queue_full: '当前运营账号的生产队列已达到安全上限，请稍后再提交。',
   scheduler_interrupted: '服务器重启时中断了尚未提交的任务，请点击恢复配置重新提交。',
-  scheduler_prompt_interrupted: '服务重启导致子提示词生成中断，视频尚未提交给供应商；可以安全恢复。',
+  scheduler_prompt_interrupted: '服务重启导致子提示词生成环节被中断。',
   prompt_provider_timeout: '子提示词模型响应超时，视频尚未提交给供应商；可以稍后安全恢复。',
   provider_capacity: '供应商当前繁忙或队列已满，本次没有拿到上游任务编号；可以稍后安全恢复。',
   image_output_cache_failed: '图片已生成但本地缓存失败，请重试或重新生成。',

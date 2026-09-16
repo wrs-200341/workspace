@@ -34,6 +34,8 @@ const VIDEO_CAPABILITY_KEYS: Partial<Record<ProviderId, string>> = {
   'mgrouter-grok-video': 'mgrouter-grok-video:grok-video',
   'wan3-video': 'wan3-video:wan3.0-r2v',
   'wan-3-nsfw': 'wan-3-nsfw:wan-3',
+  'apiaw-seedance-video': 'apiaw-seedance-video:seedance2.0-mini',
+  'dola-sd2': 'dola-sd2:dola-sd2',
   'miku-minimax': 'miku-minimax:minimax-h3-max',
   'oairegbox-omni': 'oairegbox:omni',
   'minimax-h3': 'minimax-h3:minimax-h3',
@@ -56,6 +58,8 @@ export function modelIdForVideoProvider(provider: ProviderId, currentModelId?: s
     return currentModelId?.startsWith('wan3.0-') ? currentModelId : 'wan3.0-r2v';
   }
   if (provider === 'wan-3-nsfw') return 'wan-3';
+  if (provider === 'apiaw-seedance-video') return 'seedance2.0-mini';
+  if (provider === 'dola-sd2') return 'dola-sd2';
   if (provider === 'miku-minimax') return 'minimax-h3-max';
   if (provider === 'minimax-h3') {
     // secure-skill exposes one live MiniMax H3 model. Historical r2v/t2v
@@ -87,7 +91,8 @@ export const VIDEO_MODELS: ReadonlyArray<{ id: string; label: string }> = [
   { id: 'sd-mini', label: 'sd-mini（按条 $0.6）' },
   { id: 'omni-fast-no-water', label: 'Omni Fast No Water' },
   { id: 'wan3.0-r2v', label: 'Wan 3.0 R2V' },
-  { id: 'wan-3', label: 'Wan 3 NSFW' },
+  { id: 'seedance2.0-mini', label: 'Seedance 2.0 Mini（可生情趣）' },
+  { id: 'dola-sd2', label: 'dola sd2' },
   // Retired prime ids: kept exported for restore compatibility, hidden from the
   // live supplier selector below.
   { id: 'wan3.0-prime-t2v', label: 'Wan 3.0 Prime T2V (legacy)' },
@@ -108,9 +113,9 @@ const VIDEO_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers:
   { id: 'minimax-h3-max', label: 'H3 Max', providers: ['miku-minimax'] },
   { id: 'sd2-933-mini', label: 'sd2-933-mini', providers: ['pro666-video'] },
   { id: 'wan3.0-r2v', label: 'Wan 3.0', providers: ['wan3-video'] },
-  { id: 'wan-3', label: 'Wan 3 NSFW', providers: ['wan-3-nsfw'] },
+  { id: 'seedance2.0-mini', label: 'Seedance 2.0 Mini（可生情趣）', providers: ['apiaw-seedance-video'] },
+  { id: 'dola-sd2', label: 'dola sd2', providers: ['dola-sd2'] },
   { id: 'quality-v4', label: 'Quality V4', providers: ['quality-v4'] },
-  { id: 'seedance', label: 'Seedance', providers: [] },
 ];
 const IMAGE_ROUTING_CARDS: ReadonlyArray<{ id: string; label: string; providers: ProviderId[] }> = [
   { id: 'grok-image', label: 'Grok', providers: ['mgrouter-grok-image', 'origin-grok-image'] },
@@ -537,7 +542,11 @@ export function ProductionForm({ accountId, mode }: Props) {
 
   function selectVideoModel(nextModelId: string) {
     setVideoModelId(nextModelId);
-    const nextProvider = nextModelId === 'wan-3'
+    const nextProvider = nextModelId === 'seedance2.0-mini'
+      ? 'apiaw-seedance-video'
+      : nextModelId === 'dola-sd2'
+      ? 'dola-sd2'
+      : nextModelId === 'wan-3'
       ? 'wan-3-nsfw'
       : nextModelId === 'minimax-h3-max'
       ? 'miku-minimax'
@@ -689,7 +698,7 @@ export function ProductionForm({ accountId, mode }: Props) {
         finalPrompt: effectiveFinalPrompt || effectiveChildPrompt || prompt,
         childPrompt: effectiveChildPrompt,
         provider,
-        model: mode === 'video' && (provider === 'wan3-video' || provider === 'wan-3-nsfw' || provider === 'grok-video' || provider === 'yuanai-grok-video' || provider === 'mgrouter-grok-video' || provider === 'quality-v4' || provider === 'minimax-h3' || provider === 'pro666-video') ? videoModelId : mode === 'image' ? imageModelId : selectedProvider?.model,
+        model: mode === 'video' && (provider === 'wan3-video' || provider === 'wan-3-nsfw' || provider === 'apiaw-seedance-video' || provider === 'dola-sd2' || provider === 'grok-video' || provider === 'yuanai-grok-video' || provider === 'mgrouter-grok-video' || provider === 'quality-v4' || provider === 'minimax-h3' || provider === 'pro666-video') ? videoModelId : mode === 'image' ? imageModelId : selectedProvider?.model,
         modelId: mode === 'video' ? videoModelId : undefined,
         supplierId: mode === 'video' ? provider : undefined,
         promptMode,
@@ -752,7 +761,7 @@ export function ProductionForm({ accountId, mode }: Props) {
      {promptTemplateTools}
     {mode === 'video' && <ProductSummaryUploader accountId={accountId} referenceName={selectedReferenceImageName} />}
     {mode === 'video' && promptMode === 'manual' && <div className="form-row"><label>账号资产提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">不使用模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}{item.accountName ? ` · ${item.accountName}` : ''}</option>)}</select><small className="field-help">仅显示当前工作区账号的提示词模板，载入后仍可继续手写修改。</small></label><label>模板名称<input className="select" value={promptTemplateName} onChange={(event) => setPromptTemplateName(event.target.value)} placeholder="例如：卡点视频" /><small className="field-help">手写好提示词后可直接存为当前账号的视频模板。</small></label><button type="button" className="ghost-button" onClick={() => void savePromptTemplate()} disabled={savingPromptTemplate || !prompt.trim()}>{savingPromptTemplate ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />} 保存提示词</button></div>}
-    {mode === 'video' && promptMode === 'asset-template-child-prompt' && <div className="form-row"><label>账号资产提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">请选择模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>子提示词模型<select className="select" value={promptModel} onChange={(event) => setPromptModel(event.target.value)}><option value="pomoai-gpt">PomoAI GPT-5.5（仅 PomoAI 内部模型自动退避）</option>{(promptProviders.find((item) => item.id === 'pomoai-gpt-prompt')?.promptModelOptions ?? []).map((model) => <option key={`pomoai:${model}`} value={`pomoai:${model}`}>PomoAI · {model}</option>)}<option value="oairegbox-gpt">OAIRegBox GPT-5.5</option><option value="bigsnake">BigSnake GPT-5.5</option><option value="gpt-2999">GPT-2999</option><option value="gemini-2.5-flash">Gemini 2.5 Flash</option></select></label><small className="field-help">PomoAI 只会在自身可用的对话模型之间自动退避；OAIRegBox、BigSnake 等供应商需要单独选择。</small></div>}
+    {mode === 'video' && promptMode === 'asset-template-child-prompt' && <div className="form-row"><label>账号资产提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">请选择模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label><label>子提示词模型<select className="select" value={promptModel} onChange={(event) => setPromptModel(event.target.value)}><option value="pomoai-gpt">PomoAI GPT-5.5（仅 PomoAI 内部模型自动退避）</option>{(promptProviders.find((item) => item.id === 'pomoai-gpt-prompt')?.promptModelOptions ?? []).map((model) => <option key={`pomoai:${model}`} value={`pomoai:${model}`}>PomoAI · {model}</option>)}<option value="secure-skill-gpt">secure-skill GPT-5.5 Medium</option><option value="oairegbox-gpt">OAIRegBox GPT-5.5</option><option value="bigsnake">BigSnake GPT-5.5</option><option value="gpt-2999">GPT-2999</option><option value="gemini-2.5-flash">Gemini 2.5 Flash</option></select></label><small className="field-help">PomoAI 只会在自身可用的对话模型之间自动退避；secure-skill、OAIRegBox、BigSnake 等供应商需要单独选择。</small></div>}
     {mode === 'video' && promptMode === 'manual' && <div className="prompt-manual-note">手写模式将直接使用上方提示词提交生产；切换到自动模式后，系统会先调用提示词模型生成子提示词，再加入生产队列。</div>}
     {mode !== 'prompt' && <div className="reference-picker-buttons">
       {maxImages > 0 && <button type="button" className="ghost-button" onClick={() => { setAssetPickerKind('image'); setAssetPickerTab('material'); setAssetPickerOpen(true); }}>选择参考图 <span>{selectedImageCountForDisplay}/{maxImages}</span></button>}
@@ -976,6 +985,8 @@ function providerModelId(provider: ProviderId): string | undefined {
 }
 
 export function providersForVideoModel(providers: ReadonlyArray<ProviderCatalogEntry>, modelId: string) {
+  if (modelId === 'dola-sd2') return providers.filter((item) => item.id === 'dola-sd2');
+  if (modelId === 'seedance2.0-mini') return providers.filter((item) => item.id === 'apiaw-seedance-video');
   if (modelId === 'wan-3') return providers.filter((item) => item.id === 'wan-3-nsfw');
   if (modelId === 'minimax-h3-max') return providers.filter((item) => item.id === 'miku-minimax');
   if (modelId.startsWith('wan3.0-')) return providers.filter((item) => item.id === 'wan3-video');
@@ -1007,6 +1018,7 @@ export function providerOptionsForVideoModel(providers: ReadonlyArray<ProviderCa
 
 /** Return only model ids understood by the currently selected supplier. */
 export function videoModelsForProvider(provider: ProviderId, currentModelId?: string): ReadonlyArray<{ id: string; label: string }> {
+  if (provider === 'dola-sd2') return VIDEO_MODELS.filter((item) => item.id === 'dola-sd2');
   // Keep the historical `grok-video` alias out of the selector; it remains
   // accepted by the API/router for restored tasks but MGRouter's live catalog
   // uses the two canonical ids below.
@@ -1014,6 +1026,7 @@ export function videoModelsForProvider(provider: ProviderId, currentModelId?: st
   if (provider === 'yuanai-grok-video') return VIDEO_MODELS.filter((item) => item.id === 'grok-imagine-video-1.5-preview');
   if (provider === 'grok-video') return VIDEO_MODELS.filter((item) => item.id === 'grok-imagine-video-1.5（按次）' || item.id === 'grok-video-1.5（按秒）');
   if (provider === 'quality-v4') return VIDEO_MODELS.filter((item) => item.id === 'quality-v4');
+  if (provider === 'apiaw-seedance-video') return VIDEO_MODELS.filter((item) => item.id === 'seedance2.0-mini');
   if (provider === 'oairegbox-omni') return VIDEO_MODELS.filter((item) => item.id === 'omni-fast-no-water');
   if (provider === 'minimax-h3') {
     const legacy = currentModelId && (currentModelId === 'minimax-h3-r2v' || currentModelId === 'minimax-h3-t2v')
@@ -1040,6 +1053,7 @@ export function promptProviderLabel(promptModel: string): string {
   if (normalized === 'pomoai-gpt' || normalized === 'pomoai-gpt-prompt') return 'PomoAI GPT-5.5（自动退避）';
   if (normalized.startsWith('pomoai:')) return `PomoAI ${normalized.slice('pomoai:'.length) || 'GPT'}`;
   if (normalized === 'oairegbox-gpt' || normalized === 'oairegbox-gpt-prompt') return 'OAIRegBox GPT-5.5';
+  if (normalized === 'secure-skill-gpt' || normalized === 'secure-skill-gpt-prompt') return 'secure-skill GPT-5.5 Medium';
   if (normalized === 'bigsnake' || normalized.startsWith('bigsnake:')) return 'BigSnake';
   if (normalized === 'gpt-2999' || /^gpt[-_]/.test(normalized)) return 'GPT-2999';
   if (/^gemini[-_]/.test(normalized)) return 'Gemini';

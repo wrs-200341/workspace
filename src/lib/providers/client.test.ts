@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import sharp from 'sharp';
 import { POMOAI_PROMPT_FALLBACK_MODELS } from './config';
 import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateSeedreamImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateGeminiPrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, submitVideoWithFallback, syncProviderTask, downloadProviderVideoContent, generateMGRouterImage, generateResponsesPrompt, generatePromptWithFallback } from './client';
 
@@ -17,6 +18,7 @@ describe('provider client helpers', () => {
     expect(providerEndpoint('bigsnake-prompt', 'create')).toBe('https://api.bigsnake.xyz/v1/responses');
     expect(providerEndpoint('pomoai-gpt-prompt', 'create')).toBe('https://www.pomoai.ai/v1/responses');
     expect(providerEndpoint('oairegbox-gpt-prompt', 'create')).toBe('https://newapi-2.oairegbox.cc/v1/responses');
+    expect(providerEndpoint('secure-skill-gpt-prompt', 'create')).toBe('https://token.secure-skill.com/v1/responses');
   });
 
   it('uses Junze GPT Image ratio-string requests on its OpenAI route', async () => {
@@ -161,6 +163,21 @@ describe('provider client helpers', () => {
     timeoutSpy.mockRestore();
   });
 
+  it('calls secure-skill GPT-5.5 Responses with medium reasoning', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://token.secure-skill.com/v1/responses');
+      expect((init?.headers as Record<string, string>).authorization).toBe('Bearer test-key');
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        model: 'gpt-5.5',
+        input: [{ role: 'user', content: [{ type: 'input_text', text: 'hello' }] }],
+        reasoning: { effort: 'medium' },
+      });
+      return Response.json({ status: 'completed', model: 'gpt-5.5', output_text: 'secure-skill result' });
+    });
+    const result = await generateResponsesPrompt('secure-skill-gpt-prompt', { prompt: 'hello' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', SECURE_SKILL_GPT_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ mode: 'live', provider: 'secure-skill-gpt-prompt', model: 'gpt-5.5', text: 'secure-skill result' });
+  });
+
   it('falls back only between PomoAI models', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
       expect(String(url)).toBe('https://www.pomoai.ai/v1/responses');
@@ -253,6 +270,9 @@ describe('provider client helpers', () => {
     expect(providerEndpoint('wan-3-nsfw', 'content')).toBe('https://va.808relay.com/v1/videos/{id}/content');
     expect(providerEndpoint('seedream', 'create')).toBe('https://newapi.apiaw.com/v1/images/generations');
     expect(providerEndpoint('seedream', 'status')).toBe('https://newapi.apiaw.com/v1/images/generations');
+    expect(providerEndpoint('apiaw-seedance-video', 'create')).toBe('https://newapi.apiaw.com/v1/videos');
+    expect(providerEndpoint('apiaw-seedance-video', 'status')).toBe('https://newapi.apiaw.com/v1/videos/{id}');
+    expect(providerEndpoint('apiaw-seedance-video', 'content')).toBe('https://newapi.apiaw.com/v1/videos/{id}/content');
     expect(providerEndpoint('pomoai-gemini-image', 'create')).toBe('https://www.pomoai.ai/v1beta/models/gemini-3.1-flash-image:generateContent');
     expect(providerEndpoint('gpt-2999-prompt', 'create')).toBe('https://2999api.com/v1/responses');
     expect(providerEndpoint('oairegbox-omni', 'create')).toBe('https://newapi-2.oairegbox.cc/v1/videos');
@@ -272,6 +292,31 @@ describe('provider client helpers', () => {
     });
     const result = await submitVideo({ provider: 'wan-3-nsfw', model: 'wan-3', prompt: 'portrait', duration: 5, aspectRatio: '9:16', resolution: '720p' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', WAN_3_NSFW_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result).toMatchObject({ mode: 'live', provider: 'wan-3-nsfw' });
+  });
+
+  it('submits apiaw Seedance 2.0 Mini with the documented async video fields', async () => {
+    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      expect(String(url)).toBe('https://newapi.apiaw.com/v1/videos');
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: 'seedance2.0-mini', prompt: 'portrait', seconds: '10', duration: 10,
+        aspect_ratio: '9:16', ratio: '9:16', resolution: '720p',
+        images: ['https://assets.example/a.png'], videos: [], audios: [], generate_audio: false, watermark: false,
+      });
+      return Response.json({ id: 'seedance-task', status: 'queued' });
+    });
+    const result = await submitVideo({
+      provider: 'apiaw-seedance-video', model: 'seedance2.0-mini', prompt: 'portrait', duration: 10,
+      aspectRatio: '9:16', resolution: '720p', referenceImages: ['https://assets.example/a.png'],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', SEEDREAM_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result).toMatchObject({ mode: 'live', provider: 'apiaw-seedance-video' });
+  });
+
+  it('normalizes a supplier prompt byte-limit rejection to video_prompt_too_long', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: 'prompt_too_long', message: 'prompt 最长 4096 字节（UTF-8）' }), { status: 400, headers: { 'content-type': 'application/json' } }));
+    await expect(submitVideo({
+      provider: 'apiaw-seedance-video', model: 'seedance2.0-mini', prompt: 'portrait', duration: 10,
+      aspectRatio: '9:16', resolution: '720p', referenceImages: [],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', SEEDREAM_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).rejects.toThrow('video_prompt_too_long');
   });
 
   it('requires Wan 3 reference audio to include a visual reference', async () => {
@@ -303,7 +348,34 @@ describe('provider client helpers', () => {
     const info = providerErrorInfo(caught);
     expect(info.status).toBe(400);
     expect(info.rawBody).toContain('content_policy');
-    expect(providerResponseSnapshot(caught).body).toEqual({ error: { code: 'content_policy', message: 'blocked by review' } });
+    const snapshot = providerResponseSnapshot(caught);
+    expect(snapshot.code).toBe('provider_content_policy');
+    expect(snapshot.body).toEqual({ error: { code: 'content_policy', message: 'blocked by review' } });
+  });
+
+  it('labels accepted successful response snapshots without reporting provider request failure', () => {
+    const body = { created: 1, data: [{ b64_json: 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=' }] };
+    expect(providerResponseSnapshot(undefined, { body, method: 'POST' })).toMatchObject({
+      code: 'provider_response_received',
+      method: 'POST',
+      body,
+    });
+  });
+
+  it('keeps explicit failed response snapshots marked as provider request failures', () => {
+    expect(providerResponseSnapshot(undefined, { body: { status: 'failed', error: { message: 'blocked' } }, method: 'POST' })).toMatchObject({
+      code: 'provider_request_failed',
+      method: 'POST',
+      body: { status: 'failed', error: { message: 'blocked' } },
+    });
+  });
+
+  it('keeps oversized successful response snapshots recoverable while labeling them as received', () => {
+    const body = { created: 1, data: [{ b64_json: 'a'.repeat(1024 * 1024 + 64) }] };
+    const snapshot = providerResponseSnapshot(undefined, { body, method: 'POST' });
+    expect(snapshot).toMatchObject({ code: 'provider_response_received', method: 'POST', truncated: true });
+    expect(typeof snapshot.rawBody).toBe('string');
+    expect(String(snapshot.rawBody)).toContain('provider_response_received');
   });
 
   it('retains a successful HTTP response body when the supplier returns invalid JSON', async () => {
@@ -388,6 +460,28 @@ describe('provider client helpers', () => {
       referenceFiles: [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }],
     }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result.mode).toBe('live');
+  });
+
+  it('reduces oversized YuanAI references before the synchronous edit request', async () => {
+    const pixels = Buffer.allocUnsafe(2160 * 3840 * 3);
+    for (let index = 0; index < pixels.length; index += 1) pixels[index] = index % 251;
+    const original = await sharp(pixels, { raw: { width: 2160, height: 3840, channels: 3 } }).png({ compressionLevel: 0 }).toBuffer();
+    expect(original.byteLength).toBeGreaterThan(4 * 1024 * 1024);
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const file = (init?.body as FormData).get('image') as File;
+      const optimized = Buffer.from(await file.arrayBuffer());
+      expect(file.type).toBe('image/jpeg');
+      expect(file.name).toBe('large.jpg');
+      expect(optimized.byteLength).toBeLessThan(original.byteLength);
+      const metadata = await sharp(optimized).metadata();
+      expect(Math.max(metadata.width ?? 0, metadata.height ?? 0)).toBe(2048);
+      return Response.json({ data: [{ b64_json: 'YWJj' }] });
+    });
+    await generateYuanAIImage({
+      model: 'gpt-image-2', prompt: 'edit', aspectRatio: '9:16', resolution: '4k',
+      referenceFiles: [{ bytes: new Uint8Array(original), mimeType: 'image/png', fileName: 'large.png' }],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('maps YuanAI 4k square reference-image edits to a 2048x2048 multipart size', async () => {
@@ -561,6 +655,35 @@ describe('provider client helpers', () => {
     expect(result).toMatchObject({ mode: 'live', provider: 'grok-video' });
   });
 
+  it('accepts a Snumom Grok prompt containing exactly 4096 UTF-8 bytes', async () => {
+    const fetchMock = vi.fn(async () => Response.json({ id: 'snumom-limit-task', status: 'queued' }));
+    await expect(submitVideo({
+      provider: 'grok-video', model: 'grok-imagine-video-1.5（按次）', prompt: 'a'.repeat(4096), duration: 6,
+      aspectRatio: '9:16', resolution: '720p',
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', GROK_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).resolves.toMatchObject({ mode: 'live' });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a Snumom Grok prompt over 4096 UTF-8 bytes before fetch', async () => {
+    const fetchMock = vi.fn();
+    await expect(submitVideo({
+      provider: 'grok-video', model: 'grok-imagine-video-1.5（按次）', prompt: 'a'.repeat(4097), duration: 6,
+      aspectRatio: '9:16', resolution: '720p',
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', GROK_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).rejects.toThrow('video_prompt_too_long');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('counts multibyte Chinese text using UTF-8 bytes for the Snumom Grok limit', async () => {
+    const fetchMock = vi.fn();
+    expect('中'.repeat(1366)).toHaveLength(1366);
+    expect(Buffer.byteLength('中'.repeat(1366), 'utf8')).toBe(4098);
+    await expect(submitVideo({
+      provider: 'grok-video', model: 'grok-imagine-video-1.5（按次）', prompt: '中'.repeat(1366), duration: 6,
+      aspectRatio: '9:16', resolution: '720p',
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', GROK_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).rejects.toThrow('video_prompt_too_long');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('submits MGRouter Grok video using the canonical catalog model id', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(String(_url)).toBe('https://raw.mgrouter.com/v1/videos/generations');
@@ -611,6 +734,18 @@ describe('provider client helpers', () => {
     });
     expect(result.providerTaskId).toBe('task_created');
     expect(result.status).toBe('running');
+  });
+
+  it('treats an accepted MGRouter xAI HTTP 400 status as terminal upstream failure', async () => {
+    const body = { error: { message: 'xAI upstream returned status 400', type: 'invalid_request_error' } };
+    const fetchMock = vi.fn(async () => Response.json(body, { status: 400 }));
+    const result = await syncProviderTask('mgrouter-grok-video', 'accepted-mg-task', {
+      env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MGROUTER_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch,
+    });
+    expect(result).toMatchObject({
+      providerTaskId: 'accepted-mg-task', status: 'failed', progress: 100,
+      error: 'provider_upstream_failed', response: body,
+    });
   });
 
   it('fails over Grok video to a configured sibling supplier after upstream failure', async () => {

@@ -2,6 +2,23 @@ import { describe, expect, it } from 'vitest';
 import { validateGenerationRequest } from './validation';
 
 describe('provider generation capability validation', () => {
+  it('accepts dola sd2 with one image and its supported integer duration range', () => {
+    for (const duration of [4, 5, 9, 15]) {
+      expect(validateGenerationRequest({ provider: 'dola-sd2', duration, referenceImages: ['https://assets.example/reference.png'] })).toEqual({ duration, aspectRatio: '9:16', resolution: '720p' });
+    }
+  });
+
+  it('rejects dola sd2 requests without an image or with unsupported media and parameters', () => {
+    const base = { provider: 'dola-sd2' as const, duration: 5, referenceImages: ['https://assets.example/reference.png'] };
+    expect(() => validateGenerationRequest({ ...base, referenceImages: [] })).toThrow('reference_images_required');
+    expect(() => validateGenerationRequest({ ...base, referenceImages: [...base.referenceImages, ...base.referenceImages] })).toThrow('too_many_reference_images');
+    expect(() => validateGenerationRequest({ ...base, referenceVideos: ['https://assets.example/reference.mp4'] })).toThrow('too_many_reference_videos');
+    expect(() => validateGenerationRequest({ ...base, referenceAudios: ['https://assets.example/reference.mp3'] })).toThrow('too_many_reference_audios');
+    for (const duration of [3, 5.5, 16]) expect(() => validateGenerationRequest({ ...base, duration })).toThrow('unsupported_duration');
+    expect(() => validateGenerationRequest({ ...base, aspectRatio: '16:9' })).toThrow('unsupported_aspect_ratio');
+    expect(() => validateGenerationRequest({ ...base, resolution: '1080p' })).toThrow('unsupported_resolution');
+  });
+
   it('accepts the recovered Wan 3 five-second contract', () => {
     expect(validateGenerationRequest({
       provider: 'wan3-video',
