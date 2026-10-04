@@ -5,7 +5,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount, workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 import { getProviderConfig, isProviderLiveEnabled, type ProviderId } from '@/lib/providers/config';
-import { createProviderTasks, flushProviderTaskStore, getProviderTask, listProviderTasks } from '@/lib/providers/taskStore';
+import { createProviderTasks, flushProviderTaskStore, getProviderTask, listProviderTaskSummaries } from '@/lib/providers/taskStore';
 import { validateGenerationRequest } from '@/lib/providers/validation';
 import { getVideoCapability, validateVideoCapability } from '@/lib/workspace/production/video-capabilities';
 import { getDefaultProductionAspectRatio, getDefaultProductionDuration, getDefaultVideoResolution } from '@/lib/workspace/production/defaults';
@@ -30,12 +30,15 @@ export async function POST(request: NextRequest, { params }: { params: Promise<{
   if (body && typeof body === 'object' && (body as { action?: unknown }).action === 'recover-safe') {
     const ownerId = workspaceOwnerIdForAccount(id);
     const requestedDate = typeof (body as { date?: unknown }).date === 'string' ? (body as { date: string }).date : undefined;
-    const candidates = listProviderTasks({ mode: 'video', status: 'failed' }).filter((task) => {
+    // Recovery only needs lightweight summaries. Full historical tasks can
+    // contain megabytes of Base64/provider data and used to stall the shared
+    // web process while this list was materialized.
+    const candidates = listProviderTaskSummaries({ mode: 'video', status: 'failed' }).filter((task) => {
       if (requestedDate && businessDate(task.createdAt) !== requestedDate) return false;
       if (ownerId) return (workspaceOwnerIdForAccount(task.accountId) || task.metadata?.ownerId) === ownerId;
       return task.accountId === id;
     });
-    const safe = candidates.filter((task) => classifyTaskError(task)?.safeToRetry && !task.providerTaskId);
+    const safe = candidates.filter((task) => (task.errorInfo ?? classifyTaskError(task))?.safeToRetry && !task.providerTaskId);
     const skipped = candidates.length - safe.length;
     const batchId = `safe-recovery-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     let recovered = 0;

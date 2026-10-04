@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { listAssets } from './assetStore';
+import { deleteAsset, listAssets } from './assetStore';
 import { createProviderTask, getProviderTask, updateProviderTask } from '@/lib/providers/taskStore';
-import { cacheVideoTaskOutputsBeforeCompletion, recoverPendingVideoTaskOutputCache, repairSavedVideoTaskInventory, saveVideoTaskOutputsToAssets } from './videoInventory';
+import { readStoredVideoOutput } from '@/lib/providers/outputStore';
+import { cacheVideoTaskOutputsBeforeCompletion, deleteVideoInventoryAssetSources, recoverPendingVideoTaskOutputCache, repairSavedVideoTaskInventory, saveVideoTaskOutputsToAssets } from './videoInventory';
 import type { ProviderTask } from '@/lib/providers/taskStore';
 
 const root = `D:\\all_projects\\workspace\\data\\video-inventory-test-${process.pid}`;
@@ -51,6 +52,27 @@ describe('video task inventory persistence', () => {
     const first = await saveVideoTaskOutputsToAssets('video-account', task());
     const assets = await saveVideoTaskOutputsToAssets('video-account', task({ metadata: { inventoryAssetIds: [first[0].id] } }));
     expect(assets).toEqual([]);
+  });
+
+  it('permanently deletes an inventory video and its task-local source', async () => {
+    const persisted = createProviderTask(task({
+      id: undefined,
+      inventorySavedAt: '2026-09-28T01:00:00.000Z',
+      outputBase64: [`data:video/mp4;base64,${mp4Bytes.toString('base64')}`],
+    }));
+    const [asset] = await saveVideoTaskOutputsToAssets('video-account', persisted);
+    updateProviderTask(persisted.id, { metadata: { inventoryAssetIds: [asset.id] } });
+    expect(readStoredVideoOutput('video-account', persisted.id, 0)).not.toBeNull();
+
+    expect(deleteAsset('video-account', asset.id)?.id).toBe(asset.id);
+    expect(deleteVideoInventoryAssetSources('video-account', asset.id)).toEqual({ linkedTasks: 1, deletedGeneratedFiles: 1 });
+    expect(readStoredVideoOutput('video-account', persisted.id, 0)).toBeNull();
+    expect(getProviderTask(persisted.id)?.metadata).toMatchObject({
+      inventoryAssetIds: [asset.id],
+      deletedInventoryOutputIndexes: [0],
+    });
+    expect(await repairSavedVideoTaskInventory(['video-account'])).toBe(0);
+    expect(listAssets('video-account', 'inventory-video')).toEqual([]);
   });
 
   it('repairs stale inventory ids by creating the missing asset', async () => {

@@ -10,6 +10,8 @@ const {
   mockRenameAsset,
   mockDeleteAsset,
   mockReadAssetFile,
+  mockSetAssetPublished,
+  mockDeleteVideoInventoryAssetSources,
 } = vi.hoisted(() => ({
   mockRequireApiRole: vi.fn(),
   mockCanAccessWorkspaceAccount: vi.fn(),
@@ -18,6 +20,8 @@ const {
   mockRenameAsset: vi.fn(),
   mockDeleteAsset: vi.fn(),
   mockReadAssetFile: vi.fn(),
+  mockSetAssetPublished: vi.fn(),
+  mockDeleteVideoInventoryAssetSources: vi.fn(),
 }));
 
 vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
@@ -28,7 +32,9 @@ vi.mock('@/lib/workspace/assetStore', () => ({
   renameAsset: mockRenameAsset,
   deleteAsset: mockDeleteAsset,
   readAssetFile: mockReadAssetFile,
+  setAssetPublished: mockSetAssetPublished,
 }));
+vi.mock('@/lib/workspace/videoInventory', () => ({ deleteVideoInventoryAssetSources: mockDeleteVideoInventoryAssetSources }));
 
 import { DELETE, GET, PATCH } from './route';
 
@@ -54,6 +60,8 @@ describe('workspace asset item API', () => {
     mockGetAsset.mockReset().mockReturnValue(imageAsset);
     mockRenameAsset.mockReset().mockReturnValue({ ...imageAsset, name: 'renamed.png' });
     mockDeleteAsset.mockReset().mockReturnValue(imageAsset);
+    mockSetAssetPublished.mockReset();
+    mockDeleteVideoInventoryAssetSources.mockReset().mockReturnValue({ linkedTasks: 0, deletedGeneratedFiles: 0 });
     mockReadAssetFile.mockReset().mockReturnValue({ asset: imageAsset, filePath: 'D:/workspace/data/uploads/account-1/asset-123-hero.png', bytes: Buffer.from([1, 2, 3]) });
     fs.writeFileSync(testFilePath, Buffer.from([1, 2, 3]));
     mockGetAssetFileInfo.mockReset().mockReturnValue({ asset: imageAsset, filePath: testFilePath, size: 3 });
@@ -76,6 +84,13 @@ describe('workspace asset item API', () => {
     expect(response.status).toBe(206);
     expect(response.headers.get('content-range')).toBe('bytes 0-1/3');
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2]));
+  });
+
+  it('serves suffix byte ranges from the end of an asset', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123', { headers: { range: 'bytes=-2' } }), params);
+    expect(response.status).toBe(206);
+    expect(response.headers.get('content-range')).toBe('bytes 1-2/3');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([2, 3]));
   });
 
   it('returns selected asset metadata without opening its binary file', async () => {
@@ -147,6 +162,33 @@ describe('workspace asset item API', () => {
     mockDeleteAsset.mockReturnValue(null);
     const missing = await DELETE(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123', { method: 'DELETE' }), params);
     expect(missing.status).toBe(404);
+  });
+
+  it('deletes the generated source linked to an inventory video', async () => {
+    const publishedVideo = {
+      ...imageAsset,
+      kind: 'inventory-video' as const,
+      name: 'published.mp4',
+      mimeType: 'video/mp4',
+      publishedAt: '2026-09-28T01:00:00.000Z',
+    };
+    mockDeleteAsset.mockReturnValue(publishedVideo);
+    mockDeleteVideoInventoryAssetSources.mockReturnValue({ linkedTasks: 1, deletedGeneratedFiles: 1 });
+
+    const response = await DELETE(new NextRequest('http://localhost/api/workspace/accounts/account-1/files/asset-123', { method: 'DELETE' }), params);
+
+    expect(response.status).toBe(200);
+    expect(mockDeleteVideoInventoryAssetSources).toHaveBeenCalledWith('account-1', 'asset-123');
+    expect(await response.json()).toEqual({
+      success: true,
+      data: {
+        assetId: 'asset-123',
+        deleted: true,
+        sourceFileDeleted: true,
+        linkedTasks: 1,
+        deletedGeneratedFiles: 1,
+      },
+    });
   });
 
   it('stops before reading or mutating assets when the account is forbidden', async () => {

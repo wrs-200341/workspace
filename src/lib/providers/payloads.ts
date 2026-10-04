@@ -123,6 +123,7 @@ export function buildDolaSd2VideoPayload(input: DolaSd2VideoInput): Record<strin
 
 export type YuanAIImageEditInput = { model: string; prompt: string; size: string; quality?: 'low' | 'high'; n?: number; references: readonly MultipartReference[] };
 export type OAIRegboxInput = { model: string; prompt: string; duration: number; aspectRatio: string; references?: readonly MultipartReference[] };
+export type OAIRegboxFirstFrameInput = OAIRegboxInput & { firstImageUrl: string };
 export type OpenAIImageInput = {
   model: string;
   prompt: string;
@@ -411,6 +412,18 @@ export function buildOAIRegboxPayload(input: OAIRegboxInput): Record<string, unk
   // gateway rejects numeric JSON (`invalid JSON request body`). Serialize the
   // validated duration exactly as the documented curl/Python examples do.
   return { model: input.model, prompt: input.prompt.trim(), seconds: String(input.duration), aspect_ratio: input.aspectRatio };
+}
+
+/** Omni treats first_image_url as the explicit first-frame image-to-video
+ * mode. Keep this separate from input_reference[], which is reserved for the
+ * model's multi-reference mode. */
+export function buildOAIRegboxFirstFramePayload(input: OAIRegboxFirstFrameInput): Record<string, unknown> {
+  const firstImageUrl = input.firstImageUrl.trim();
+  if (!firstImageUrl) throw new Error('oairegbox_first_image_required');
+  return {
+    ...buildOAIRegboxPayload({ ...input, references: [] }),
+    first_image_url: firstImageUrl,
+  };
 }
 
 export function buildOAIRegboxMultipartFormData(input: OAIRegboxInput): FormData {

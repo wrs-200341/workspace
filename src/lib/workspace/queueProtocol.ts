@@ -43,8 +43,8 @@ function compareRows(a: QueueRow, b: QueueRow): number {
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
 }
 
-function isUnsavedVideo(task: QueueRow): boolean {
-  return task.mode === 'video' && task.status === 'completed' && !task.inventorySavedAt;
+function isUnstoredMedia(task: QueueRow): boolean {
+  return (task.mode === 'video' || task.mode === 'image') && task.status === 'completed' && !task.inventorySavedAt;
 }
 
 function clampInteger(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -62,7 +62,7 @@ export function createQueuePage<T extends QueueRow>(
     if (ACTIVE_STATUSES.has(task.status)) counts.active += 1;
     if (task.status === 'completed') counts.completed += 1;
     if (task.status === 'failed') counts.failed += 1;
-    if (isUnsavedVideo(task)) counts.unsaved += 1;
+    if (isUnstoredMedia(task)) counts.unsaved += 1;
     if (task.status === 'failed' && task.errorInfo?.safeToRetry) counts.safeRecoverable += 1;
   }
 
@@ -72,7 +72,7 @@ export function createQueuePage<T extends QueueRow>(
   let page = clampInteger(options.page, 0, 0, totalPages - 1);
   const focusedIndex = options.focusTaskId
     ? filtered.findIndex((task) => task.id === options.focusTaskId)
-    : options.focusUnstored ? filtered.findIndex(isUnsavedVideo) : -1;
+    : options.focusUnstored ? filtered.findIndex(isUnstoredMedia) : -1;
   if (focusedIndex >= 0) page = Math.floor(focusedIndex / pageSize);
 
   return { tasks: filtered.slice(page * pageSize, (page + 1) * pageSize), counts, page, pageSize, totalPages };

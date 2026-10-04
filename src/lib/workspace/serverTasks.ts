@@ -7,6 +7,7 @@ import { taskNameForInventory, taskNameSequenceMap } from './inventoryNaming';
 import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
 import { classifyTaskError } from '@/lib/providers/taskErrorInfo';
 import { createQueueDeltaCache, createQueuePage, type QueueTab } from './queueProtocol';
+import * as providerTaskStore from '@/lib/providers/taskStore';
 
 export function providerTaskToWorkspaceTask(task: ProviderTask, accountIndex?: ReadonlyMap<string, WorkspaceAccount>, nameOccurrences?: ReadonlyMap<string, number>): WorkspaceTask {
   const account = accountIndex?.get(task.accountId) ?? getWorkspaceAccountById(task.accountId) ?? listStoredAccounts().find((candidate) => candidate.id === task.accountId);
@@ -222,24 +223,38 @@ export function getServerWorkspaceTaskCounters(filters: { ownerId?: string; acco
   }
   const accountIndex = new Map(accounts.map((account) => [account.id, account]));
   const counters = new Map<string, WorkspaceOwnerTaskCounters>();
-  // Metadata ownership historically overrides account ownership here, even
-  // for reassigned/orphan tasks. An accountIds prefilter would change totals.
-  for (const task of listProviderTaskSummaries({ accountId: filters.accountId, mode: filters.mode })) {
-    const account = accountIndex.get(task.accountId) ?? getWorkspaceAccountById(task.accountId);
-    const owner = typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : account?.ownerId ?? 'operator-unassigned';
-    if (filters.ownerId && owner !== filters.ownerId) continue;
-    const current = counters.get(owner) ?? { ...EMPTY_OWNER_TASK_COUNTERS };
-    const outputs = task.outputCount;
-    const savedToday = outputs > 0 && Boolean(task.inventorySavedAt && businessDate(task.inventorySavedAt) === today);
-    const completedNotInInventory = task.status === 'completed' && outputs > 0 && !task.inventorySavedAt && businessDate(task.createdAt) === today;
-    // The landing counter is a count of successful inventory actions/tasks,
-    // not the number of output files attached to each task.
-    current.inventorySavedToday += savedToday ? 1 : 0;
-    current.completedNotInInventory += completedNotInInventory ? 1 : 0;
-    current.running += ['running', 'processing', 'submitting', 'submitted', 'prompting', 'retrying'].includes(task.status) ? 1 : 0;
-    current.queued += task.status === 'queued' || task.status === 'retrying' ? 1 : 0;
-    current.failed += task.status === 'failed' ? 1 : 0;
-    counters.set(owner, current);
+  const aggregateReader = (providerTaskStore as Partial<typeof providerTaskStore>).getProviderTaskCounterAggregates;
+  if (typeof aggregateReader === 'function') {
+    for (const aggregate of aggregateReader({ accountId: filters.accountId, mode: filters.mode }, today)) {
+      const account = accountIndex.get(aggregate.accountId) ?? getWorkspaceAccountById(aggregate.accountId);
+      const owner = aggregate.metadataOwnerId ?? account?.ownerId ?? 'operator-unassigned';
+      if (filters.ownerId && owner !== filters.ownerId) continue;
+      const current = counters.get(owner) ?? { ...EMPTY_OWNER_TASK_COUNTERS };
+      current.inventorySavedToday += aggregate.inventorySavedToday;
+      current.completedNotInInventory += aggregate.completedNotInInventory;
+      current.running += aggregate.running;
+      current.queued += aggregate.queued;
+      current.failed += aggregate.failed;
+      counters.set(owner, current);
+    }
+  } else {
+    // Compatibility path for isolated tests with a minimal task-store mock.
+    // Production always uses the database-side aggregate above.
+    for (const task of listProviderTaskSummaries({ accountId: filters.accountId, mode: filters.mode })) {
+      const account = accountIndex.get(task.accountId) ?? getWorkspaceAccountById(task.accountId);
+      const owner = typeof task.metadata?.ownerId === 'string' ? task.metadata.ownerId : account?.ownerId ?? 'operator-unassigned';
+      if (filters.ownerId && owner !== filters.ownerId) continue;
+      const current = counters.get(owner) ?? { ...EMPTY_OWNER_TASK_COUNTERS };
+      const outputs = task.outputCount;
+      const savedToday = outputs > 0 && Boolean(task.inventorySavedAt && businessDate(task.inventorySavedAt) === today);
+      const completedNotInInventory = task.status === 'completed' && outputs > 0 && !task.inventorySavedAt && businessDate(task.createdAt) === today;
+      current.inventorySavedToday += savedToday ? 1 : 0;
+      current.completedNotInInventory += completedNotInInventory ? 1 : 0;
+      current.running += ['running', 'processing', 'submitting', 'submitted', 'prompting', 'retrying'].includes(task.status) ? 1 : 0;
+      current.queued += task.status === 'queued' || task.status === 'retrying' ? 1 : 0;
+      current.failed += task.status === 'failed' ? 1 : 0;
+      counters.set(owner, current);
+    }
   }
   const result = Object.fromEntries(counters);
   taskCounterCache.set(key, result);

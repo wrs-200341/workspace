@@ -25,6 +25,7 @@ function isPortListening(port, host = '127.0.0.1') {
 const liveServer = await isPortListening(3000);
 const distDir = liveServer ? verifyDirName : '.next';
 const distPath = resolve(root, distDir);
+const buildNodeOptions = process.env.WORKSPACE_BUILD_NODE_OPTIONS || '--max-old-space-size=8192';
 if (relative(root, distPath).startsWith(`..${sep}`) || relative(root, distPath) === '..') {
   throw new Error(`Refusing to use build directory outside workspace: ${distPath}`);
 }
@@ -35,6 +36,7 @@ const child = spawn(process.execPath, [nextBin, 'build'], {
   cwd: root,
   env: {
     ...process.env,
+    NODE_OPTIONS: buildNodeOptions,
     ...(liveServer ? { WORKSPACE_NEXT_DIST_DIR: verifyDirName } : { WORKSPACE_NEXT_DIST_DIR: '' }),
   },
   stdio: 'inherit',

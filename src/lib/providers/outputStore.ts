@@ -2,10 +2,12 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { getWorkspacePath } from '@/lib/storagePaths';
+import { mp4NeedsFastStart, remuxMp4FastStart } from './mp4FastStart';
 
 const MAX_OUTPUT_BYTES = 50 * 1024 * 1024;
 const MAX_TOTAL_OUTPUT_BYTES = 200 * 1024 * 1024;
 const MAX_VIDEO_OUTPUT_BYTES = 200 * 1024 * 1024;
+const TASK_OUTPUT_FILE = /^\d+\.(?:png|jpe?g|webp|mp4|webm|mov|avi)$/i;
 
 export type StoredImageOutput = {
   index: number;
@@ -173,16 +175,22 @@ export function storeVideoOutput(accountId: string, taskId: string, index: numbe
   if (!isSafeOutputDirectory(directory)) return null;
   const finalPath = path.join(directory, `${index}.${videoExtension(detected)}`);
   const temporary = `${finalPath}.${crypto.randomUUID()}.tmp`;
+  const fastStartTemporary = `${finalPath}.${crypto.randomUUID()}.faststart.mp4`;
   try {
     fs.writeFileSync(temporary, bytes, { mode: 0o600 });
-    fs.renameSync(temporary, finalPath);
+    const remuxed = videoExtension(detected) === 'mp4'
+      && mp4NeedsFastStart(bytes)
+      && remuxMp4FastStart(temporary, fastStartTemporary);
+    const useFastStart = remuxed && fs.statSync(fastStartTemporary).size <= MAX_VIDEO_OUTPUT_BYTES;
+    fs.renameSync(useFastStart ? fastStartTemporary : temporary, finalPath);
     for (const other of ['mp4', 'webm', 'mov', 'avi']) {
       if (other !== videoExtension(detected)) fs.rmSync(path.join(directory, `${index}.${other}`), { force: true });
     }
   } finally {
     if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+    if (fs.existsSync(fastStartTemporary)) fs.rmSync(fastStartTemporary, { force: true });
   }
-  return { index, relativePath: path.relative(getWorkspacePath(), finalPath).replace(/\\/g, '/'), mimeType: detected, size: bytes.length };
+  return { index, relativePath: path.relative(getWorkspacePath(), finalPath).replace(/\\/g, '/'), mimeType: detected, size: fs.statSync(finalPath).size };
 }
 
 /** Read a previously cached task video after validating its path and bytes. */
@@ -211,6 +219,63 @@ export function readStoredVideoOutput(accountId: string, taskId: string, index: 
     }
   }
   return null;
+}
+
+/** Permanently remove one task-local video output from the generated store. */
+export function deleteStoredVideoOutput(accountId: string, taskId: string, index: number): boolean {
+  if (!/^[-a-zA-Z0-9_]+$/.test(accountId) || !/^[-a-zA-Z0-9_]+$/.test(taskId) || !Number.isInteger(index) || index < 0 || index > 63) return false;
+  const directory = outputDirectory(accountId, taskId);
+  if (!directory || !fs.existsSync(directory) || !isSafeOutputDirectory(directory)) return false;
+  const taskRoot = fs.realpathSync(directory);
+  let deleted = false;
+  for (const ext of ['mp4', 'webm', 'mov', 'avi']) {
+    const file = path.join(directory, `${index}.${ext}`);
+    if (!fs.existsSync(file)) continue;
+    const resolved = fs.realpathSync(file);
+    if (!resolved.startsWith(`${taskRoot}${path.sep}`)) throw new Error('output_path_invalid');
+    const stat = fs.statSync(resolved);
+    if (!stat.isFile()) throw new Error('output_path_invalid');
+    fs.rmSync(resolved, { force: true });
+    deleted = true;
+  }
+  if (fs.readdirSync(directory).length === 0) fs.rmdirSync(directory);
+  return deleted;
+}
+
+/**
+ * Remove every local output belonging to one exact task. This intentionally
+ * refuses links, nested directories and unexpected filenames, and never uses
+ * recursive deletion. A failed validation leaves the task record intact so a
+ * queue deletion cannot silently create another orphaned cache directory.
+ */
+export function deleteStoredTaskOutputs(accountId: string, taskId: string): { deletedFiles: number; deletedBytes: number } {
+  const directory = outputDirectory(accountId, taskId);
+  if (!directory || !fs.existsSync(directory)) return { deletedFiles: 0, deletedBytes: 0 };
+
+  const generatedRoot = path.resolve(getWorkspacePath('generated'));
+  const expectedDirectory = path.resolve(directory);
+  const directoryStat = fs.lstatSync(expectedDirectory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink()) throw new Error('output_path_invalid');
+  const realDirectory = fs.realpathSync(expectedDirectory);
+  if (realDirectory !== expectedDirectory || !realDirectory.startsWith(`${generatedRoot}${path.sep}`)) throw new Error('output_path_invalid');
+
+  const files: Array<{ path: string; bytes: number }> = [];
+  for (const entry of fs.readdirSync(realDirectory, { withFileTypes: true })) {
+    if (!entry.isFile() || entry.isSymbolicLink() || !TASK_OUTPUT_FILE.test(entry.name)) throw new Error('output_directory_invalid');
+    const file = path.resolve(realDirectory, entry.name);
+    const realFile = fs.realpathSync(file);
+    if (realFile !== file || !realFile.startsWith(`${realDirectory}${path.sep}`)) throw new Error('output_path_invalid');
+    const stat = fs.statSync(realFile);
+    if (!stat.isFile()) throw new Error('output_path_invalid');
+    files.push({ path: realFile, bytes: stat.size });
+  }
+
+  for (const file of files) fs.rmSync(file.path);
+  fs.rmdirSync(realDirectory);
+  return {
+    deletedFiles: files.length,
+    deletedBytes: files.reduce((total, file) => total + file.bytes, 0),
+  };
 }
 
 /** Return metadata for a cached video without reading its body. */

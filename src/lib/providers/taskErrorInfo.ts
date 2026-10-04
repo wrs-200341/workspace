@@ -25,6 +25,9 @@ export type TaskErrorInfo = {
   safeToRetry: boolean;
 };
 
+type ClassifiableTask = Pick<ProviderTask, 'error' | 'providerResponse' | 'providerTaskId' | 'metadata' | 'mode'> & Partial<Pick<ProviderTask, 'provider' | 'model'>>;
+type FailureStage = 'prompt_generation' | 'video_submission' | 'video_generation' | 'output_download' | 'task_preparation';
+
 function flatten(value: unknown, budget = 12_000): string {
   if (budget <= 0) return '';
   if (typeof value === 'string') return value.slice(0, budget);
@@ -48,6 +51,23 @@ function responseText(task: Pick<ProviderTask, 'providerResponse'>): string {
   return flatten(task.providerResponse).toLowerCase();
 }
 
+function responseEndpointProvider(task: Pick<ProviderTask, 'providerResponse' | 'mode'>): string | undefined {
+  if (!task.providerResponse || typeof task.providerResponse !== 'object' || Array.isArray(task.providerResponse)) return undefined;
+  const endpoint = (task.providerResponse as { endpoint?: unknown }).endpoint;
+  if (typeof endpoint !== 'string' || !endpoint.trim()) return undefined;
+  try {
+    const url = new URL(endpoint);
+    const host = url.hostname.toLowerCase();
+    if (host === 'raw.mgrouter.com') return task.mode === 'image' ? 'mgrouter-grok-image' : 'mgrouter-grok-video';
+    if (host === 'snumom.com' || host.endsWith('.snumom.com')) return 'grok-video';
+    if (host === 'yuanai.uk' || host.endsWith('.yuanai.uk')) {
+      if (/\/(?:responses|chat\/completions)(?:\/|$)/i.test(url.pathname)) return 'yuanai-gemini-prompt';
+      return task.mode === 'image' ? 'yuanai-image' : 'yuanai-grok-video';
+    }
+  } catch { /* retain persisted attribution for malformed or legacy endpoints */ }
+  return undefined;
+}
+
 function providerDisplayName(provider?: string): string {
   const names: Record<string, string> = {
     'grok-video': 'snumom',
@@ -62,7 +82,7 @@ function providerDisplayName(provider?: string): string {
     'miku-minimax': 'mikuapi',
     'pro666-video': 'pro666',
     'quality-v4': 'quality-v4',
-    'oairegbox-omni': 'oairegbox',
+    'oairegbox-omni': 'OAIRegBox',
     'yuanai-image': 'yuanai',
     'aicloud-gpt-image': 'aicloud',
     'pomoai-gemini-image': 'pomoai',
@@ -71,11 +91,12 @@ function providerDisplayName(provider?: string): string {
     'origin-nano-image': 'origingateway',
     'junze-gpt-image': 'junze',
     'junze-gemini-image': 'junze',
-    'pomoai-gpt-prompt': 'pomoai',
+    'pomoai-gpt-prompt': 'PomoAI',
     'oairegbox-gpt-prompt': 'oairegbox',
     'secure-skill-gpt-prompt': 'secure-skill',
     'gpt-2999-prompt': '2999',
     'bigsnake-prompt': 'bigsnake',
+    'yuanai-gemini-prompt': 'yuanai',
   };
   if (!provider) return '供应商';
   return names[provider] ?? provider;
@@ -100,29 +121,78 @@ function providerModelSubject(task: { provider?: string; model?: string }): stri
   return family ? `${provider}的${family}` : provider;
 }
 
+function metadataText(metadata: Record<string, unknown>, key: string): string | undefined {
+  const value = metadata[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+function providerModelLabel(provider?: string, model?: string): string {
+  const providerName = providerDisplayName(provider);
+  const normalizedModel = model?.trim();
+  return normalizedModel ? `${providerName} · ${normalizedModel}` : providerName;
+}
+
+function promptProviderFromSelection(selection?: string): string | undefined {
+  const value = selection?.trim().toLowerCase() ?? '';
+  if (!value) return undefined;
+  if (value === 'pomoai-gpt' || value.startsWith('pomoai:')) return 'pomoai-gpt-prompt';
+  if (value.startsWith('oairegbox')) return 'oairegbox-gpt-prompt';
+  if (value.startsWith('secure-skill')) return 'secure-skill-gpt-prompt';
+  if (value.startsWith('bigsnake')) return 'bigsnake-prompt';
+  if (value.startsWith('gpt-2999') || /^gpt[-_]/.test(value)) return 'gpt-2999-prompt';
+  if (value.startsWith('gemini')) return 'yuanai-gemini-prompt';
+  return undefined;
+}
+
 /**
  * Convert internal/provider errors into an operator-facing explanation. This
  * deliberately returns a small, non-sensitive object suitable for queue APIs;
  * the full bounded provider response remains available on the detail page.
  */
-export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerResponse' | 'providerTaskId' | 'metadata' | 'mode'> & Partial<Pick<ProviderTask, 'provider' | 'model'>>): TaskErrorInfo | undefined {
+function classifyTaskErrorBase(task: ClassifiableTask): TaskErrorInfo | undefined {
   const error = typeof task.error === 'string' ? task.error.trim() : '';
   if (!error) return undefined;
   const lower = error.toLowerCase();
   const response = responseText(task);
   const diagnostic = `${lower} ${response}`;
   const metadata = task.metadata ?? {};
+  const failureStage = metadataText(metadata, 'failureStage');
+  const promptProvider = metadataText(metadata, 'promptProvider');
+  const promptModel = metadataText(metadata, 'promptModel');
+  const failureProvider = responseEndpointProvider(task) || metadataText(metadata, 'failureProvider');
+  const failureModel = metadataText(metadata, 'failureModel');
+  const promptPending = metadata.promptGenerationPending === true || metadata.promptGenerationFailed === true || failureStage === 'prompt_generation';
+  const isManualPrompt = metadata.promptMode === 'manual';
+  const promptSucceeded = task.mode === 'video'
+    && !isManualPrompt
+    && metadata.promptGenerationPending === false
+    && metadata.promptGenerationFailed !== true
+    && Boolean(promptProvider || promptModel);
+  const promptContext = isManualPrompt
+    ? '本任务使用手写提示词，未经过子提示词模型。'
+    : promptSucceeded
+      ? `子提示词已由 ${providerModelLabel(promptProvider, promptModel)} 成功生成。`
+      : '';
   // Restart and capacity metadata must not make an ambiguous paid request
   // eligible for the safe-recovery batch.
   if (lower === 'provider_submission_uncertain' || metadata.providerSubmissionUncertain === true) {
+    const targetProvider = failureProvider || task.provider;
+    const targetModel = failureModel || task.model;
+    const target = providerModelLabel(targetProvider, targetModel);
+    const timeout = /provider_(408|504|524)|timeout|timed out/.test(diagnostic)
+      || targetProvider === 'oairegbox-omni' && response.includes('provider_request_failed');
     return {
       code: 'provider_submission_uncertain',
       category: 'submission_uncertain',
-      title: '提交结果待供应商确认',
-      message: '无法确认供应商是否已收到请求，任务可能仍在处理或已产生费用。为避免重复提交扣费，系统已暂停自动重试。',
+      title: task.mode === 'video'
+        ? `${providerDisplayName(targetProvider)} 视频提交${timeout ? '超时' : '未返回任务编号'}`
+        : `${providerDisplayName(targetProvider)} 提交结果待确认`,
+      message: task.mode === 'video'
+        ? `${promptContext}${promptContext ? ' ' : ''}错误发生在向 ${target} 提交视频任务时；提交后没有拿到视频任务编号，暂时无法确认供应商是否已经收到请求。`
+        : '提交后没有拿到供应商任务编号，暂时无法确认供应商是否已经收到请求。',
       action: task.providerTaskId
-        ? '请先在供应商后台核对该任务编号和处理结果；不要直接重新提交。'
-        : '请管理员按供应商、提交时间和请求内容核对后台记录与扣费情况；确认原请求未受理后，再决定是否重新提交。',
+        ? '为避免重复扣费，请先在供应商后台核对该任务编号和处理结果；不要直接重新提交。'
+        : `为避免重复扣费，系统没有自动重新提交。请管理员按供应商、提交时间和请求内容核对 ${providerDisplayName(targetProvider)} 后台；确认原请求未受理后，再决定是否重新提交。`,
       safeToRetry: false,
     };
   }
@@ -141,7 +211,6 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
       safeToRetry: false,
     };
   }
-  const promptPending = metadata.promptGenerationPending === true || metadata.promptGenerationFailed === true;
   const hasUpstreamId = Boolean(task.providerTaskId);
   const retryInterrupted = lower === 'scheduler_retry_interrupted';
   const interrupted = Boolean(metadata.schedulerInterruptedAt)
@@ -182,11 +251,12 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
 
   const promptTimeout = promptPending && (lower.includes('timeout') || lower.includes('timed out') || /provider_(408|504|524)/.test(lower));
   if (promptTimeout) {
+    const target = providerModelLabel(failureProvider || promptProvider, failureModel || promptModel);
     return {
       code: 'prompt_provider_timeout',
       category: 'prompt_timeout',
-      title: '子提示词服务响应超时',
-      message: '提示词模型在视频提交前没有及时返回结果，因此视频供应商还没有收到任务。',
+      title: `${target} 子提示词生成超时`,
+      message: `${target} 在视频提交前没有及时返回子提示词，因此视频供应商还没有收到任务。`,
       action: '可以安全恢复，建议稍后再次生成。',
       safeToRetry: !hasUpstreamId,
     };
@@ -194,7 +264,7 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
 
   const quotaOrBalance = /额度|限额|余额|点数|积分|额度等待恢复|可用账号额度|insufficient[_\s-]?(balance|quota|credit|funds)|quota|credit|balance|billing|payment required/.test(`${lower} ${response}`);
   if (quotaOrBalance) {
-    const provider = providerDisplayName(task.provider);
+    const provider = providerDisplayName(failureProvider || (promptPending ? promptProvider : undefined) || task.provider);
     return {
       code: 'provider_quota',
       category: 'provider_quota',
@@ -207,7 +277,10 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
 
   const contentRejected = /内容审核|审核不通过|安全策略|违规|敏感|content[_\s-]?policy|content review|moderation|safety|policy violation|blocked by policy|rejected by policy/.test(`${lower} ${response}`);
   if (contentRejected) {
-    const subject = providerModelSubject(task);
+    const subject = providerModelSubject({
+      provider: failureProvider || (promptPending ? promptProvider : undefined) || task.provider,
+      model: failureModel || (promptPending ? promptModel : undefined) || task.model,
+    });
     return {
       code: 'provider_content_policy',
       category: 'content_policy',
@@ -272,11 +345,28 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
     };
   }
   if (lower === 'provider_request_failed' || lower === 'provider request failed' || lower === 'scheduler_dispatch_failed') {
+    if (promptPending) {
+      const target = providerModelLabel(failureProvider || promptProvider, failureModel || promptModel);
+      return {
+        code: lower,
+        category: 'unknown',
+        title: `${target} 子提示词生成失败`,
+        message: `错误发生在 ${target} 生成子提示词的环节，视频任务尚未提交给视频供应商。`,
+        action: '可以安全恢复，建议稍后再次生成子提示词。',
+        safeToRetry: !hasUpstreamId,
+      };
+    }
+    const targetProvider = failureProvider || task.provider;
+    const target = providerModelLabel(targetProvider, failureModel || task.model);
     return {
       code: lower,
       category: 'unknown',
-      title: hasUpstreamId ? '供应商处理异常' : '提交供应商时发生网络异常',
-      message: hasUpstreamId ? '任务可能已经在供应商处理中，但系统没有拿到完整状态。' : '系统没有确认供应商是否已经收到请求。',
+      title: hasUpstreamId
+        ? `${providerDisplayName(targetProvider)} ${task.mode === 'video' ? '视频' : '图片'}处理异常`
+        : `${providerDisplayName(targetProvider)} ${task.mode === 'video' ? '视频' : '图片'}提交网络异常`,
+      message: hasUpstreamId
+        ? `${target} 可能仍在处理任务，但系统没有拿到完整状态。`
+        : `${promptContext}${promptContext ? ' ' : ''}错误发生在向 ${target} 提交${task.mode === 'video' ? '视频' : '图片'}任务时，系统没有确认供应商是否已经收到请求。`,
       action: '请先查看供应商后台或任务详情，确认后再重试，避免重复扣费。',
       safeToRetry: false,
     };
@@ -363,13 +453,41 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
     };
   }
   if (lower.includes('timeout') || lower.includes('timed out') || /provider_(408|500|502|503|504|524)/.test(lower)) {
+    if (promptPending) {
+      const target = providerModelLabel(failureProvider || promptProvider, failureModel || promptModel);
+      return {
+        code: 'prompt_provider_timeout',
+        category: 'prompt_timeout',
+        title: `${target} 子提示词生成超时`,
+        message: `${target} 没有及时返回子提示词，视频任务尚未提交给视频供应商。`,
+        action: '可以安全恢复，建议稍后再次生成。',
+        safeToRetry: !hasUpstreamId,
+      };
+    }
+    const targetProvider = failureProvider || task.provider;
+    const target = providerModelLabel(targetProvider, failureModel || task.model);
     return {
       code: 'provider_timeout',
       category: 'provider_timeout',
-      title: hasUpstreamId ? '供应商处理超时' : '提交供应商时网络超时',
-      message: hasUpstreamId ? '任务已经交给供应商，但查询结果超时或暂时没有返回。' : '系统没有确认供应商是否已经收到任务。',
+      title: hasUpstreamId
+        ? `${providerDisplayName(targetProvider)} ${task.mode === 'video' ? '视频' : '图片'}处理超时`
+        : `${providerDisplayName(targetProvider)} ${task.mode === 'video' ? '视频' : '图片'}提交超时`,
+      message: hasUpstreamId
+        ? `${target} 已经收到任务，但查询结果超时或暂时没有返回。`
+        : `${promptContext}${promptContext ? ' ' : ''}错误发生在向 ${target} 提交${task.mode === 'video' ? '视频' : '图片'}任务时，系统没有确认供应商是否已经收到任务。`,
       action: hasUpstreamId ? '请稍后刷新，系统会继续查询；不要重复提交。' : '无法确认是否已经提交，请人工确认供应商状态后再重试。',
       safeToRetry: false,
+    };
+  }
+  if (promptPending) {
+    const target = providerModelLabel(failureProvider || promptProvider, failureModel || promptModel);
+    return {
+      code: error,
+      category: 'unknown',
+      title: `${target} 子提示词生成失败`,
+      message: `错误发生在 ${target} 生成子提示词的环节，视频任务尚未提交给视频供应商。`,
+      action: '请打开任务详情查看供应商原始响应，修正后可安全恢复。',
+      safeToRetry: !hasUpstreamId,
     };
   }
   return {
@@ -380,4 +498,87 @@ export function classifyTaskError(task: Pick<ProviderTask, 'error' | 'providerRe
     action: '请打开任务详情查看供应商原始响应，确认后再重试。',
     safeToRetry: false,
   };
+}
+
+function persistedFailureStage(task: ClassifiableTask, info: TaskErrorInfo): FailureStage {
+  const metadata = task.metadata ?? {};
+  const explicit = metadataText(metadata, 'failureStage');
+  if (explicit && ['prompt_generation', 'video_submission', 'video_generation', 'output_download', 'task_preparation'].includes(explicit)) return explicit as FailureStage;
+  if (task.mode === 'prompt' || metadata.promptGenerationPending === true || metadata.promptGenerationFailed === true || info.category === 'prompt_timeout') return 'prompt_generation';
+  if (info.category === 'output_cache') return 'output_download';
+  if (info.code === 'video_prompt_too_long' || info.code === 'provider_invalid_request' || info.category === 'invalid_request') return 'video_submission';
+  if (task.providerTaskId) return 'video_generation';
+  return 'video_submission';
+}
+
+export function contextualizeTaskError(task: ClassifiableTask, info: TaskErrorInfo): TaskErrorInfo {
+  const metadata = task.metadata ?? {};
+  const usesChildPromptModel = task.mode === 'video'
+    && metadata.promptMode !== 'manual'
+    && Boolean(metadata.promptMode === 'asset-template-child-prompt' || metadataText(metadata, 'promptProvider'));
+  if (!usesChildPromptModel) return info;
+
+  const stage = persistedFailureStage(task, info);
+  const promptProvider = metadataText(metadata, 'promptProvider')
+    || (stage === 'prompt_generation' ? metadataText(metadata, 'failureProvider') : undefined)
+    || promptProviderFromSelection(metadataText(metadata, 'promptModelSelection'));
+  const promptModel = metadataText(metadata, 'promptModel') || metadataText(metadata, 'failureModel');
+  const videoProvider = stage === 'prompt_generation' ? task.provider : responseEndpointProvider(task) || metadataText(metadata, 'failureProvider') || task.provider;
+  const videoModel = stage === 'prompt_generation' ? task.model : metadataText(metadata, 'failureModel') || task.model;
+  const promptLabel = providerModelLabel(promptProvider, promptModel);
+  const videoLabel = providerModelLabel(videoProvider, videoModel);
+  const videoProviderName = providerDisplayName(videoProvider);
+  const usedTemplateFallback = metadata.promptGenerationUsedTemplate === true;
+  const promptCompleted = metadata.promptGenerationPending === false && metadata.promptGenerationFailed !== true && !usedTemplateFallback;
+  const promptOutcome = usedTemplateFallback
+    ? `子提示词模型 ${promptLabel} 未返回可用结果，系统改用了模板提示词。`
+    : promptCompleted
+      ? `子提示词模型 ${promptLabel} 已成功生成。`
+      : '';
+  const alreadyExplainsPipeline = /错误环节：|子提示词已由|子提示词模型|视频任务尚未提交给视频供应商|错误发生在向 .*提交视频任务/.test(info.message);
+
+  if (stage === 'prompt_generation') {
+    const title = info.title.includes('子提示词') && info.title.includes(providerDisplayName(promptProvider))
+      ? info.title
+      : `${providerDisplayName(promptProvider)} 子提示词生成失败：${info.title}`;
+    const context = `错误环节：子提示词模型 ${promptLabel}。视频模型 ${videoLabel} 尚未开始。`;
+    return { ...info, title, message: alreadyExplainsPipeline ? info.message : `${context}${info.message ? ` ${info.message}` : ''}` };
+  }
+
+  if (stage === 'video_submission') {
+    const promptTooLong = info.code === 'video_prompt_too_long';
+    const title = promptTooLong
+      ? `${videoProviderName} 视频提交前校验失败：提示词超长`
+      : info.title.includes('视频提交') && info.title.includes(videoProviderName)
+        ? info.title
+        : `${videoProviderName} 视频提交失败：${info.title}`;
+    const context = `${promptOutcome}错误环节：视频模型 ${videoLabel}的${promptTooLong ? '提交前校验' : '提交'}环节。${promptTooLong ? '视频供应商尚未收到任务。' : ''}`;
+    return {
+      ...info,
+      title,
+      message: alreadyExplainsPipeline ? info.message : `${context}${info.message ? ` ${info.message}` : ''}`,
+      ...(promptTooLong ? { action: '' } : {}),
+    };
+  }
+
+  if (stage === 'video_generation') {
+    const title = info.title.includes('视频生成') && info.title.includes(videoProviderName)
+      ? info.title
+      : `${videoProviderName} 视频生成失败：${info.title}`;
+    const context = `${promptOutcome}错误环节：视频模型 ${videoLabel}的上游生成环节。`;
+    return { ...info, title, message: alreadyExplainsPipeline ? info.message : `${context}${info.message ? ` ${info.message}` : ''}` };
+  }
+
+  if (stage === 'output_download') {
+    const context = `${promptOutcome}视频模型 ${videoLabel} 已返回结果。错误环节：系统下载并保存成品到本地。`;
+    return { ...info, title: '成品下载到本地失败', message: alreadyExplainsPipeline ? info.message : `${context}${info.message ? ` ${info.message}` : ''}` };
+  }
+
+  const context = `错误环节：视频任务准备阶段。子提示词模型 ${promptLabel} 和视频模型 ${videoLabel} 尚未完整执行。`;
+  return { ...info, title: info.title.startsWith('视频任务准备失败：') ? info.title : `视频任务准备失败：${info.title}`, message: alreadyExplainsPipeline ? info.message : `${context}${info.message ? ` ${info.message}` : ''}` };
+}
+
+export function classifyTaskError(task: ClassifiableTask): TaskErrorInfo | undefined {
+  const info = classifyTaskErrorBase(task);
+  return info ? contextualizeTaskError(task, info) : undefined;
 }

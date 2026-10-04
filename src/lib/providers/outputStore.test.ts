@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 import { getWorkspacePath } from '@/lib/storagePaths';
-import { storeImageBase64Outputs, readStoredOutput, readStoredVideoOutput, storeVideoOutput } from './outputStore';
+import { deleteStoredTaskOutputs, deleteStoredVideoOutput, storeImageBase64Outputs, readStoredOutput, readStoredVideoOutput, storeVideoOutput } from './outputStore';
 
 const png = Buffer.from([137,80,78,71,13,10,26,10,0,0,0,0]).toString('base64');
 const mp4 = Buffer.from([0,0,0,24,0x66,0x74,0x79,0x70,0,0,0,0]).toString('base64');
@@ -56,5 +56,35 @@ describe('provider output store', () => {
     const stored = storeVideoOutput('account-1', 'task-video', 0, Buffer.from(mp4, 'base64'), 'video/mp4');
     expect(stored?.relativePath).toContain('generated/account-1/task-video/0.mp4');
     expect(readStoredVideoOutput('account-1', 'task-video', 0)?.mimeType).toBe('video/mp4');
+  });
+
+  it('permanently deletes a stored local video output', () => {
+    storeVideoOutput('account-1', 'task-delete-video', 0, Buffer.from(mp4, 'base64'), 'video/mp4');
+    expect(readStoredVideoOutput('account-1', 'task-delete-video', 0)).not.toBeNull();
+    expect(deleteStoredVideoOutput('account-1', 'task-delete-video', 0)).toBe(true);
+    expect(readStoredVideoOutput('account-1', 'task-delete-video', 0)).toBeNull();
+    expect(deleteStoredVideoOutput('account-1', 'task-delete-video', 0)).toBe(false);
+  });
+
+  it('deletes every validated output for one exact task without recursive removal', () => {
+    storeImageBase64Outputs('account-1', 'task-delete-all', [png]);
+    storeVideoOutput('account-1', 'task-delete-all', 1, Buffer.from(mp4, 'base64'), 'video/mp4');
+    const directory = getWorkspacePath('generated', 'account-1', 'task-delete-all');
+
+    expect(deleteStoredTaskOutputs('account-1', 'task-delete-all')).toEqual({
+      deletedFiles: 2,
+      deletedBytes: Buffer.from(png, 'base64').length + Buffer.from(mp4, 'base64').length,
+    });
+    expect(fs.existsSync(directory)).toBe(false);
+    expect(deleteStoredTaskOutputs('account-1', 'task-delete-all')).toEqual({ deletedFiles: 0, deletedBytes: 0 });
+  });
+
+  it('refuses to delete a task directory containing an unexpected entry', () => {
+    storeImageBase64Outputs('account-1', 'task-delete-guard', [png]);
+    const directory = getWorkspacePath('generated', 'account-1', 'task-delete-guard');
+    fs.mkdirSync(path.join(directory, 'nested'));
+
+    expect(() => deleteStoredTaskOutputs('account-1', 'task-delete-guard')).toThrow('output_directory_invalid');
+    expect(readStoredOutput('account-1', 'task-delete-guard', 0)).not.toBeNull();
   });
 });

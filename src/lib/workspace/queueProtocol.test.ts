@@ -14,7 +14,7 @@ describe('createQueuePage', () => {
     expect(tasks.map((row) => row.id)).toEqual(['b', 'new', 'a']);
   });
 
-  it('counts the whole scope while filtering tabs, including video-only unsaved rows', () => {
+  it('counts completed images and videos awaiting inventory across tabs', () => {
     const tasks = [
       task('draft', { status: 'draft' }), task('paused', { status: 'paused' }), task('running', { status: 'running' }),
       task('unsaved', { status: 'completed' }),
@@ -27,7 +27,7 @@ describe('createQueuePage', () => {
       task('cancelled', { status: 'cancelled', errorInfo: { safeToRetry: true } }),
     ];
     const result = createQueuePage(tasks, { tab: 'active', pageSize: 1 });
-    expect(result.counts).toEqual({ all: 11, active: 3, completed: 5, failed: 2, unsaved: 1, safeRecoverable: 1 });
+    expect(result.counts).toEqual({ all: 11, active: 3, completed: 5, failed: 2, unsaved: 2, safeRecoverable: 1 });
     expect(result.tasks.map((row) => row.id)).toEqual(['draft']);
     expect(result.totalPages).toBe(3);
     expect(createQueuePage(tasks, { tab: 'completed' }).tasks).toHaveLength(5);
@@ -46,7 +46,7 @@ describe('createQueuePage', () => {
 
   it('focuses tasks or the first unsaved video within the selected tab', () => {
     const tasks = [
-      task('a'), task('b', { status: 'completed', mode: 'image' }), task('c'),
+      task('a'), task('b', { status: 'completed', mode: 'image', inventorySavedAt: '2026-09-14T01:00:00.000Z' }), task('c'),
       task('d', { status: 'completed' }), task('e', { status: 'completed' }),
     ];
     expect(createQueuePage(tasks, { pageSize: 2, focusTaskId: 'e' })).toMatchObject({ page: 2, tasks: [tasks[4]] });
@@ -54,6 +54,16 @@ describe('createQueuePage', () => {
     expect(createQueuePage(tasks, { tab: 'active', pageSize: 1, focusTaskId: 'e' })).toMatchObject({ page: 0, tasks: [tasks[0]] });
     expect(createQueuePage(tasks, { pageSize: 2, focusTaskId: 'a', focusUnstored: true }).page).toBe(0);
     expect(createQueuePage(tasks, { pageSize: 2, page: 1, focusTaskId: 'missing' }).page).toBe(1);
+  });
+
+  it('locates an unsaved image outside the first page and ignores saved images and prompts', () => {
+    const tasks = Array.from({ length: 51 }, (_, index) => task(`new-${index}`, { mode: 'image', status: 'completed', inventorySavedAt: '2026-09-14T01:00:00.000Z', createdAt: `2026-09-14T${String(23 - Math.floor(index / 3)).padStart(2, '0')}:${String((index % 3) * 10).padStart(2, '0')}:00.000Z` }));
+    tasks.push(task('unsaved-image', { mode: 'image', status: 'completed', createdAt: '2026-09-13T00:00:00.000Z' }));
+    tasks.push(task('unsaved-prompt', { mode: 'prompt', status: 'completed', createdAt: '2026-09-12T00:00:00.000Z' }));
+    const result = createQueuePage(tasks, { focusUnstored: true, pageSize: 50 });
+    expect(result.counts.unsaved).toBe(1);
+    expect(result.page).toBe(1);
+    expect(result.tasks.map((row) => row.id)).toContain('unsaved-image');
   });
 });
 

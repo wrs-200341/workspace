@@ -11,7 +11,7 @@
  * a clip that starts at 23:55 and finishes after midnight belongs to the day it
  * actually completed.
  */
-import { listProviderTaskSummaries, type ProviderTaskSummary } from '@/lib/providers/taskStore';
+import { countCompletedProviderTasksForDailyQuota } from '@/lib/providers/taskStore';
 
 /**
  * Model ids that are capped, keyed by the environment variable holding the
@@ -47,25 +47,11 @@ export function dailyLimitForModel(model: string, env: Readonly<Record<string, s
   return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : DEFAULT_DAILY_SUCCESS_LIMIT;
 }
 
-/** A task counts against quota only once it has actually produced a video. */
-function isSuccessfulOn(task: ProviderTaskSummary, model: string, ownerId: string, dateKey: string): boolean {
-  if (task.mode !== 'video' || task.status !== 'completed') return false;
-  if ((task.metadata?.modelId ?? task.model ?? '') !== model && task.model !== model) return false;
-  const taskOwner = typeof task.metadata?.ownerId === 'string' && task.metadata.ownerId ? task.metadata.ownerId : task.accountId;
-  if (taskOwner !== ownerId) return false;
-  // `inventorySavedAt` is set when outputs land locally; fall back to updatedAt
-  // for records written before that field existed.
-  const completedAt = task.inventorySavedAt || task.updatedAt || task.createdAt;
-  return shanghaiDateKey(completedAt) === dateKey;
-}
-
 export function getDailyQuotaUsage(ownerId: string, model: string, now: Date | number = new Date(), env: Readonly<Record<string, string | undefined>> = process.env): DailyQuotaUsage | null {
   const limit = dailyLimitForModel(model, env);
   if (limit === undefined) return null;
   const dateKey = shanghaiDateKey(now);
-  const used = listProviderTaskSummaries({ mode: 'video', status: 'completed' })
-    .filter((task) => isSuccessfulOn(task, model, ownerId, dateKey))
-    .length;
+  const used = countCompletedProviderTasksForDailyQuota(ownerId, model, dateKey);
   return { model, limit, used, remaining: Math.max(0, limit - used), date: dateKey };
 }
 

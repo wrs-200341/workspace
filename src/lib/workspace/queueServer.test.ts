@@ -81,6 +81,16 @@ describe('scoped server queue deltas', () => {
     expect(page).toMatchObject({ page: 2, totalPages: 3, pageSize: 50, counts: { all: 120, completed: 120, unsaved: 120 } });
   });
 
+  it('counts and focuses unstocked completed images across pages for the image queue', () => {
+    mocks.summaries.mockReturnValue(Array.from({ length: 51 }, (_, index) => row(`saved-${String(index).padStart(2, '0')}`, { mode: 'image', inventorySavedAt: '2026-09-14T02:00:00.000Z' })).concat([
+      row('unsaved-image', { mode: 'image', createdAt: '2026-09-14T00:00:00.000Z' }),
+    ]));
+    const page = read('focusUnstored=1&limit=50', { mode: 'image' });
+    expect(page).toMatchObject({ page: 1, counts: { all: 52, unsaved: 1 } });
+    expect(page.tasks.map((task) => task.id)).toContain('unsaved-image');
+    expect(mocks.summaries).toHaveBeenCalledWith(expect.objectContaining({ mode: 'image' }));
+  });
+
   it('excludes tasks with a conflicting metadata owner even on an owned account', () => {
     mocks.summaries.mockReturnValue([row('one'), row('other', { metadata: { ownerId: 'owner-b' } })]);
     expect(read().tasks.map((task) => task.id)).toEqual(['one']);

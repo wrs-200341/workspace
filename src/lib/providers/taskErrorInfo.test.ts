@@ -16,8 +16,9 @@ describe('task error classification', () => {
       providerTaskId,
       metadata: {},
     });
-    expect(info).toMatchObject({ code: 'provider_submission_uncertain', category: 'submission_uncertain', title: '提交结果待供应商确认', safeToRetry: false });
-    expect(info?.message).toContain('重复提交扣费');
+    expect(info).toMatchObject({ code: 'provider_submission_uncertain', category: 'submission_uncertain', safeToRetry: false });
+    expect(info?.title).toContain('提交');
+    expect(`${info?.message} ${info?.action}`).toContain('重复');
     expect(info?.action).toContain('供应商');
   });
 
@@ -30,6 +31,57 @@ describe('task error classification', () => {
       metadata: { schedulerInterruptedAt: '2026-09-14T01:00:00Z', promptGenerationPending: true, providerSubmissionUncertain: true },
     });
     expect(info).toMatchObject({ code: 'provider_submission_uncertain', category: 'submission_uncertain', safeToRetry: false });
+  });
+
+  it('identifies an OAIRegBox video submission timeout after child prompt generation succeeded', () => {
+    const info = classifyTaskError({
+      mode: 'video',
+      provider: 'oairegbox-omni',
+      model: 'omni-fast-no-water',
+      error: 'provider_submission_uncertain',
+      providerResponse: { code: 'provider_408', endpoint: 'https://newapi-2.oairegbox.cc/v1/videos', stage: 'video_submission', timeoutMs: 120000 },
+      providerTaskId: undefined,
+      metadata: {
+        promptMode: 'asset-template-child-prompt',
+        promptGenerationPending: false,
+        promptGenerationFailed: false,
+        promptProvider: 'secure-skill-gpt-prompt',
+        promptModel: 'gpt-5.5',
+        failureStage: 'video_submission',
+        failureProvider: 'oairegbox-omni',
+        failureModel: 'omni-fast-no-water',
+        providerSubmissionUncertain: true,
+      },
+    });
+    expect(info).toMatchObject({
+      title: 'OAIRegBox 视频提交超时',
+      category: 'submission_uncertain',
+      safeToRetry: false,
+    });
+    expect(info?.message).toContain('子提示词已由 secure-skill · gpt-5.5 成功生成');
+    expect(info?.message).toContain('OAIRegBox · omni-fast-no-water');
+    expect(info?.action).toContain('没有自动重新提交');
+  });
+
+  it('identifies a prompt-provider failure before video submission', () => {
+    const info = classifyTaskError({
+      mode: 'video',
+      provider: 'oairegbox-omni',
+      model: 'omni-fast-no-water',
+      error: 'provider_request_failed',
+      providerResponse: { code: 'provider_network_error', stage: 'prompt_generation' },
+      providerTaskId: undefined,
+      metadata: {
+        promptGenerationFailed: true,
+        promptProvider: 'secure-skill-gpt-prompt',
+        promptModel: 'gpt-5.5',
+        failureStage: 'prompt_generation',
+        failureProvider: 'secure-skill-gpt-prompt',
+        failureModel: 'gpt-5.5',
+      },
+    });
+    expect(info).toMatchObject({ title: 'secure-skill · gpt-5.5 子提示词生成失败', safeToRetry: true });
+    expect(info?.message).toContain('视频任务尚未提交');
   });
 
   it('honors the persisted uncertainty marker when a later generic error is recorded', () => {
@@ -116,6 +168,55 @@ describe('task error classification', () => {
     expect(info).toMatchObject({ code: 'video_prompt_too_long', title: '提示词超长', safeToRetry: false });
   });
 
+  it('shows which model failed when a generated child prompt is too long for video submission', () => {
+    const info = classifyTaskError({
+      mode: 'video',
+      provider: 'grok-video',
+      model: 'grok-imagine-video-1.5（按次）',
+      error: 'video_prompt_too_long',
+      providerResponse: { code: 'video_prompt_too_long' },
+      providerTaskId: undefined,
+      metadata: {
+        promptMode: 'asset-template-child-prompt',
+        promptGenerationPending: false,
+        promptGenerationFailed: false,
+        promptGenerationUsedTemplate: false,
+        promptProvider: 'pomoai-gpt-prompt',
+        promptModel: 'claude-opus-4-8',
+      },
+    });
+    expect(info).toMatchObject({
+      code: 'video_prompt_too_long',
+      title: 'snumom 视频提交前校验失败：提示词超长',
+      safeToRetry: false,
+    });
+    expect(info?.message).toContain('子提示词模型 PomoAI · claude-opus-4-8 已成功生成');
+    expect(info?.message).toContain('错误环节：视频模型 snumom · grok-imagine-video-1.5（按次）的提交前校验环节');
+    expect(info?.message).toContain('视频供应商尚未收到任务');
+    expect(info?.action).toBe('');
+  });
+
+  it('adds both model outcomes to an upstream video-generation failure', () => {
+    const info = classifyTaskError({
+      mode: 'video',
+      provider: 'minimax-h3',
+      model: 'minimax-h3',
+      error: 'provider_upstream_failed',
+      providerResponse: { body: { status: 'failed' } },
+      providerTaskId: 'video-123',
+      metadata: {
+        promptMode: 'asset-template-child-prompt',
+        promptGenerationPending: false,
+        promptGenerationFailed: false,
+        promptProvider: 'secure-skill-gpt-prompt',
+        promptModel: 'gpt-5.5',
+      },
+    });
+    expect(info?.title).toContain('secure-skill 视频生成失败');
+    expect(info?.message).toContain('子提示词模型 secure-skill · gpt-5.5 已成功生成');
+    expect(info?.message).toContain('视频模型 secure-skill · minimax-h3的上游生成环节');
+  });
+
   it('names the supplier when an upstream quota response is available', () => {
     const info = classifyTaskError({
       mode: 'video',
@@ -127,5 +228,35 @@ describe('task error classification', () => {
       metadata: {},
     });
     expect(info).toMatchObject({ code: 'provider_quota', category: 'provider_quota', title: 'snumom额度不足', safeToRetry: false });
+  });
+
+  it('attributes a submission failure to the supplier identified by the response endpoint', () => {
+    const info = classifyTaskError({
+      mode: 'video',
+      provider: 'grok-video',
+      model: 'grok-imagine-video-1.5（按次）',
+      error: 'provider_403',
+      providerResponse: {
+        endpoint: 'https://raw.mgrouter.com/v1/videos/generations',
+        body: { code: 'INSUFFICIENT_BALANCE', message: 'Insufficient account balance' },
+      },
+      providerTaskId: undefined,
+      metadata: {
+        promptMode: 'asset-template-child-prompt',
+        promptGenerationPending: false,
+        promptGenerationFailed: false,
+        promptProvider: 'gpt-2999-prompt',
+        promptModel: 'gpt-5.5',
+        failureStage: 'video_submission',
+        failureProvider: 'grok-video',
+        failureModel: 'grok-imagine-video-1.5（按次）',
+      },
+    });
+    expect(info).toMatchObject({
+      code: 'provider_quota',
+      title: 'mgrouter 视频提交失败：mgrouter额度不足',
+      safeToRetry: false,
+    });
+    expect(info?.message).toContain('错误环节：视频模型 mgrouter · grok-imagine-video-1.5（按次）的提交环节');
   });
 });

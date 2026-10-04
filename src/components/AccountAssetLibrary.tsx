@@ -11,12 +11,15 @@ import {
   FolderOpen,
   Loader2,
   Pencil,
+  Search,
   Trash2,
   UploadCloud,
   X,
 } from 'lucide-react';
 import type { AssetKind, PromptAssetCategory, WorkspaceAsset } from '@/lib/workspace/assetStore';
 import { PromptTemplateEditor } from './PromptTemplateEditor';
+import ReviewZoomableMedia from './ReviewZoomableMedia';
+import { matchesAssetPidPrefix } from './assetPidSearch';
 
 type Props = {
   accountId: string;
@@ -107,6 +110,9 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
   const [visibleLimit, setVisibleLimit] = useState(ASSET_PAGE_SIZE);
   const [selectedAssetIds, setSelectedAssetIds] = useState<string[]>([]);
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDownloading, setBulkDownloading] = useState(false);
+  const [viewerAsset, setViewerAsset] = useState<WorkspaceAsset | null>(null);
+  const [pidSearchQuery, setPidSearchQuery] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
@@ -124,16 +130,31 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     setVisibleLimit(ASSET_PAGE_SIZE);
     setPublishFilter('unpublished');
     setSelectedAssetIds([]);
+    setPidSearchQuery('');
   }, [accountId, section]);
 
   useEffect(() => {
-    if (section !== 'image' || readOnly) {
+    setVisibleLimit(ASSET_PAGE_SIZE);
+    if (section === 'image' || section === 'inventory-video') setSelectedAssetIds([]);
+  }, [pidSearchQuery, publishFilter, section]);
+
+  useEffect(() => {
+    if ((section !== 'image' && section !== 'inventory-video') || readOnly) {
       setSelectedAssetIds([]);
       return;
     }
     const existing = new Set(assets.map((asset) => asset.id));
     setSelectedAssetIds((current) => current.filter((id) => existing.has(id)));
   }, [assets, readOnly, section]);
+
+  useEffect(() => {
+    if (!viewerAsset) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setViewerAsset(null);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [viewerAsset]);
 
   const handleFiles = useCallback(async (fileList: FileList | File[]) => {
     const files = Array.from(fileList);
@@ -241,34 +262,44 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     }
   };
 
-  const togglePublished = async (asset: WorkspaceAsset) => {
-    const next = !asset.publishedAt;
-    if (!next && !window.confirm(`确定把“${asset.name}”标记为未发布吗？`)) return;
+  const setPublishedState = async (asset: WorkspaceAsset, published: boolean): Promise<WorkspaceAsset> => {
+    const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(asset.id)}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ published }),
+    });
+    const payload = await response.json().catch(() => null) as { success?: boolean; data?: WorkspaceAsset; error?: string } | null;
+    if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.error || '标记失败');
+    const saved = payload.data;
+    setAssets((current) => current.map((item) => item.id === saved.id ? saved : item));
+    return saved;
+  };
+
+  const restoreUnpublished = async (asset: WorkspaceAsset) => {
+    if (!asset.publishedAt || !window.confirm(`确定把“${asset.name}”恢复为未发布吗？`)) return;
+    setMessage('');
+    setError('');
     try {
-      const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(asset.id)}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ published: next }),
-      });
-      const payload = await response.json().catch(() => null) as { success?: boolean; data?: WorkspaceAsset; error?: string } | null;
-      if (!response.ok || !payload?.success || !payload.data) throw new Error(payload?.error || '标记失败');
-      const saved = payload.data;
-      setAssets((current) => current.map((item) => item.id === saved.id ? saved : item));
-      setMessage(next ? '已标记为已发布' : '已恢复为未发布');
+      await setPublishedState(asset, false);
+      setMessage('已恢复为未发布');
     } catch (publishError) {
       setError(publishError instanceof Error ? publishError.message : '标记失败');
     }
   };
 
   const removeAsset = async (asset: WorkspaceAsset) => {
-    if (!window.confirm(`确定删除“${asset.name}”吗？此操作不可撤销。`)) return;
+    const isInventoryVideo = asset.kind === 'inventory-video';
+    const warning = isInventoryVideo
+      ? `确定永久删除“${asset.name}”吗？库存记录、本地视频文件和任务保存的源文件都会一并删除，且不会被系统自动恢复。`
+      : `确定删除“${asset.name}”吗？此操作不可撤销。`;
+    if (!window.confirm(warning)) return;
     try {
       const response = await fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/files/${encodeURIComponent(asset.id)}`, { method: 'DELETE' });
-      const payload = await response.json().catch(() => null) as { success?: boolean; error?: string } | null;
+      const payload = await response.json().catch(() => null) as { success?: boolean; data?: { sourceFileDeleted?: boolean; deletedGeneratedFiles?: number }; error?: string } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '删除失败');
       setAssets((current) => current.filter((item) => item.id !== asset.id));
       setSelectedAssetIds((current) => current.filter((id) => id !== asset.id));
-      setMessage('资产已删除');
+      setMessage(isInventoryVideo ? '库存视频及本地源文件已永久删除' : '资产已删除');
     } catch (removeError) {
       setError(removeError instanceof Error ? removeError.message : '删除失败');
     }
@@ -276,8 +307,8 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
 
   const selectedAssets = useMemo(() => {
     const selected = new Set(selectedAssetIds);
-    return assets.filter((asset) => asset.kind === 'image' && selected.has(asset.id));
-  }, [assets, selectedAssetIds]);
+    return assets.filter((asset) => asset.kind === section && selected.has(asset.id));
+  }, [assets, section, selectedAssetIds]);
 
   const toggleSelectedAsset = (assetId: string) => {
     setSelectedAssetIds((current) => current.includes(assetId) ? current.filter((id) => id !== assetId) : [...current, assetId]);
@@ -316,8 +347,21 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     else setMessage(`已删除 ${succeeded} 张素材图`);
   };
 
-  const downloadAsset = async (asset: WorkspaceAsset) => {
+  const triggerDirectDownload = (asset: WorkspaceAsset) => {
+    const anchor = document.createElement('a');
+    anchor.href = assetUrl(accountId, asset.id, true);
+    anchor.download = downloadName(asset);
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  };
+
+  const downloadAsset = async (asset: WorkspaceAsset, quiet = false): Promise<boolean> => {
     try {
+      if (!quiet) {
+        setMessage('');
+        setError('');
+      }
       if (asset.kind === 'prompt') {
         const blob = new Blob([asset.content ?? ''], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
@@ -329,7 +373,13 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
         anchor.click();
         anchor.remove();
         URL.revokeObjectURL(url);
-        return;
+        return true;
+      }
+      if (asset.kind === 'inventory-video') {
+        if (!readOnly && !asset.publishedAt) await setPublishedState(asset, true);
+        triggerDirectDownload(asset);
+        if (!quiet) setMessage(readOnly ? '已开始下载视频' : '已开始下载，视频已自动进入已发布');
+        return true;
       }
       const response = await fetch(assetUrl(accountId, asset.id, true));
       if (!response.ok) throw new Error('下载失败');
@@ -342,9 +392,34 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
       anchor.click();
       anchor.remove();
       URL.revokeObjectURL(url);
+      return true;
     } catch (downloadError) {
-      setError(downloadError instanceof Error ? downloadError.message : '下载失败');
+      if (!quiet) setError(downloadError instanceof Error ? downloadError.message : '下载失败');
+      return false;
     }
+  };
+
+  const downloadSelectedVideos = async () => {
+    if (section !== 'inventory-video' || readOnly || bulkDownloading || selectedAssets.length === 0) return;
+    setBulkDownloading(true);
+    setMessage('');
+    setError('');
+    let succeeded = 0;
+    const downloadedIds: string[] = [];
+    for (const asset of selectedAssets) {
+      if (await downloadAsset(asset, true)) {
+        succeeded += 1;
+        downloadedIds.push(asset.id);
+      }
+    }
+    if (downloadedIds.length) {
+      const downloaded = new Set(downloadedIds);
+      setSelectedAssetIds((current) => current.filter((id) => !downloaded.has(id)));
+    }
+    const failed = selectedAssets.length - succeeded;
+    setBulkDownloading(false);
+    if (failed) setError(`已开始下载 ${succeeded} 个视频，${failed} 个下载或发布标记失败，请重试。`);
+    else setMessage(`已开始下载 ${succeeded} 个视频，并自动进入已发布`);
   };
 
   const helperText = useMemo(() => {
@@ -356,16 +431,36 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
 
   const publishedCount = section === 'inventory-video' ? assets.filter((item) => item.publishedAt).length : 0;
   const unpublishedCount = section === 'inventory-video' ? assets.length - publishedCount : 0;
-  const filteredAssets = section === 'inventory-video'
-    ? assets.filter((item) => (publishFilter === 'published' ? Boolean(item.publishedAt) : !item.publishedAt))
+  const pidSearchEnabled = section === 'image' || section === 'inventory-video';
+  const pidFilteredAssets = pidSearchEnabled
+    ? assets.filter((asset) => matchesAssetPidPrefix(asset.name, pidSearchQuery))
     : assets;
+  const filteredAssets = section === 'inventory-video'
+    ? pidFilteredAssets.filter((item) => (publishFilter === 'published' ? Boolean(item.publishedAt) : !item.publishedAt))
+    : pidFilteredAssets;
   const visibleAssets = filteredAssets.slice(0, visibleLimit);
   const materialBulkSelectionEnabled = section === 'image' && !readOnly;
+  const videoBulkSelectionEnabled = section === 'inventory-video' && !readOnly;
   const selectedCount = selectedAssets.length;
+  const filteredSelectableIds = section === 'image' || section === 'inventory-video' ? filteredAssets.map((asset) => asset.id) : [];
+  const selectedIdSet = new Set(selectedAssetIds);
+  const allFilteredAssetsSelected = filteredSelectableIds.length > 0 && filteredSelectableIds.every((id) => selectedIdSet.has(id));
+
+  const toggleSelectAllAssets = () => {
+    if (!filteredSelectableIds.length || bulkDeleting || bulkDownloading) return;
+    const filteredIds = new Set(filteredSelectableIds);
+    setSelectedAssetIds((current) => allFilteredAssetsSelected
+      ? current.filter((id) => !filteredIds.has(id))
+      : [...new Set([...current, ...filteredSelectableIds])]);
+    setMessage('');
+    setError('');
+  };
 
   return <div className={`account-asset-library ${section}`}>
-    {materialBulkSelectionEnabled && <div className="asset-bulk-toolbar" aria-label="素材图批量操作">
-      <button type="button" className="asset-bulk-delete-button" disabled={bulkDeleting || selectedCount === 0} onClick={() => void removeSelectedAssets()}><Trash2 size={14} /> {bulkDeleting ? '删除中…' : `批量删除已选 (${selectedCount})`}</button>
+    {(materialBulkSelectionEnabled || videoBulkSelectionEnabled) && <div className="asset-bulk-toolbar" aria-label={section === 'image' ? '素材图批量操作' : '库存视频批量操作'}>
+      <button type="button" className="asset-select-all-button" disabled={bulkDeleting || bulkDownloading || filteredSelectableIds.length === 0} onClick={toggleSelectAllAssets} aria-pressed={allFilteredAssetsSelected}><Check size={14} /> {allFilteredAssetsSelected ? (pidSearchQuery.trim() ? '取消全选结果' : '取消全选') : (pidSearchQuery.trim() ? `全选结果 (${filteredSelectableIds.length})` : `全选 (${filteredSelectableIds.length})`)}</button>
+      {materialBulkSelectionEnabled && <button type="button" className="asset-bulk-delete-button" disabled={bulkDeleting || selectedCount === 0} onClick={() => void removeSelectedAssets()}><Trash2 size={14} /> {bulkDeleting ? '删除中…' : `批量删除已选 (${selectedCount})`}</button>}
+      {videoBulkSelectionEnabled && <button type="button" className="asset-bulk-download-button" disabled={bulkDownloading || selectedCount === 0} onClick={() => void downloadSelectedVideos()}><Download size={14} /> {bulkDownloading ? '下载中…' : `批量下载已选 (${selectedCount})`}</button>}
     </div>}
     {!readOnly && <div
       className={`asset-dropzone ${dragging ? 'dragging' : ''} ${uploading ? 'uploading' : ''}`}
@@ -389,19 +484,25 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
     {message && <div className="asset-feedback success" role="status"><Check size={14} />{message}</div>}
     {error && <div className="asset-feedback error" role="alert"><X size={14} />{error}</div>}
     {section === 'prompt' && !readOnly && <PromptTemplateEditor accountId={accountId} initialAssets={assets} initialCategory={promptTab} onSaved={refresh} />}
+    {pidSearchEnabled && <div className="asset-pid-searchbar" role="search">
+      <Search size={16} aria-hidden="true" />
+      <input value={pidSearchQuery} onChange={(event) => setPidSearchQuery(event.target.value)} placeholder="搜索 PID 前缀" aria-label="按 PID 前缀搜索库存" autoComplete="off" spellCheck={false} />
+      {pidSearchQuery && <button type="button" onClick={() => setPidSearchQuery('')} title="清空搜索" aria-label="清空 PID 搜索"><X size={15} /></button>}
+      <span aria-live="polite">{pidSearchQuery.trim() ? `${filteredAssets.length} 项` : `${assets.length} 项`}</span>
+    </div>}
     {section === 'inventory-video' && assets.length > 0 && <div className="publish-filter-tabs" role="tablist" aria-label="库存视频发布状态">
       <button type="button" role="tab" aria-selected={publishFilter === 'unpublished'} className={publishFilter === 'unpublished' ? 'active' : ''} onClick={() => setPublishFilter('unpublished')}>未发布 <span>{unpublishedCount}</span></button>
       <button type="button" role="tab" aria-selected={publishFilter === 'published'} className={publishFilter === 'published' ? 'active' : ''} onClick={() => setPublishFilter('published')}>已发布 <span>{publishedCount}</span></button>
     </div>}
     {section !== 'prompt' && !assets.length && <div className="asset-empty"><FolderOpen size={18} />还没有{sectionLabel(section)}资产，拖入文件即可开始。</div>}
-    {section === 'inventory-video' && assets.length > 0 && !visibleAssets.length && <div className="asset-empty"><FolderOpen size={18} />{publishFilter === 'published' ? '还没有已发布的视频。' : '没有待发布的视频，全部已发布。'}</div>}
+    {section !== 'prompt' && assets.length > 0 && !visibleAssets.length && <div className="asset-empty"><FolderOpen size={18} />{pidSearchQuery.trim() ? `未找到以“${pidSearchQuery.trim()}”开头的 PID 资产` : section === 'inventory-video' && publishFilter === 'published' ? '还没有已发布的视频。' : section === 'inventory-video' ? '没有待发布的视频，全部已发布。' : '暂无资产'}</div>}
     {section !== 'prompt' && visibleAssets.length > 0 && <div className={`asset-card-grid ${section === 'image' ? 'image-grid' : 'media-grid'}`}>
       {visibleAssets.map((asset) => {
         const isEditing = editingId === asset.id;
         const isSelected = selectedAssetIds.includes(asset.id);
         return <article className={`asset-card ${section === 'image' ? 'asset-image-card' : 'asset-media-card'} ${isSelected ? 'is-selected' : ''}`} key={asset.id}>
-          {section === 'image' && <div className="asset-image-preview">{asset.relativePath ? <img src={assetUrl(accountId, asset.id)} alt={asset.name} loading="lazy" /> : <FileImage size={28} />}{materialBulkSelectionEnabled && <button type="button" className={`asset-card-select ${isSelected ? 'is-selected' : ''}`} onClick={() => toggleSelectedAsset(asset.id)} title={isSelected ? '取消选择' : '选择素材图'} aria-pressed={isSelected} aria-label={`${isSelected ? '取消选择' : '选择'} ${asset.name}`}>{isSelected ? <Check size={14} /> : null}</button>}</div>}
-          {section === 'inventory-video' && <div className="asset-media-preview"><video src={assetUrl(accountId, asset.id)} controls preload="metadata" /></div>}
+          {section === 'image' && <div className="asset-image-preview"><button type="button" className="asset-image-open" onClick={() => setViewerAsset(asset)} aria-label={`放大查看 ${asset.name}`} title="点击放大查看">{asset.relativePath ? <img src={assetUrl(accountId, asset.id)} alt={asset.name} loading="lazy" /> : <FileImage size={28} />}</button>{materialBulkSelectionEnabled && <button type="button" className={`asset-card-select ${isSelected ? 'is-selected' : ''}`} onClick={() => toggleSelectedAsset(asset.id)} title={isSelected ? '取消选择' : '选择素材图'} aria-pressed={isSelected} aria-label={`${isSelected ? '取消选择' : '选择'} ${asset.name}`}>{isSelected ? <Check size={14} /> : null}</button>}</div>}
+          {section === 'inventory-video' && <div className="asset-media-preview"><video src={assetUrl(accountId, asset.id)} controls preload="metadata" />{videoBulkSelectionEnabled && <button type="button" className={`asset-card-select video-select ${isSelected ? 'is-selected' : ''}`} onClick={() => toggleSelectedAsset(asset.id)} title={isSelected ? '取消选择' : '选择库存视频'} aria-pressed={isSelected} aria-label={`${isSelected ? '取消选择' : '选择'} ${asset.name}`}>{isSelected ? <Check size={14} /> : null}</button>}</div>}
           {section === 'audio' && <div className="asset-media-preview audio"><AudioLines size={28} /><audio src={assetUrl(accountId, asset.id)} controls preload="metadata" /></div>}
           <div className="asset-card-body">
             {isEditing ? <div className="asset-rename-row"><input value={editingName} onChange={(event) => setEditingName(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void saveRename(); if (event.key === 'Escape') setEditingId(null); }} autoFocus aria-label="资产名称" /><button type="button" className="asset-card-action" onClick={() => void saveRename()} title="保存命名"><Check size={15} /></button><button type="button" className="asset-card-action" onClick={() => setEditingId(null)} title="取消"><X size={15} /></button></div> : <strong title={asset.name}>{asset.name}</strong>}
@@ -411,7 +512,7 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
           </div>
           <div className="asset-card-actions" aria-label={`${asset.name} 操作`}>
             <button type="button" className="asset-card-action" onClick={() => void downloadAsset(asset)} title="下载" aria-label={`下载 ${asset.name}`}><Download size={15} /></button>
-            {!readOnly && section === 'inventory-video' && <button type="button" className={`asset-card-action asset-publish-action ${asset.publishedAt ? 'is-published' : ''}`} onClick={() => void togglePublished(asset)} title={asset.publishedAt ? '已发布，点击恢复为未发布' : '确认发布'} aria-label={`${asset.publishedAt ? '恢复为未发布' : '确认发布'} ${asset.name}`}><Check size={15} /> {asset.publishedAt ? '已发布' : '确认发布'}</button>}
+            {!readOnly && section === 'inventory-video' && asset.publishedAt && <button type="button" className="asset-card-action asset-publish-action is-published" onClick={() => void restoreUnpublished(asset)} title="恢复为未发布" aria-label={`恢复为未发布 ${asset.name}`}><X size={15} /> 恢复未发布</button>}
             {!readOnly && <><button type="button" className="asset-card-action" onClick={() => startRename(asset)} title="重命名" aria-label={`重命名 ${asset.name}`}><Pencil size={15} /></button>
             <button type="button" className="asset-card-action danger" onClick={() => void removeAsset(asset)} title="删除" aria-label={`删除 ${asset.name}`}><Trash2 size={15} /></button></>}
           </div>
@@ -419,5 +520,11 @@ export function AccountAssetLibrary({ accountId, section, initialAssets, promptT
       })}
     </div>}
     {section !== 'prompt' && filteredAssets.length > visibleLimit && <button type="button" className="ghost-button asset-load-more" onClick={() => setVisibleLimit((current) => current + ASSET_PAGE_SIZE)}>加载更多（剩余 {filteredAssets.length - visibleLimit} 个）</button>}
+    {viewerAsset && <div className="modal-backdrop asset-image-viewer-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setViewerAsset(null); }}>
+      <section className="modal-card asset-image-viewer-modal" role="dialog" aria-modal="true" aria-labelledby="asset-image-viewer-title">
+        <div className="panel-header"><div><h2 id="asset-image-viewer-title" className="panel-title" title={viewerAsset.name}>{viewerAsset.name}</h2></div><button type="button" className="icon-button" onClick={() => setViewerAsset(null)} aria-label="关闭图片预览" title="关闭"><X size={17} /></button></div>
+        <div className="asset-image-viewer-stage"><ReviewZoomableMedia src={assetUrl(accountId, viewerAsset.id)} alt={viewerAsset.name} /></div>
+      </section>
+    </div>}
   </div>;
 }

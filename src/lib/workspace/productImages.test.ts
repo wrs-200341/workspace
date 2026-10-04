@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getWorkspacePath } from '../storagePaths';
 import {
@@ -120,6 +121,26 @@ describe('8765 product image adapter', () => {
     fs.mkdirSync(getWorkspacePath('product-images', 'account-1', '2026-09-01', 'P2'), { recursive: true });
     expect(cleanupExpiredProductImages(new Date('2026-09-02T00:00:00+08:00'))).toMatchObject({ deletedDirectories: 1 });
     expect(fs.existsSync(oldDir)).toBe(false);
+  });
+
+  it('does not fail when an expired date directory disappears during cleanup', () => {
+    const dateDir = getWorkspacePath('product-images', 'account-1', '2026-08-30');
+    const oldDir = path.join(dateDir, 'P1');
+    fs.mkdirSync(oldDir, { recursive: true });
+    fs.writeFileSync(path.join(oldDir, '001.jpg'), 'old');
+    const originalReadDirectory = fs.readdirSync.bind(fs);
+    let removed = false;
+    vi.spyOn(fs, 'readdirSync').mockImplementation(((directory: fs.PathLike, options?: unknown) => {
+      const entries = originalReadDirectory(directory, options as never);
+      if (!removed && path.resolve(String(directory)) === path.resolve(dateDir)) {
+        removed = true;
+        fs.rmSync(dateDir, { recursive: true, force: true });
+      }
+      return entries;
+    }) as typeof fs.readdirSync);
+
+    expect(() => cleanupExpiredProductImages(new Date('2026-09-02T00:00:00+08:00'))).not.toThrow();
+    expect(removed).toBe(true);
   });
 
   it('supports dry-run without deleting expired product images', () => {

@@ -3,7 +3,7 @@ import { listStoredAccounts } from './accountStore';
 import { withLiveAccountStatsList } from './accountStats';
 import { businessDate, type WorkspaceTask } from './tasks';
 import { countVideoOutputs } from '@/lib/providers/videoOutputUrls';
-import { listProviderTaskSummaries, type ProviderTaskSummary } from '@/lib/providers/taskStore';
+import { getProviderTaskStatsAggregate, type ProviderTaskSummary } from '@/lib/providers/taskStore';
 
 /**
  * Downstream performance is intentionally kept separate from production
@@ -151,14 +151,13 @@ function accountRows(accounts: readonly WorkspaceAccount[]): DashboardAccount[] 
 /** Build the server-side snapshot consumed by the overview and tables. */
 export function getDashboardSnapshot(now: Date | string | number = new Date()): DashboardSnapshot {
   const accounts = accountRows(withLiveAccountStatsList(listStoredAccounts()));
-  // Dashboard counters do not render queue titles or provider outputs. Read
-  // the compact provider-task projection directly so this API does not build
-  // occurrence maps or clone multi-megabyte output payloads.
-  const tasks = listProviderTaskSummaries();
   return {
     accounts,
     totals: { ...EMPTY_TOTALS },
-    production: aggregateProductionTaskSummaryStats(tasks, now),
+    // Let SQLite aggregate the compact summary column. Materializing every
+    // historical summary in Node caused large short-lived heaps and shared GC
+    // pauses whenever active tasks invalidated the dashboard cache.
+    production: getProviderTaskStatsAggregate(businessDate(now)),
     // No verified downstream publishing source exists yet. Keep these arrays
     // empty rather than exposing the old demonstration records.
     videos: [],

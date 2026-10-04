@@ -225,7 +225,7 @@ async function completeImageTask(input: ImageSubmissionInput, result: Awaited<Re
   const stopped = current.status === 'cancelled' || current.status === 'paused';
   const checkpoint = updateProviderTask(input.taskId, {
     provider: input.provider, model: input.model,
-    status: stopped ? current.status : confirmedFailure ? 'failed' : hasOutputs ? 'processing' : unresumable ? 'failed' : status.status === 'unknown' ? 'submitted' : status.status,
+    status: stopped ? current.status : confirmedFailure ? 'failed' : hasOutputs ? 'processing' : unresumable ? 'failed' : status.status === 'unknown' || status.status === 'paused' ? 'submitted' : status.status,
     progress: stopped ? current.progress : confirmedFailure || unresumable ? 100 : hasOutputs ? 99 : status.progress,
     providerTaskId: status.providerTaskId ?? current.providerTaskId,
     outputUrls: status.outputUrls, outputBase64: status.outputBase64,

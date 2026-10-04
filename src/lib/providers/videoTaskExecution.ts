@@ -42,20 +42,6 @@ function metadataNumber(metadata: Record<string, unknown>, key: string): number 
   return typeof value === 'number' && Number.isFinite(value) ? value : typeof value === 'string' && Number.isFinite(Number(value)) ? Number(value) : undefined;
 }
 
-function failedVideoProviders(metadata: Record<string, unknown>): ProviderId[] {
-  const failed = new Set<ProviderId>();
-  const attempts = Array.isArray(metadata.providerAttemptHistory) ? metadata.providerAttemptHistory : [];
-  for (const attempt of attempts) {
-    if (!attempt || typeof attempt !== 'object') continue;
-    const provider = (attempt as { provider?: unknown }).provider;
-    const status = (attempt as { status?: unknown }).status;
-    if (typeof provider === 'string' && status === 'failed' && VIDEO_PROVIDERS.includes(provider as VideoProvider)) failed.add(provider as ProviderId);
-  }
-  const lastProvider = metadata.lastProviderFailure;
-  if (typeof lastProvider === 'string' && VIDEO_PROVIDERS.includes(lastProvider as VideoProvider)) failed.add(lastProvider as ProviderId);
-  return [...failed];
-}
-
 /**
  * Rebuild a scheduler callback from a persisted task after a process restart.
  * Only the safe-recovery API calls this function, and only for tasks that have
@@ -159,9 +145,21 @@ export async function executePersistedVideoTask(taskId: string): Promise<void> {
   } catch (error) {
     const latest = getProviderTask(task.id);
     if (!latest || ['completed', 'cancelled', 'paused'].includes(latest.status) || latest.providerTaskId || latest.metadata?.providerAcceptedAt || latest.metadata?.schedulerWorkerId !== schedulerWorkerId) return;
+    const promptFailed = latest.status === 'prompting' || latest.metadata?.promptGenerationPending === true;
+    const failureStage = promptFailed ? 'prompt_generation' : 'task_preparation';
+    const selectedPromptModel = metadataText(latest.metadata ?? {}, 'promptModelSelection') || metadataText(latest.metadata ?? {}, 'promptModel') || '';
     updateCurrentVideoTask(task.id, (current) => ['completed', 'cancelled', 'paused'].includes(current.status) || current.providerTaskId || current.metadata?.providerAcceptedAt || current.metadata?.schedulerWorkerId !== schedulerWorkerId ? null : {
-      error: sanitizeProviderError(error instanceof Error ? error.message : 'reference_asset_not_found'), providerResponse: providerResponseSnapshot(error), status: 'failed', progress: 100,
-      metadata: { ...(current.metadata ?? {}), ...(metadata.promptMode === 'asset-template-child-prompt' ? { promptGenerationPending: false, promptGenerationFailed: true } : {}) },
+      error: sanitizeProviderError(error instanceof Error ? error.message : 'reference_asset_not_found'), providerResponse: providerResponseSnapshot(error, promptFailed ? { stage: 'prompt_generation' } : undefined), status: 'failed', progress: 100,
+      metadata: {
+        ...(current.metadata ?? {}),
+        failureStage,
+        failureAt: new Date().toISOString(),
+        ...(promptFailed ? {
+          failureProvider: metadataText(current.metadata ?? {}, 'promptProvider') || promptProviderHint(selectedPromptModel),
+          failureModel: metadataText(current.metadata ?? {}, 'promptModel') || promptModelHintFor(selectedPromptModel),
+        } : {}),
+        ...(metadata.promptMode === 'asset-template-child-prompt' ? { promptGenerationPending: false, promptGenerationFailed: promptFailed } : {}),
+      },
     });
     await flushProviderTaskStore();
   }
@@ -173,7 +171,7 @@ async function submitVideoTask(input: { taskId: string; schedulerWorkerId?: stri
   try {
     const beforeSubmit = getProviderTask(input.taskId);
     if (!beforeSubmit || ['completed', 'paused', 'cancelled'].includes(beforeSubmit.status) || beforeSubmit.providerTaskId || beforeSubmit.metadata?.providerAcceptedAt || beforeSubmit.metadata?.schedulerWorkerId !== input.schedulerWorkerId) return;
-    const started = updateProviderTask(input.taskId, { status: 'submitting', metadata: { ...(beforeSubmit.metadata ?? {}), providerSubmissionStartedAt: new Date().toISOString(), lastProviderStatus: undefined } }, beforeSubmit.updatedAt);
+    const started = updateProviderTask(input.taskId, { status: 'submitting', metadata: { ...(beforeSubmit.metadata ?? {}), providerSubmissionStartedAt: new Date().toISOString(), lastProviderStatus: undefined, failureStage: undefined, failureProvider: undefined, failureModel: undefined, failureAt: undefined } }, beforeSubmit.updatedAt);
     if (!started) return;
     await flushProviderTaskStore();
     const afterCheckpoint = getProviderTask(input.taskId);
@@ -184,15 +182,13 @@ async function submitVideoTask(input: { taskId: string; schedulerWorkerId?: stri
       await flushProviderTaskStore();
       return;
     }
-    const failedProviders = failedVideoProviders(afterCheckpoint.metadata ?? {});
-    const skipProviders = failedProviders.length ? failedProviders : undefined;
     submissionStarted = true;
     const submitted = await submitVideoWithFallback({
       provider: input.provider, model: input.model, prompt: input.prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution,
       requestId: input.taskId,
       referenceImages: input.referenceImages, referenceFiles: input.referenceFiles, referenceAudios: input.referenceAudios, referenceVideos: input.referenceVideos,
       media: [...input.referenceImages.map((url) => ({ type: 'reference_image' as const, url })), ...input.referenceVideos.map((url) => ({ type: 'reference_video' as const, url })), ...input.referenceAudios.map((url) => ({ type: 'audio' as const, url }))],
-    }, { preventAmbiguousResubmission: true, skipProviders });
+    }, { preventAmbiguousResubmission: true });
     providerResponse = submitted.response;
     const status = normalizeProviderResponse(submitted.provider, submitted.response);
     const accepted = Boolean(status.providerTaskId || status.outputUrls.length || status.outputBase64.length);
@@ -200,7 +196,7 @@ async function submitVideoTask(input: { taskId: string; schedulerWorkerId?: stri
     const unresumable = !accepted && !confirmedFailure && submitted.mode !== 'mock';
     const checkpoint = updateCurrentVideoTask(input.taskId, (latest) => {
       const stopped = latest.status === 'cancelled' || latest.status === 'paused';
-      const checkpointStatus = stopped ? latest.status : confirmedFailure || unresumable ? 'failed' : status.status === 'completed' ? 'processing' : status.status === 'unknown' ? 'submitted' : status.status;
+      const checkpointStatus = stopped ? latest.status : confirmedFailure || unresumable ? 'failed' : status.status === 'completed' ? 'processing' : status.status === 'unknown' || status.status === 'paused' ? 'submitted' : status.status;
       return {
         provider: submitted.provider, model: submitted.model,
         providerTaskId: status.providerTaskId ?? latest.providerTaskId,
@@ -213,6 +209,12 @@ async function submitVideoTask(input: { taskId: string; schedulerWorkerId?: stri
           ...(latest.metadata ?? {}), execution: submitted.mode, lastProviderStatus: status.status,
           providerSubmissionUncertain: unresumable,
           schedulerRetryExhausted: confirmedFailure ? false : unresumable || latest.metadata?.schedulerRetryExhausted === true,
+          ...((confirmedFailure || unresumable) ? {
+            failureStage: confirmedFailure ? 'video_generation' : 'video_submission',
+            failureProvider: submitted.provider,
+            failureModel: submitted.model,
+            failureAt: new Date().toISOString(),
+          } : {}),
           ...(accepted ? { providerAcceptedAt: new Date().toISOString(), providerTaskAcceptedAt: new Date().toISOString(), schedulerState: 'provider-active' } : {}),
           ...(confirmedFailure && !accepted ? { providerSubmissionStartedAt: undefined, providerSubmissionRejectedAt: new Date().toISOString() } : {}),
           ...(submitted.fallbackFrom ? { fallbackFrom: submitted.fallbackFrom, fallbackProviders: submitted.fallbackProviders, fallbackParameters: submitted.fallbackParameters } : {}),
@@ -262,8 +264,17 @@ async function submitVideoTask(input: { taskId: string; schedulerWorkerId?: stri
       return {
         status: stopped ? current.status : 'failed', progress: stopped ? current.progress : 100,
         error: uncertain ? 'provider_submission_uncertain' : sanitizeProviderError(error instanceof Error ? error.message : ''),
-        providerResponse: providerResponseSnapshot(error, providerResponse === undefined ? undefined : { body: providerResponse, method: 'POST' }),
-        metadata: { ...(current.metadata ?? {}), execution: 'failed', providerSubmissionUncertain: uncertain, ...(uncertain ? { schedulerRetryExhausted: true } : { providerSubmissionStartedAt: undefined }) },
+        providerResponse: providerResponseSnapshot(error, { ...(providerResponse === undefined ? {} : { body: providerResponse }), method: 'POST', stage: 'video_submission' }),
+        metadata: {
+          ...(current.metadata ?? {}),
+          execution: 'failed',
+          providerSubmissionUncertain: uncertain,
+          failureStage: 'video_submission',
+          failureProvider: input.provider,
+          failureModel: input.model,
+          failureAt: new Date().toISOString(),
+          ...(uncertain ? { schedulerRetryExhausted: true } : { providerSubmissionStartedAt: undefined }),
+        },
       };
     });
     await flushProviderTaskStore();

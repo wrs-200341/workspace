@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireApiRole } from '@/lib/auth/server';
 import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { deleteAsset, getAsset, getAssetFileInfo, renameAsset, setAssetPublished, updatePromptAsset } from '@/lib/workspace/assetStore';
+import { parseHttpByteRange } from '@/lib/httpByteRange';
+import { deleteVideoInventoryAssetSources } from '@/lib/workspace/videoInventory';
 
 export const runtime = 'nodejs';
 
@@ -50,14 +52,9 @@ export async function GET(request: NextRequest, { params }: Params) {
     // asset-page loads.
     const range = request.headers.get('range');
     if (range) {
-      const match = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
-      if (!match) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${file.size}` } });
-      const start = match[1] ? Number(match[1]) : Math.max(0, file.size - Number(match[2] || 0));
-      const requestedEnd = match[2] ? Number(match[2]) : file.size - 1;
-      const end = Math.min(file.size - 1, requestedEnd);
-      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= file.size) {
-        return new Response(null, { status: 416, headers: { 'content-range': `bytes */${file.size}` } });
-      }
+      const parsed = parseHttpByteRange(range, file.size);
+      if (!parsed) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${file.size}` } });
+      const { start, end } = parsed;
       const headers = new Headers({ ...baseHeaders, 'content-length': String(end - start + 1), 'content-range': `bytes ${start}-${end}/${file.size}` });
       const stream = Readable.toWeb(fs.createReadStream(file.filePath, { start, end })) as ReadableStream;
       return new Response(stream, { status: 206, headers });
@@ -111,7 +108,20 @@ export async function DELETE(_request: NextRequest, { params }: Params) {
   if (!canAccessWorkspaceAccount(auth, id, { write: true })) return NextResponse.json({ success: false, error: 'forbidden_account_scope' }, { status: 403 });
   try {
     const asset = deleteAsset(id, assetId);
-    return asset ? NextResponse.json({ success: true, data: { assetId: asset.id, deleted: true } }) : NextResponse.json({ success: false, error: 'asset_not_found' }, { status: 404 });
+    if (!asset) return NextResponse.json({ success: false, error: 'asset_not_found' }, { status: 404 });
+    const generated = asset.kind === 'inventory-video'
+      ? deleteVideoInventoryAssetSources(id, asset.id)
+      : { linkedTasks: 0, deletedGeneratedFiles: 0 };
+    return NextResponse.json({
+      success: true,
+      data: {
+        assetId: asset.id,
+        deleted: true,
+        sourceFileDeleted: Boolean(asset.relativePath),
+        linkedTasks: generated.linkedTasks,
+        deletedGeneratedFiles: generated.deletedGeneratedFiles,
+      },
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : 'asset_delete_failed' }, { status: 400 });
   }

@@ -4,6 +4,7 @@ import * as taskStore from './taskStore';
 import { workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 import { canonicalTaskProgress } from './taskProgress';
 import { isProviderLiveEnabled } from './config';
+import { recordProviderGenerationRestore } from './providerGenerationStats';
 
 /**
  * Workspace production concurrency policy.
@@ -35,6 +36,10 @@ type Scope = { ownerId: string; mode: ProductionMode };
 // slot. A task waiting in the local queue is intentionally unlimited and does
 // not count toward either the per-model or operator-wide execution limit.
 const ACTIVE_STATUSES: readonly ProviderTaskStatus[] = ['prompting', 'submitting', 'submitted', 'processing', 'running'];
+// SQL-prefilter scheduler scans to the only statuses that can consume an
+// upstream slot. Parsing all historical summaries for every dispatch creates
+// event-loop and GC pauses shared by every browser session.
+const PROVIDER_SLOT_STATUSES: readonly ProviderTaskStatus[] = [...ACTIVE_STATUSES, 'queued', 'paused'];
 const WAITING_STATE = 'waiting';
 const PROVIDER_ACTIVE_STATE = 'provider-active';
 const DISPATCHING_STATE = 'dispatching';
@@ -129,7 +134,7 @@ function modeLimit(mode: ProductionMode, limits: ConcurrencyLimits): number {
 function currentCounts(scope: Scope, mode: ProductionMode): { total: number; byModel: Map<string, number> } {
   const byModel = new Map<string, number>();
   let total = 0;
-  for (const task of listProviderTaskSummaries()) {
+  for (const task of listProviderTaskSummaries({ mode, statuses: PROVIDER_SLOT_STATUSES })) {
     if (taskOwnerId(task) !== scope.ownerId || task.mode !== mode || !isPersistedActiveTask(task)) continue;
     total += 1;
     const model = taskModelId(task);
@@ -166,7 +171,10 @@ export function expireStaleProviderActiveTasks(
   const expired: ProviderTask[] = [];
   if (process.env.NODE_ENV === 'test' && options.pump !== false) return expired;
   const affected = new Map<string, Scope>();
-  for (const summary of listProviderTaskSummaries()) {
+  for (const summary of listProviderTaskSummaries({
+    ...(options.mode ? { mode: options.mode } : {}),
+    statuses: PROVIDER_SLOT_STATUSES,
+  })) {
     if (!isStaleProviderActiveTask(summary, now, options)) continue;
     const latest = getProviderTask(summary.id);
     if (!latest || !isStaleProviderActiveTask(latest, now, options)) continue;
@@ -446,7 +454,9 @@ export function requeueProviderTask(taskId: string): boolean {
     const confirmedFailure = hasConfirmedProviderFailure(current);
     if (current.metadata?.providerSubmissionUncertain === true || ((current.providerTaskId || current.metadata?.providerAcceptedAt) && !confirmedFailure)) return false;
     if (!['failed', 'cancelled', 'queued', 'paused'].includes(current.status)) return false;
-    return Boolean(updateProviderTask(taskId, { status: current.metadata?.promptGenerationPending === true ? 'prompting' : 'queued', progress: 0, error: undefined, ...(confirmedFailure ? { providerTaskId: undefined, outputUrls: [], outputBase64: [] } : {}), metadata: { ...(current.metadata ?? {}), schedulerState: WAITING_STATE, schedulerRetryCount: 0, schedulerRetryExhausted: false, retrying: false, schedulerRetryNotBefore: undefined, providerSubmissionStartedAt: undefined, providerAcceptedAt: undefined, providerTaskAcceptedAt: undefined, lastProviderStatus: undefined, ...(confirmedFailure ? { lastProviderFailure: current.provider, providerAttemptHistory: [...(Array.isArray(current.metadata?.providerAttemptHistory) ? current.metadata.providerAttemptHistory : []), { provider: current.provider, model: current.model, providerTaskId: current.providerTaskId, status: 'failed', finishedAt: new Date().toISOString(), error: current.error, providerResponse: current.providerResponse }] } : {}), maxRetries: DEFAULT_MAX_RETRIES } }));
+    const updated = updateProviderTask(taskId, { status: current.metadata?.promptGenerationPending === true ? 'prompting' : 'queued', progress: 0, error: undefined, ...(confirmedFailure ? { providerTaskId: undefined, outputUrls: [], outputBase64: [] } : {}), metadata: { ...(current.metadata ?? {}), schedulerState: WAITING_STATE, schedulerRetryCount: 0, schedulerRetryExhausted: false, retrying: false, schedulerRetryNotBefore: undefined, providerSubmissionStartedAt: undefined, providerAcceptedAt: undefined, providerTaskAcceptedAt: undefined, lastProviderStatus: undefined, ...(confirmedFailure ? { lastProviderFailure: current.provider, providerAttemptHistory: [...(Array.isArray(current.metadata?.providerAttemptHistory) ? current.metadata.providerAttemptHistory : []), { provider: current.provider, model: current.model, providerTaskId: current.providerTaskId, status: 'failed', finishedAt: new Date().toISOString(), error: current.error, providerResponse: current.providerResponse }] } : {}), maxRetries: DEFAULT_MAX_RETRIES } });
+    if (updated && (current.status === 'failed' || current.status === 'cancelled')) recordProviderGenerationRestore({ taskId: current.id, accountId: current.accountId, mode: current.mode, provider: current.provider, outcome: 'failed', reason: 'safe-retry' });
+    return Boolean(updated);
   }
   const job = registeredJobs.get(taskId);
   if (!job || pendingJobs.some((candidate) => candidate.taskId === taskId)) return Boolean(job);
@@ -456,7 +466,7 @@ export function requeueProviderTask(taskId: string): boolean {
   if (!retryableStatus) return false;
   pendingJobs.push(job);
   const resetRetries = current.status === 'failed';
-  updateProviderTask(taskId, {
+  const updated = updateProviderTask(taskId, {
     status: 'queued',
     progress: 0,
     // Failed/cancelled tasks may retain the old upstream id.  A manual
@@ -471,8 +481,9 @@ export function requeueProviderTask(taskId: string): boolean {
       ...(resetRetries ? { schedulerRetryCount: 0, retrying: false, maxRetries: DEFAULT_MAX_RETRIES } : {}),
     },
   });
+  if (updated && (current.status === 'failed' || current.status === 'cancelled') && (current.mode === 'image' || current.mode === 'video')) recordProviderGenerationRestore({ taskId: current.id, accountId: current.accountId, mode: current.mode, provider: current.provider, outcome: 'failed', reason: 'safe-retry' });
   void pumpScope({ ownerId: job.ownerId, mode: job.mode });
-  return true;
+  return Boolean(updated);
 }
 
 /**
@@ -517,7 +528,7 @@ export function recoverOrphanedSchedulerTasks(now = Date.now(), options: { force
   }
   // Some lightweight route tests mock only the task methods they exercise;
   // keep recovery optional when that read helper is not present.
-  for (const task of listProviderTaskSummaries()) {
+  for (const task of listProviderTaskSummaries({ statuses: ['queued', 'submitting', 'prompting', 'retrying'] })) {
     // `retrying` is also process-local. When a process restarts after a
     // provider/dispatch failure, its retry timer and registered job are gone
     // even though the persisted task still says "retrying". These tasks have

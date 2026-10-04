@@ -2,12 +2,13 @@ import fs from 'node:fs';
 import { NextRequest, NextResponse } from 'next/server';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockGetStoredVideoOutputFileInfo, mockCacheVideoTaskOutputLocally, mockGetAssetFileInfo } = vi.hoisted(() => ({
+const { mockRequireApiRole, mockCanAccessWorkspaceAccount, mockGetProviderTask, mockGetStoredVideoOutputFileInfo, mockCacheVideoTaskOutputLocally, mockIsVideoOutputIntentionallyDeleted, mockGetAssetFileInfo } = vi.hoisted(() => ({
   mockRequireApiRole: vi.fn(),
   mockCanAccessWorkspaceAccount: vi.fn(),
   mockGetProviderTask: vi.fn(),
   mockGetStoredVideoOutputFileInfo: vi.fn(),
   mockCacheVideoTaskOutputLocally: vi.fn(),
+  mockIsVideoOutputIntentionallyDeleted: vi.fn(),
   mockGetAssetFileInfo: vi.fn(),
 }));
 
@@ -15,7 +16,7 @@ vi.mock('@/lib/auth/server', () => ({ requireApiRole: mockRequireApiRole }));
 vi.mock('@/lib/workspace/access', () => ({ canAccessWorkspaceAccount: mockCanAccessWorkspaceAccount }));
 vi.mock('@/lib/providers/taskStore', () => ({ getProviderTask: mockGetProviderTask }));
 vi.mock('@/lib/providers/outputStore', () => ({ getStoredVideoOutputFileInfo: mockGetStoredVideoOutputFileInfo }));
-vi.mock('@/lib/workspace/videoInventory', () => ({ cacheVideoTaskOutputLocally: mockCacheVideoTaskOutputLocally }));
+vi.mock('@/lib/workspace/videoInventory', () => ({ cacheVideoTaskOutputLocally: mockCacheVideoTaskOutputLocally, isVideoOutputIntentionallyDeleted: mockIsVideoOutputIntentionallyDeleted }));
 vi.mock('@/lib/workspace/assetStore', () => ({ getAssetFileInfo: mockGetAssetFileInfo }));
 
 import { GET } from './route';
@@ -37,6 +38,7 @@ describe('video output proxy API', () => {
     fs.writeFileSync(testFilePath, Buffer.from([0, 0, 0, 24, 0x66, 0x74, 0x79, 0x70]));
     mockGetStoredVideoOutputFileInfo.mockReset().mockReturnValue(cachedInfo);
     mockCacheVideoTaskOutputLocally.mockReset();
+    mockIsVideoOutputIntentionallyDeleted.mockReset().mockReturnValue(false);
     mockGetAssetFileInfo.mockReset().mockReturnValue(null);
   });
 
@@ -46,6 +48,14 @@ describe('video output proxy API', () => {
     expect(response.headers.get('content-type')).toBe('video/mp4');
     expect(response.headers.get('content-disposition')).toContain('attachment');
     expect(mockCacheVideoTaskOutputLocally).not.toHaveBeenCalled();
+  });
+
+  it('serves suffix byte ranges from the end of a cached video', async () => {
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0', { headers: { range: 'bytes=-4' } }), params);
+    expect(response.status).toBe(206);
+    expect(response.headers.get('content-range')).toBe('bytes 4-7/8');
+    expect(response.headers.get('content-length')).toBe('4');
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([0x66, 0x74, 0x79, 0x70]));
   });
 
   it('caches a remote output before serving a browser request', async () => {
@@ -70,5 +80,14 @@ describe('video output proxy API', () => {
     const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0'), params);
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('video/mp4');
+  });
+
+  it('does not recreate an inventory video that an operator permanently deleted', async () => {
+    mockIsVideoOutputIntentionallyDeleted.mockReturnValue(true);
+    const response = await GET(new NextRequest('http://localhost/api/workspace/accounts/account-1/video-tasks/video-task-1/outputs/0'), params);
+    expect(response.status).toBe(410);
+    expect(await response.json()).toEqual({ success: false, error: 'output_deleted' });
+    expect(mockGetStoredVideoOutputFileInfo).not.toHaveBeenCalled();
+    expect(mockCacheVideoTaskOutputLocally).not.toHaveBeenCalled();
   });
 });

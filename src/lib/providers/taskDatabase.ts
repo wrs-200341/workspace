@@ -42,6 +42,24 @@ function openDatabase(file: string): DatabaseSync {
     CREATE INDEX IF NOT EXISTS task_date_mode ON provider_tasks(business_date, mode);
     CREATE INDEX IF NOT EXISTS task_status_mode ON provider_tasks(status, mode);
     CREATE INDEX IF NOT EXISTS task_provider_id ON provider_tasks(provider, provider_task_id);
+    CREATE INDEX IF NOT EXISTS task_inventory_saved_date ON provider_tasks(
+      strftime('%Y-%m-%d', json_extract(summary, '$.inventorySavedAt'), '+8 hours')
+    ) WHERE json_extract(summary, '$.inventorySavedAt') IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS task_status_output_count ON provider_tasks(
+      status,
+      CAST(COALESCE(json_extract(summary, '$.outputCount'), 0) AS INTEGER)
+    );
+    CREATE INDEX IF NOT EXISTS task_daily_quota ON provider_tasks(
+      status,
+      mode,
+      strftime(
+        '%Y-%m-%d',
+        COALESCE(NULLIF(json_extract(summary, '$.inventorySavedAt'), ''), updated_at),
+        '+8 hours'
+      ),
+      COALESCE(NULLIF(json_extract(summary, '$.metadata.ownerId'), ''), account_id),
+      COALESCE(NULLIF(json_extract(summary, '$.metadata.modelId'), ''), json_extract(summary, '$.model'))
+    );
     CREATE TABLE IF NOT EXISTS provider_task_details (
       task_id TEXT PRIMARY KEY REFERENCES provider_tasks(id) ON DELETE CASCADE,
       content TEXT NOT NULL
@@ -52,7 +70,42 @@ function openDatabase(file: string): DatabaseSync {
       pid INTEGER NOT NULL,
       expires_at INTEGER NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS provider_generation_events (
+      event_key TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      account_id TEXT NOT NULL,
+      mode TEXT NOT NULL CHECK(mode IN ('image', 'video')),
+      provider TEXT NOT NULL,
+      event_type TEXT NOT NULL CHECK(event_type IN ('call', 'success', 'restore', 'inventory')),
+      event_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS provider_generation_event_date
+      ON provider_generation_events(event_at, provider, mode, event_type);
   `);
+  if (!database.prepare("SELECT value FROM task_store_meta WHERE key='provider_generation_events_backfill_v1'").get()) {
+    database.exec('BEGIN IMMEDIATE');
+    try {
+      database.exec(`
+        INSERT OR IGNORE INTO provider_generation_events(event_key,task_id,account_id,mode,provider,event_type,event_at)
+          SELECT 'call:' || id,id,account_id,mode,provider,'call',created_at
+          FROM provider_tasks WHERE mode IN ('image','video');
+        INSERT OR IGNORE INTO provider_generation_events(event_key,task_id,account_id,mode,provider,event_type,event_at)
+          SELECT 'success:' || id,id,account_id,mode,provider,'success',
+            COALESCE(NULLIF(json_extract(summary,'$.metadata.schedulerFinishedAt'),''),updated_at)
+          FROM provider_tasks WHERE mode IN ('image','video') AND status='completed';
+        INSERT OR IGNORE INTO provider_generation_events(event_key,task_id,account_id,mode,provider,event_type,event_at)
+          SELECT 'inventory:' || id,id,account_id,mode,provider,'inventory',json_extract(summary,'$.inventorySavedAt')
+          FROM provider_tasks
+          WHERE mode IN ('image','video') AND json_extract(summary,'$.inventorySavedAt') IS NOT NULL;
+        INSERT INTO task_store_meta(key,value) VALUES ('provider_generation_events_backfill_v1',datetime('now'))
+          ON CONFLICT(key) DO UPDATE SET value=excluded.value;
+      `);
+      database.exec('COMMIT');
+    } catch (error) {
+      database.exec('ROLLBACK');
+      throw error;
+    }
+  }
   return database;
 }
 

@@ -43,7 +43,7 @@ const accounts: WorkspaceAccount[] = operators.flatMap((operator, operatorIndex)
   },
   {
     id: `workspace-account-${operatorIndex + 1}-b`, ownerId: operator.id, ownerName: operator.name,
-    name: `${operator.name} · 混剪账号`, category: 'remix', strategy: '复用已验证素材，快速测试不同开场和转化结构。',
+    name: `${operator.name} · 混发视频`, category: 'remix', strategy: '复用已验证素材，快速测试不同开场和转化结构。',
     promptCount: 0, fileCount: 0, videoCount: 0, publishedCount: 0,
     updatedAt: '2026-09-01 18:40', planStatus: operatorIndex % 2 === 0 ? 'planned' : 'draft',
   },

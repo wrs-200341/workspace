@@ -13,9 +13,14 @@ import {
   getProviderTask,
   listProviderTasks,
   listProviderTaskSummaries,
+  findNextUnreviewedVideoTask,
   migrateProviderTaskStore,
   legacyProviderTasksPath,
   getProviderTaskStoreRevision,
+  getProviderTaskCounterAggregates,
+  getProviderTaskStatsAggregate,
+  listInventorySavedVideoTaskSummariesSince,
+  countCompletedProviderTasksForDailyQuota,
   acquireProviderWorkerLease,
   releaseProviderWorkerLease,
   claimProviderTask,
@@ -83,6 +88,76 @@ describe('indexed provider task store', () => {
 
     listed[0].outputUrls.push('https://mutated.example/out.mp4');
     expect(getProviderTask(first.id)?.outputUrls).toEqual([]);
+  });
+
+  it('finds the next unreviewed video in queue order and wraps within the account scope', () => {
+    seed({ id: 'newest', accountId: 'account-1', status: 'completed', createdAt: '2026-09-14T04:00:00.000Z', outputUrls: ['https://cdn.example/newest.mp4'] });
+    seed({ id: 'current', accountId: 'account-1', status: 'completed', createdAt: '2026-09-14T03:00:00.000Z', outputUrls: ['https://cdn.example/current.mp4'] });
+    seed({ id: 'next-cross-account', accountId: 'account-2', status: 'completed', createdAt: '2026-09-14T02:00:00.000Z', outputUrls: ['https://cdn.example/next.mp4'] });
+    seed({ id: 'saved', accountId: 'account-2', status: 'completed', createdAt: '2026-09-14T01:00:00.000Z', outputUrls: ['https://cdn.example/saved.mp4'], inventorySavedAt: '2026-09-14T05:00:00.000Z' });
+    seed({ id: 'failed', accountId: 'account-2', status: 'failed', createdAt: '2026-09-14T00:30:00.000Z', outputUrls: ['https://cdn.example/failed.mp4'] });
+    seed({ id: 'other-owner', accountId: 'account-3', status: 'completed', createdAt: '2026-09-14T02:30:00.000Z', outputUrls: ['https://cdn.example/other.mp4'] });
+
+    expect(findNextUnreviewedVideoTask(['account-1', 'account-2'], { id: 'current', createdAt: '2026-09-14T03:00:00.000Z' })?.id).toBe('next-cross-account');
+    expect(findNextUnreviewedVideoTask(['account-1', 'account-2'], { id: 'next-cross-account', createdAt: '2026-09-14T02:00:00.000Z' })?.id).toBe('newest');
+    expect(findNextUnreviewedVideoTask([], { id: 'current', createdAt: '2026-09-14T03:00:00.000Z' })).toBeNull();
+  });
+
+  it('aggregates counters and daily quota inside SQLite without hydrating task details', () => {
+    seed({
+      id: 'saved-today',
+      accountId: 'account-a',
+      status: 'completed',
+      createdAt: '2026-09-12T04:00:00.000Z',
+      inventorySavedAt: '2026-09-14T04:00:00.000Z',
+      outputUrls: ['https://cdn.example/saved.mp4'],
+      metadata: { ownerId: 'owner-a', modelId: 'minimax-h3-max' },
+      model: 'minimax-h3-max',
+    });
+    seed({
+      id: 'unsaved-today',
+      accountId: 'account-a',
+      status: 'completed',
+      createdAt: '2026-09-14T04:00:00.000Z',
+      outputUrls: ['https://cdn.example/unsaved.mp4'],
+      metadata: { ownerId: 'owner-a', modelId: 'minimax-h3-max' },
+      model: 'minimax-h3-max',
+    });
+    seed({ id: 'running', accountId: 'account-a', status: 'running', createdAt: '2026-09-14T04:00:00.000Z', metadata: { ownerId: 'owner-a' } });
+    seed({ id: 'failed', accountId: 'account-b', status: 'failed', createdAt: '2026-09-13T04:00:00.000Z', metadata: { ownerId: 'owner-b' } });
+
+    expect(getProviderTaskCounterAggregates({}, '2026-09-14')).toEqual([
+      {
+        accountId: 'account-a',
+        metadataOwnerId: 'owner-a',
+        inventorySavedToday: 1,
+        completedNotInInventory: 1,
+        running: 1,
+        queued: 0,
+        failed: 0,
+      },
+      {
+        accountId: 'account-b',
+        metadataOwnerId: 'owner-b',
+        inventorySavedToday: 0,
+        completedNotInInventory: 0,
+        running: 0,
+        queued: 0,
+        failed: 1,
+      },
+    ]);
+    expect(getProviderTaskStatsAggregate('2026-09-14')).toMatchObject({
+      total: 4,
+      running: 1,
+      completed: 2,
+      failed: 1,
+      successfulOutputs: 2,
+      inventorySavedToday: 1,
+      completedNotInInventory: 1,
+      activeAccountsToday: 1,
+    });
+    expect(countCompletedProviderTasksForDailyQuota('owner-a', 'minimax-h3-max', '2026-09-14')).toBe(2);
+    expect(countCompletedProviderTasksForDailyQuota('owner-b', 'minimax-h3-max', '2026-09-14')).toBe(0);
   });
 
   it('updates a task atomically without allowing id or creation time changes', () => {
@@ -296,6 +371,46 @@ describe('indexed provider task store', () => {
     expect(summaries[0].metadata?.providerTaskAcceptedAt).toBe('2026-09-14T01:00:00Z');
     expect(listProviderTaskSummaries({ accountIds: [] })).toEqual([]);
     expect(listProviderTaskSummaries({ ids: ['second'] }).map((task) => task.id)).toEqual(['second']);
+  });
+
+  it('uses the inventory-date index to list only saved videos after an exact timestamp', () => {
+    seed({ id: 'before', status: 'completed', inventorySavedAt: '2026-09-28T01:00:00.000Z', outputUrls: ['https://cdn.example/before.mp4'] });
+    seed({ id: 'after', status: 'completed', inventorySavedAt: '2026-09-28T03:00:00.000Z', outputUrls: ['https://cdn.example/after.mp4'] });
+    seed({ id: 'tomorrow', status: 'completed', inventorySavedAt: '2026-09-29T03:00:00.000Z', outputUrls: ['https://cdn.example/tomorrow.mp4'] });
+    seed({ id: 'unsaved', status: 'completed', outputUrls: ['https://cdn.example/unsaved.mp4'] });
+    seed({ id: 'image', mode: 'image', provider: 'yuanai-image', status: 'completed', inventorySavedAt: '2026-09-28T03:00:00.000Z', outputUrls: ['https://cdn.example/image.png'] });
+
+    expect(listInventorySavedVideoTaskSummariesSince('2026-09-28T02:00:00.000Z').map((task) => task.id)).toEqual(['after', 'tomorrow']);
+    expect(listInventorySavedVideoTaskSummariesSince('not-a-date')).toEqual([]);
+  });
+
+  it('adds current pipeline context to legacy error-info snapshots without loading task details', () => {
+    const task = seed({
+      id: 'legacy-dual-model-error',
+      status: 'failed',
+      error: 'video_prompt_too_long',
+      metadata: {
+        promptMode: 'asset-template-child-prompt',
+        promptGenerationPending: false,
+        promptGenerationFailed: false,
+        promptProvider: 'pomoai-gpt-prompt',
+        promptModel: 'claude-opus-4-8',
+      },
+    });
+    closeProviderTaskStore();
+    const db = new DatabaseSync(providerTasksPath());
+    try {
+      const row = db.prepare('SELECT summary FROM provider_tasks WHERE id=?').get(task.id) as { summary: string };
+      const legacy = JSON.parse(row.summary) as Record<string, unknown>;
+      legacy.errorInfo = { code: 'video_prompt_too_long', category: 'invalid_request', title: '提示词超长', message: '', action: '请缩短提示词后重新提交。', safeToRetry: false };
+      db.prepare('UPDATE provider_tasks SET summary=? WHERE id=?').run(JSON.stringify(legacy), task.id);
+    } finally { db.close(); }
+
+    const summary = listProviderTaskSummaries({ ids: [task.id] })[0];
+    expect(summary.errorInfo?.title).toBe('snumom 视频提交前校验失败：提示词超长');
+    expect(summary.errorInfo?.message).toContain('子提示词模型 PomoAI · claude-opus-4-8 已成功生成');
+    expect(summary.errorInfo?.message).toContain('错误环节：视频模型 snumom · grok-imagine-video-1.5的提交前校验环节');
+    expect(summary.errorInfo?.action).toBe('');
   });
 
   it('updates progress without rewriting prompt details and increments revision on deletion', () => {

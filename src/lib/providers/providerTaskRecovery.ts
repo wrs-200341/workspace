@@ -6,7 +6,7 @@ import { cacheVideoTaskOutputsBeforeCompletion, localVideoOutputUrls } from '@/l
 import { cacheImageTaskOutputsBeforeCompletion, localImageOutputUrls } from '@/lib/workspace/imageInventory';
 import { workspaceOwnerIdForAccount } from '@/lib/workspace/access';
 
-const ACTIVE_PROVIDER_STATUSES = new Set<ProviderTaskStatus>(['queued', 'submitting', 'submitted', 'processing', 'running', 'paused']);
+const ACTIVE_PROVIDER_STATUSES = new Set<ProviderTaskStatus>(['queued', 'submitting', 'submitted', 'processing', 'running']);
 const DEFAULT_PROVIDER_ACTIVE_STALE_MS = 6 * 60 * 60 * 1000;
 const DEFAULT_RECOVERY_INTERVAL_MS = 15_000;
 const DEFAULT_RECOVERY_BATCH_SIZE = 12;
@@ -151,7 +151,11 @@ async function applyProviderStatus(
   const latest = getProviderTask(task.id);
   if (!latest || (latest.mode !== 'video' && latest.mode !== 'image') || latest.providerTaskId !== task.providerTaskId || latest.status === 'cancelled' || latest.status === 'paused') return latest;
   const now = new Date().toISOString();
-  const normalizedStatus = status.status === 'unknown' ? latest.status : statusForProvider(status.status);
+  const providerStatus = status.status === 'unknown' ? latest.status : statusForProvider(status.status);
+  // `paused` from an upstream status endpoint means the supplier has
+  // temporarily paused/queued the accepted job. It is not the operator's
+  // local pause action, so keep polling it as an active job.
+  const normalizedStatus = providerStatus === 'paused' ? 'running' : providerStatus;
   const providerTaskId = status.providerTaskId ?? latest.providerTaskId;
   const baseMetadata = {
     ...(latest.metadata ?? {}),
@@ -274,7 +278,7 @@ async function applyProviderStatus(
 
 export function syncMediaProviderTask(taskOrId: ProviderTask | string, options: ProviderTaskSyncOptions = {}): Promise<ProviderTask | null> {
   const initial = typeof taskOrId === 'string' ? getProviderTask(taskOrId) : taskOrId;
-  if (!initial || (initial.mode !== 'video' && initial.mode !== 'image') || !initial.providerTaskId || !isProviderLiveEnabled(initial.provider)) return Promise.resolve(initial ?? null);
+  if (!initial || (initial.mode !== 'video' && initial.mode !== 'image') || !initial.providerTaskId || ['cancelled', 'paused'].includes(initial.status) || !isProviderLiveEnabled(initial.provider)) return Promise.resolve(initial ?? null);
   const key = syncKey(initial);
   const existing = syncInFlight.get(key);
   if (existing) return existing;

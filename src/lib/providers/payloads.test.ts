@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildApiawSeedanceVideoPayload, buildSeedreamImagePayload, seedreamImageSize, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditFormData, aicloudImageSize, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildApiawSeedanceVideoPayload, buildSeedreamImagePayload, seedreamImageSize, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, normalizeAudioPlaceholders, providerKind, buildPomoAIImagePayload, buildYuanAIImageEditFormData, buildYuanAIImagePayload, yuanAIImageSize, buildGPTPromptPayload, buildGPTResponsesPayload, buildOAIRegboxPayload, buildOAIRegboxFirstFramePayload, buildOAIRegboxMultipartFormData, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditFormData, aicloudImageSize, buildGeminiNativeImagePayload, buildOriginNanoChatPayload } from './payloads';
 
 describe('provider payload contracts', () => {
   it('builds the apiaw Seedance 2.0 Mini multimodal video payload', () => {
@@ -238,6 +238,11 @@ describe('provider payload contracts', () => {
   it('builds OAIRegBox Omni JSON and multipart contracts', () => {
     expect(buildOAIRegboxPayload({ model: 'omni-fast-no-water', prompt: 'demo', duration: 10, aspectRatio: '16:9', references: [] })).toEqual({
       model: 'omni-fast-no-water', prompt: 'demo', seconds: '10', aspect_ratio: '16:9',
+    });
+    expect(buildOAIRegboxFirstFramePayload({
+      model: 'omni-fast-no-water', prompt: 'demo', duration: 10, aspectRatio: '9:16', firstImageUrl: 'https://assets.example/first.png',
+    })).toEqual({
+      model: 'omni-fast-no-water', prompt: 'demo', seconds: '10', aspect_ratio: '9:16', first_image_url: 'https://assets.example/first.png',
     });
     const form = buildOAIRegboxMultipartFormData({
       model: 'omni-fast-no-water', prompt: 'demo', duration: 10, aspectRatio: '16:9',

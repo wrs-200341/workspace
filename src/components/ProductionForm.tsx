@@ -1,6 +1,6 @@
 'use client';
 
-import { Download, Film, Image as ImageIcon, LoaderCircle, Save, Search, WandSparkles, X } from 'lucide-react';
+import { Download, FileUp, Film, Image as ImageIcon, LoaderCircle, Save, Search, WandSparkles, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { getProviderCatalog, type ProviderCatalogEntry, type ProviderId } from '@/lib/providers/config';
@@ -180,6 +180,9 @@ export function ProductionForm({ accountId, mode }: Props) {
   const [message, setMessage] = useState<string | null>(null);
   const [droppedFiles, setDroppedFiles] = useState<File[]>([]);
   const [dragging, setDragging] = useState(false);
+  const [promptFileDragging, setPromptFileDragging] = useState(false);
+  const [promptFileName, setPromptFileName] = useState('');
+  const promptFileInputRef = useRef<HTMLInputElement>(null);
   const [assetPickerOpen, setAssetPickerOpen] = useState(false);
   const [assetPickerKind, setAssetPickerKind] = useState<'image' | 'inventory-video' | 'audio'>('image');
   const [assetPickerTab, setAssetPickerTab] = useState<'material' | 'product'>('material');
@@ -507,7 +510,7 @@ export function ProductionForm({ accountId, mode }: Props) {
         restoredTaskRef.current = restoreTaskId;
         // A restored queue item becomes a new draft; remove the original task
         // so it is not left in the queue as a duplicate.
-        void fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${endpoint}/${encodeURIComponent(restoreTaskId)}`, { method: 'DELETE' }).catch(() => undefined);
+        void fetch(`/api/workspace/accounts/${encodeURIComponent(accountId)}/${endpoint}/${encodeURIComponent(restoreTaskId)}?reason=restore-config`, { method: 'DELETE' }).catch(() => undefined);
         setMessage('已恢复任务配置，可修改后重新提交');
       })
       .catch(() => undefined);
@@ -743,6 +746,52 @@ export function ProductionForm({ accountId, mode }: Props) {
     } finally { setLoading(false); }
   }
 
+  async function importPromptTextFile(file: File | undefined) {
+    if (!file) return;
+    if (!/\.txt$/i.test(file.name)) {
+      setMessage('请选择 TXT 文本文件');
+      return;
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setMessage('TXT 文件不能超过 2 MB');
+      return;
+    }
+
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let text: string;
+      if (bytes[0] === 0xff && bytes[1] === 0xfe) {
+        text = new TextDecoder('utf-16le').decode(bytes.subarray(2));
+      } else if (bytes[0] === 0xfe && bytes[1] === 0xff) {
+        const swapped = bytes.subarray(2).slice();
+        for (let index = 0; index + 1 < swapped.length; index += 2) {
+          [swapped[index], swapped[index + 1]] = [swapped[index + 1], swapped[index]];
+        }
+        text = new TextDecoder('utf-16le').decode(swapped);
+      } else {
+        try {
+          text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        } catch {
+          text = new TextDecoder('gb18030').decode(bytes);
+        }
+      }
+      text = text.replace(/^\uFEFF/, '');
+      if (!text.trim()) {
+        setMessage('TXT 文件内容为空');
+        return;
+      }
+
+      setPrompt(text);
+      setOriginalPrompt(text);
+      setChildPrompt('');
+      setFinalPrompt('');
+      setPromptFileName(file.name);
+      setMessage(`已导入提示词：${file.name}`);
+    } catch {
+      setMessage('TXT 文件读取失败');
+    }
+  }
+
   const promptTemplateTools = mode === 'image' ? <div className="prompt-template-toolbar"><label>选择提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">不使用模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}{item.accountName ? ` · ${item.accountName}` : ''}</option>)}</select></label><label>模板名称<input className="select" value={promptTemplateName} onChange={(event) => setPromptTemplateName(event.target.value)} placeholder="例如：白底商品图" /></label><button type="button" className="ghost-button" onClick={() => void savePromptTemplate()} disabled={savingPromptTemplate || !prompt.trim()}>{savingPromptTemplate ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />} 保存提示词</button></div> : null;
    return <form className="production-form" data-reference-images={maxImages} data-reference-videos={maxVideos} data-reference-audios={maxAudios} onSubmit={submit}>
     {mode !== 'prompt' && <div className="task-naming-row form-row" role="group" aria-label="任务命名">
@@ -757,7 +806,21 @@ export function ProductionForm({ accountId, mode }: Props) {
     {mode === 'image' && <label className="form-row">生成数量<select className="select" value={count} onChange={(event) => setCount(Number(event.target.value))}>{[1, 2, 3, 4].map((value) => <option value={value} key={value}>{value} 条</option>)}</select></label>}
     {mode !== 'prompt' && <div className="routing-section"><div className="production-fieldset-title">模型与生产参数</div><div className="routing-label">{mode === 'video' ? '视频模型' : '图片模型'}</div><div className="routing-cards">{(mode === 'video' ? VIDEO_ROUTING_CARDS : IMAGE_ROUTING_CARDS).map((card) => { const active = mode === 'video' ? (card.id === 'grok' ? card.providers.includes(provider) : card.id === videoModelId) : card.id === selectedImageModel; const enabled = card.providers.length > 0 && card.providers.some((item) => providers.some((providerItem) => providerItem.id === item)); return <button key={card.id} type="button" className={`routing-card ${active ? 'active' : ''}`} disabled={!enabled} onClick={() => { if (mode === 'video') selectVideoModel(card.id === 'grok' ? 'grok-imagine-video-1.5（按次）' : card.id); else { const next = providers.find((item) => card.providers.includes(item.id)); if (next) setProvider(next.id); } }}><strong>{card.label}</strong><span>{enabled ? `${card.providers.length} 个供应商` : '待接入'}</span></button>; })}</div><div className="routing-provider-row">{mode === 'video' && <label>模型<select className="select" value={videoModelId} onChange={(event) => selectVideoModel(event.target.value)}>{videoModelsForProvider(provider, videoModelId).map((item) => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>}<label>供应商<select className="select" value={provider} onChange={(event) => setProvider(event.target.value as ProviderId)}>{(mode === 'video' ? providerOptionsForVideoModel(providers, videoModelId) : providers.filter((item) => IMAGE_ROUTING_CARDS.find((card) => card.id === selectedImageModel)?.providers.includes(item.id))).map((item) => <option value={item.id} key={item.id}>{item.name}{mode === 'video' ? ` · ${item.supports.referenceImages} 图` : ''}</option>)}</select></label></div><div className="production-parameter-row"> <label>比例<select className="select" value={aspectRatio} onChange={(event) => setAspectRatio(event.target.value)}>{ratios.map((ratio) => <option key={ratio}>{ratio}</option>)}</select></label><label>{mode === 'video' ? '时长' : '分辨率'}<select className="select" value={mode === 'video' ? duration : resolution} onChange={(event) => mode === 'video' ? setDuration(event.target.value) : setResolution(event.target.value)}>{mode === 'video' ? durationOptions.map((value) => <option value={value} key={value}>{value} 秒</option>) : resolutionOptions.map((value) => <option value={value} key={value}>{String(value).toUpperCase()}</option>)}</select></label>{mode === 'video' && <label>分辨率<select className="select" value={resolution} onChange={(event) => setResolution(event.target.value)}>{resolutionOptions.map((value) => <option value={value} key={value}>{String(value).toUpperCase()}</option>)}</select></label>}{mode === 'video' && <label>生成数量<select className="select" value={count} onChange={(event) => setCount(Number(event.target.value))}>{[1, 2, 3, 4].map((value) => <option value={value} key={value}>{value} 条</option>)}</select></label>}</div></div>}
     {mode === 'video' && <div className="prompt-mode-bar" role="group" aria-label="提示词模式"><button type="button" className={`prompt-mode-button ${promptMode === 'manual' ? 'active' : ''}`} onClick={() => { setPromptMode('manual'); setChildPrompt(''); setFinalPrompt(''); }}>手写提示词</button><button type="button" className={`prompt-mode-button ${promptMode === 'asset-template-child-prompt' ? 'active' : ''}`} onClick={() => { setPromptMode('asset-template-child-prompt'); setChildPrompt(''); setFinalPrompt(''); }}>自动生成子提示词</button></div>}
-     <label>{mode === 'prompt' ? '商品 / 提示词上下文' : mode === 'image' ? '图片生成提示词' : promptMode === 'manual' ? '视频提示词' : '商品 / 场景上下文'}<textarea className="select production-prompt-textarea" rows={8} value={prompt} onChange={(event) => { setPrompt(event.target.value); if (!originalPrompt) setOriginalPrompt(event.target.value); }} placeholder={mode === 'prompt' ? '输入商品标题、卖点和目标人群，生成子提示词' : promptMode === 'manual' ? '直接写入可提交给视频模型的完整提示词' : '输入商品卖点、场景和目标人群，自动生成视频子提示词'} /></label>
+     {mode === 'video' && promptMode === 'manual' ? <div
+       className={`prompt-text-import ${promptFileDragging ? 'dragging' : ''}`}
+       onDragEnter={(event) => { event.preventDefault(); event.stopPropagation(); if (event.dataTransfer.types.includes('Files')) setPromptFileDragging(true); }}
+       onDragOver={(event) => { event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'copy'; setPromptFileDragging(true); }}
+       onDragLeave={(event) => { event.preventDefault(); event.stopPropagation(); if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setPromptFileDragging(false); }}
+       onDrop={(event) => { event.preventDefault(); event.stopPropagation(); setPromptFileDragging(false); void importPromptTextFile(event.dataTransfer.files?.[0]); }}
+     >
+       <div className="prompt-text-import-head">
+         <label htmlFor="video-manual-prompt">视频提示词</label>
+         <button type="button" className="ghost-button" onClick={() => promptFileInputRef.current?.click()}><FileUp size={14} /> 选择 TXT</button>
+         <input ref={promptFileInputRef} className="prompt-text-file-input" type="file" accept=".txt,text/plain" onChange={(event) => { void importPromptTextFile(event.target.files?.[0]); event.currentTarget.value = ''; }} />
+       </div>
+       <textarea id="video-manual-prompt" className="select production-prompt-textarea" rows={8} value={prompt} onChange={(event) => { setPrompt(event.target.value); if (!originalPrompt) setOriginalPrompt(event.target.value); }} placeholder="直接写入可提交给视频模型的完整提示词，或拖入 TXT 文件" />
+       <small className="field-help">{promptFileDragging ? '松开即可导入 TXT 内容' : promptFileName ? `已导入：${promptFileName}，可继续编辑` : '可将 TXT 文件直接拖入提示词框'}</small>
+     </div> : <label>{mode === 'prompt' ? '商品 / 提示词上下文' : mode === 'image' ? '图片生成提示词' : '商品 / 场景上下文'}<textarea className="select production-prompt-textarea" rows={8} value={prompt} onChange={(event) => { setPrompt(event.target.value); if (!originalPrompt) setOriginalPrompt(event.target.value); }} placeholder={mode === 'prompt' ? '输入商品标题、卖点和目标人群，生成子提示词' : mode === 'image' ? '输入图片生成提示词' : '输入商品卖点、场景和目标人群，自动生成视频子提示词'} /></label>}
      {promptTemplateTools}
     {mode === 'video' && <ProductSummaryUploader accountId={accountId} referenceName={selectedReferenceImageName} />}
     {mode === 'video' && promptMode === 'manual' && <div className="form-row"><label>账号资产提示词模板<select className="select" value={templateId} onChange={(event) => selectTemplate(event.target.value)}><option value="">不使用模板</option>{promptTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}{item.accountName ? ` · ${item.accountName}` : ''}</option>)}</select><small className="field-help">仅显示当前工作区账号的提示词模板，载入后仍可继续手写修改。</small></label><label>模板名称<input className="select" value={promptTemplateName} onChange={(event) => setPromptTemplateName(event.target.value)} placeholder="例如：卡点视频" /><small className="field-help">手写好提示词后可直接存为当前账号的视频模板。</small></label><button type="button" className="ghost-button" onClick={() => void savePromptTemplate()} disabled={savingPromptTemplate || !prompt.trim()}>{savingPromptTemplate ? <LoaderCircle size={14} className="spin" /> : <Save size={14} />} 保存提示词</button></div>}

@@ -120,7 +120,7 @@ describe('persisted video execution', () => {
     expect(state.submit.mock.calls[0][0].referenceImages).toEqual(['https://assets.example/reference.png']);
   });
 
-  it('skips every supplier that already failed when resuming an asynchronous Grok failure', async () => {
+  it('retries only the selected Grok supplier after an asynchronous failure', async () => {
     seed({
       provider: 'mgrouter-grok-video',
       metadata: {
@@ -137,8 +137,8 @@ describe('persisted video execution', () => {
 
     expect(state.submit).toHaveBeenCalledWith(expect.objectContaining({ provider: 'mgrouter-grok-video' }), expect.objectContaining({
       preventAmbiguousResubmission: true,
-      skipProviders: ['grok-video', 'mgrouter-grok-video'],
     }));
+    expect(state.submit.mock.calls[0][1]).not.toHaveProperty('skipProviders');
   });
 
   it('does not mark dola image preparation failures as an uncertain paid submission', async () => {

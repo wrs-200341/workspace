@@ -50,6 +50,23 @@ describe('worker media status recovery', () => {
     expect(await syncMediaProviderTask(task.id, { force: true })).toMatchObject({ status: 'running', providerTaskId: task.providerTaskId });
   });
 
+  it('keeps polling when an accepted supplier temporarily reports paused', async () => {
+    const task = seed('video');
+    mocks.sync.mockResolvedValue({ status: 'paused', progress: 64, outputUrls: [], outputBase64: [], response: {} });
+    expect(await syncMediaProviderTask(task.id, { force: true })).toMatchObject({
+      status: 'running',
+      providerTaskId: task.providerTaskId,
+      metadata: { schedulerState: 'provider-active', lastProviderStatus: 'paused' },
+    });
+  });
+
+  it('does not poll an operator-paused task until it is resumed', async () => {
+    const task = seed('video');
+    mocks.tasks.set(task.id, { ...task, status: 'paused', metadata: { ...task.metadata, schedulerState: 'paused', pausedByUserAt: '2026-09-14T01:02:00Z' } });
+    expect(await syncMediaProviderTask(task.id, { force: true })).toMatchObject({ status: 'paused' });
+    expect(mocks.sync).not.toHaveBeenCalled();
+  });
+
   it('records explicit supplier failure proof without losing the accepted attempt ID', async () => {
     const task = seed('image');
     mocks.sync.mockResolvedValue({ status: 'failed', progress: 100, outputUrls: [], outputBase64: [], error: 'provider_upstream_failed', response: {} });

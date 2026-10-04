@@ -7,6 +7,8 @@ import { listStoredAccounts } from '@/lib/workspace/accountStore';
 import { withLiveAccountStatsList } from '@/lib/workspace/accountStats';
 import { getDashboardSnapshot } from '@/lib/workspace/dashboardStats';
 import { getWorkspaceOperatorForUser } from '@/lib/workspace/data';
+import { listTaskAssignments } from '@/lib/workspace/taskAssignments';
+import { workspaceOwnerIdForUser } from '@/lib/workspace/access';
 
 export function DownstreamPage() {
   const { totals, videos } = getDashboardSnapshot();
@@ -42,7 +44,7 @@ export function AccountsPage() {
       <Metric label="今日活跃" value={String(snapshot.production.activeAccountsToday)} hint="今日创建过生产任务的账号" />
       <Metric label="待关注" value={String(attentionAccounts)} hint="运营计划尚未填写" />
     </div>
-    <section className="panel table-panel"><div className="panel-header"><div><h2 className="panel-title">账号表现</h2><div className="panel-meta">发布、播放和交易指标仅来自已授权的下游数据源</div></div></div><div className="table-scroll"><table><thead><tr><th>账号</th><th>负责人 / 类目</th><th>状态</th><th>发布</th><th>播放</th><th>成交额</th><th>转化</th></tr></thead><tbody>{accounts.length ? accounts.map((account) => <tr key={account.id}><td><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><div className="notice-icon"><Users size={14} /></div><strong>{account.name}</strong></div></td><td>{account.ownerName} · {account.category === 'featured' ? '精选账号' : '混剪账号'}</td><td><span className={`status ${account.status === 'attention' ? 'attention' : ''}`}><span className="dot" />{account.status === 'healthy' ? '计划已填写' : '待填写计划'}</span></td><td>{account.published}</td><td>{formatCompact(account.views)}</td><td><strong>¥{formatCompact(account.gmv)}</strong></td><td>{account.conversion.toFixed(1)}%</td></tr>) : <tr><td colSpan={7}><div className="empty-state">暂无账号数据</div></td></tr>}</tbody></table></div></section>
+    <section className="panel table-panel"><div className="panel-header"><div><h2 className="panel-title">账号表现</h2><div className="panel-meta">发布、播放和交易指标仅来自已授权的下游数据源</div></div></div><div className="table-scroll"><table><thead><tr><th>账号</th><th>负责人 / 类目</th><th>状态</th><th>发布</th><th>播放</th><th>成交额</th><th>转化</th></tr></thead><tbody>{accounts.length ? accounts.map((account) => <tr key={account.id}><td><div style={{ display: 'flex', alignItems: 'center', gap: 10 }}><div className="notice-icon"><Users size={14} /></div><strong>{account.name}</strong></div></td><td>{account.ownerName} · {account.category === 'featured' ? '精选账号' : '混发视频'}</td><td><span className={`status ${account.status === 'attention' ? 'attention' : ''}`}><span className="dot" />{account.status === 'healthy' ? '计划已填写' : '待填写计划'}</span></td><td>{account.published}</td><td>{formatCompact(account.views)}</td><td><strong>¥{formatCompact(account.gmv)}</strong></td><td>{account.conversion.toFixed(1)}%</td></tr>) : <tr><td colSpan={7}><div className="empty-state">暂无账号数据</div></td></tr>}</tbody></table></div></section>
   </>;
 }
 
@@ -52,7 +54,7 @@ export function WorkspacePage({ user }: { user: AuthUser }) {
   // Keep the workspace route itself cheap. Task counters are derived from the
   // large provider task store, so the client loads them after the page shell
   // is interactive instead of blocking the RSC navigation request.
-  return <WorkspaceClient user={user} initialAccounts={withLiveAccountStatsList(storedAccounts)} initialTaskCounters={{}} />;
+  return <WorkspaceClient user={user} initialAccounts={withLiveAccountStatsList(storedAccounts)} initialTaskCounters={{}} initialTaskAssignments={listTaskAssignments(user.role === 'admin' ? undefined : workspaceOwnerIdForUser(user))} />;
 }
 
 function Metric({ label, value, hint }: { label: string; value: string; hint: string }) {

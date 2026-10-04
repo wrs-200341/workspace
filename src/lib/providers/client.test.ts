@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import sharp from 'sharp';
 import { POMOAI_PROMPT_FALLBACK_MODELS } from './config';
-import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateSeedreamImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateGeminiPrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, submitVideoWithFallback, syncProviderTask, downloadProviderVideoContent, generateMGRouterImage, generateResponsesPrompt, generatePromptWithFallback } from './client';
+import { normalizeGeminiResponse, normalizeGPTResponsesResponse, normalizeGrokVideoPrompt, normalizeProviderResponse, providerEndpoint, providerErrorInfo, providerResponseSnapshot, providerSubmissionTimeoutMs, sanitizeProviderError, validateReferenceUrls, generatePomoAIImage, generateSeedreamImage, generateYuanAIImage, generateGPTPrompt, generateBigSnakePrompt, generateGeminiPrompt, generateOpenAICompatibleImage, generateGeminiNativeImage, generateOriginNanoImage, submitVideo, submitVideoWithFallback, syncProviderTask, downloadProviderVideoContent, generateMGRouterImage, generateResponsesPrompt, generatePromptWithFallback } from './client';
 
 describe('provider client helpers', () => {
   it('normalizes Gemini candidate text', () => {
@@ -355,11 +355,13 @@ describe('provider client helpers', () => {
 
   it('labels accepted successful response snapshots without reporting provider request failure', () => {
     const body = { created: 1, data: [{ b64_json: 'YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo=' }] };
-    expect(providerResponseSnapshot(undefined, { body, method: 'POST' })).toMatchObject({
+    const snapshot = providerResponseSnapshot(undefined, { body, method: 'POST' });
+    expect(snapshot).toMatchObject({
       code: 'provider_response_received',
       method: 'POST',
-      body,
+      body: { created: 1, data: [{ b64_json: { omitted: 'media_payload', characters: body.data[0].b64_json.length } }] },
     });
+    expect(JSON.stringify(snapshot)).not.toContain(body.data[0].b64_json);
   });
 
   it('keeps explicit failed response snapshots marked as provider request failures', () => {
@@ -370,12 +372,33 @@ describe('provider client helpers', () => {
     });
   });
 
-  it('keeps oversized successful response snapshots recoverable while labeling them as received', () => {
+  it('summarizes oversized media in successful response snapshots without retaining its Base64', () => {
     const body = { created: 1, data: [{ b64_json: 'a'.repeat(1024 * 1024 + 64) }] };
     const snapshot = providerResponseSnapshot(undefined, { body, method: 'POST' });
-    expect(snapshot).toMatchObject({ code: 'provider_response_received', method: 'POST', truncated: true });
-    expect(typeof snapshot.rawBody).toBe('string');
-    expect(String(snapshot.rawBody)).toContain('provider_response_received');
+    expect(snapshot).toMatchObject({
+      code: 'provider_response_received',
+      method: 'POST',
+      body: { data: [{ b64_json: { omitted: 'media_payload', characters: body.data[0].b64_json.length, sha256: expect.any(String) } }] },
+    });
+    expect(snapshot).not.toHaveProperty('truncated');
+    expect(Buffer.byteLength(JSON.stringify(snapshot), 'utf8')).toBeLessThan(2048);
+  });
+
+  it('summarizes media payloads nested in arrays and inline-data envelopes', () => {
+    const encoded = 'YWJjZGVm';
+    const snapshot = providerResponseSnapshot(undefined, {
+      body: {
+        outputBase64: [encoded],
+        candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: encoded } }] } }],
+      },
+    });
+    expect(snapshot).toMatchObject({
+      body: {
+        outputBase64: [{ omitted: 'media_payload', characters: encoded.length }],
+        candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: { omitted: 'media_payload', characters: encoded.length } } }] } }],
+      },
+    });
+    expect(JSON.stringify(snapshot)).not.toContain(encoded);
   });
 
   it('retains a successful HTTP response body when the supplier returns invalid JSON', async () => {
@@ -557,8 +580,18 @@ describe('provider client helpers', () => {
     expect(normalizeGPTResponsesResponse({ status: 'incomplete', incomplete_details: {} })).toEqual({ text: '', incompleteReason: 'incomplete' });
   });
 
-  it('requires binary references for OAIRegBox multipart requests', async () => {
-    await expect(submitVideo({ provider: 'oairegbox-omni', model: 'omni-fast-no-water', prompt: 'demo', duration: 10, aspectRatio: '16:9', resolution: '720p', referenceImages: ['https://assets.example/a.png'] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', OAIREGBOX_API_KEY: 'test-key' }, fetch: vi.fn() as typeof fetch })).rejects.toThrow('reference_files_required');
+  it('submits one OAIRegBox reference URL as an explicit first frame', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.body).not.toBeInstanceOf(FormData);
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: 'omni-fast-no-water', prompt: 'demo', seconds: '10', aspect_ratio: '9:16', first_image_url: 'https://assets.example/a.png',
+      });
+      return Response.json({ id: 'omni-first-frame-task', status: 'queued' });
+    });
+    await expect(submitVideo({
+      provider: 'oairegbox-omni', model: 'omni-fast-no-water', prompt: 'demo', duration: 10,
+      aspectRatio: '9:16', resolution: '720p', referenceImages: ['https://assets.example/a.png'],
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', OAIREGBOX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).resolves.toMatchObject({ mode: 'live' });
   });
 
   it('submits OAIRegBox JSON when no references are provided', async () => {
@@ -568,6 +601,34 @@ describe('provider client helpers', () => {
     });
     const result = await submitVideo({ provider: 'oairegbox-omni', model: 'omni-fast-no-water', prompt: 'demo', duration: 10, aspectRatio: '16:9', resolution: '720p' }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', OAIREGBOX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result.mode).toBe('live');
+  });
+
+  it('uses a longer timeout for OAIRegBox video acceptance', () => {
+    expect(providerSubmissionTimeoutMs('oairegbox-omni')).toBe(120_000);
+    expect(providerSubmissionTimeoutMs('grok-video')).toBe(25_000);
+  });
+
+  it.each([
+    ['JSON', undefined],
+    ['multipart', [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }]],
+  ] as const)('retains OAIRegBox %s submission timeout diagnostics', async (_kind, referenceFiles) => {
+    const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+    const fetchMock = vi.fn(async () => { throw timeout; });
+    let caught: unknown;
+    try {
+      await submitVideo({
+        provider: 'oairegbox-omni', model: 'omni-fast-no-water', prompt: 'demo', duration: 10,
+        aspectRatio: '16:9', resolution: '720p', ...(referenceFiles ? { referenceFiles: [...referenceFiles] } : {}),
+      }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', OAIREGBOX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    } catch (error) { caught = error; }
+    expect(providerResponseSnapshot(caught)).toMatchObject({
+      code: 'provider_408',
+      endpoint: 'https://newapi-2.oairegbox.cc/v1/videos',
+      method: 'POST',
+      stage: 'video_submission',
+      timeoutMs: 120_000,
+      reason: 'TimeoutError',
+    });
   });
 
   it('submits MiniMax H3 requests through the secure-skill gateway', async () => {
@@ -615,15 +676,30 @@ describe('provider client helpers', () => {
     await expect(submitVideo({ provider: 'pro666-video', model: 'sd2-933-mini', prompt: 'demo', duration: 12, aspectRatio: '9:16', resolution: '720p', referenceVideos: ['https://assets.example/a.mp4'] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', PRO666_VIDEO_API_KEY: 'test-key' }, fetch: vi.fn() as typeof fetch })).rejects.toThrow('pro666_reference_video_unsupported');
   });
 
-  it('submits OAIRegBox multipart files without overriding the multipart boundary', async () => {
+  it('submits one OAIRegBox local file as a first-frame data URI', async () => {
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(init?.body).not.toBeInstanceOf(FormData);
+      expect(JSON.parse(String(init?.body))).toEqual({
+        model: 'omni-fast-no-water', prompt: 'demo', seconds: '10', aspect_ratio: '16:9', first_image_url: 'data:image/png;base64,iVBORw==',
+      });
+      return Response.json({ id: 'omni-first-frame-task', status: 'queued' });
+    });
+    const result = await submitVideo({ provider: 'oairegbox-omni', model: 'omni-fast-no-water', prompt: 'demo', duration: 10, aspectRatio: '16:9', resolution: '720p', referenceFiles: [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', OAIREGBOX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    expect(result.mode).toBe('live');
+  });
+
+  it('keeps multiple OAIRegBox images in multipart reference mode', async () => {
     const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(init?.body).toBeInstanceOf(FormData);
-      expect((init?.body as FormData).get('input_reference[]')).toBeInstanceOf(File);
+      expect((init?.body as FormData).getAll('input_reference[]')).toHaveLength(2);
       expect((init?.headers as Record<string, string>).authorization).toBe('Bearer test-key');
       expect((init?.headers as Record<string, string>)['content-type']).toBeUndefined();
       return Response.json({ id: 'omni-task', status: 'queued' });
     });
-    const result = await submitVideo({ provider: 'oairegbox-omni', model: 'omni-fast-no-water', prompt: 'demo', duration: 10, aspectRatio: '16:9', resolution: '720p', referenceFiles: [{ bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'ref.png' }] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', OAIREGBOX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
+    const result = await submitVideo({ provider: 'oairegbox-omni', model: 'omni-fast-no-water', prompt: 'demo', duration: 10, aspectRatio: '16:9', resolution: '720p', referenceFiles: [
+      { bytes: new Uint8Array([137, 80, 78, 71]), mimeType: 'image/png', fileName: 'first.png' },
+      { bytes: new Uint8Array([137, 80, 78, 72]), mimeType: 'image/png', fileName: 'second.png' },
+    ] }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', OAIREGBOX_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result.mode).toBe('live');
   });
 
@@ -664,6 +740,35 @@ describe('provider client helpers', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it('normalizes typographic punctuation before validating and submitting Grok video prompts', async () => {
+    const original = '【Reference】 scene’s movement – smooth — “stable”';
+    const normalized = '[Reference] scene\'s movement - smooth - "stable"';
+    expect(normalizeGrokVideoPrompt(original)).toBe(normalized);
+    expect(Buffer.byteLength(normalized, 'utf8')).toBeLessThan(Buffer.byteLength(original, 'utf8'));
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(JSON.parse(String(init?.body)).prompt).toBe(normalized);
+      return Response.json({ id: 'snumom-normalized-task', status: 'queued' });
+    });
+    await expect(submitVideo({
+      provider: 'grok-video', model: 'grok-imagine-video-1.5', prompt: original, duration: 6,
+      aspectRatio: '9:16', resolution: '720p',
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', GROK_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).resolves.toMatchObject({ mode: 'live' });
+  });
+
+  it('accepts a Grok prompt that fits 4096 UTF-8 bytes after punctuation normalization', async () => {
+    const prompt = `${'a'.repeat(4094)}【】`;
+    expect(Buffer.byteLength(prompt, 'utf8')).toBe(4100);
+    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      expect(Buffer.byteLength(JSON.parse(String(init?.body)).prompt, 'utf8')).toBe(4096);
+      return Response.json({ id: 'snumom-normalized-limit-task', status: 'queued' });
+    });
+    await expect(submitVideo({
+      provider: 'grok-video', model: 'grok-imagine-video-1.5', prompt, duration: 6,
+      aspectRatio: '9:16', resolution: '720p',
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', GROK_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch })).resolves.toMatchObject({ mode: 'live' });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('rejects a Snumom Grok prompt over 4096 UTF-8 bytes before fetch', async () => {
     const fetchMock = vi.fn();
     await expect(submitVideo({
@@ -689,13 +794,13 @@ describe('provider client helpers', () => {
       expect(String(_url)).toBe('https://raw.mgrouter.com/v1/videos/generations');
       expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key', 'content-type': 'application/json' });
       expect(JSON.parse(String(init?.body))).toEqual({
-        model: 'grok-imagine-video-1.5', prompt: 'product turntable', duration: 6,
+        model: 'grok-imagine-video-1.5', prompt: '[product] "turntable"', duration: 6,
         aspect_ratio: '16:9', resolution: '480p',
       });
       return Response.json({ request_id: 'mgrouter-request' });
     });
     const result = await submitVideo({
-      provider: 'mgrouter-grok-video', model: 'grok-video', prompt: 'product turntable', duration: 6,
+      provider: 'mgrouter-grok-video', model: 'grok-video', prompt: '\u3010product\u3011 \u201cturntable\u201d', duration: 6,
       aspectRatio: '16:9', resolution: '480p',
     }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', MGROUTER_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result).toMatchObject({ mode: 'live', provider: 'mgrouter-grok-video' });
@@ -713,12 +818,12 @@ describe('provider client helpers', () => {
       expect(String(url)).toBe('https://yuanai.uk/v1/videos');
       expect(init?.headers).toMatchObject({ authorization: 'Bearer test-key', 'content-type': 'application/json' });
       expect(JSON.parse(String(init?.body))).toEqual({
-        model: 'grok-imagine-video-1.5-preview', prompt: 'portrait product', seconds: '6', aspect_ratio: '9:16', resolution: '720p', input_reference: 'https://assets.example/product.jpg',
+        model: 'grok-imagine-video-1.5-preview', prompt: 'portrait-product', seconds: '6', aspect_ratio: '9:16', resolution: '720p', input_reference: 'https://assets.example/product.jpg',
       });
       return Response.json({ id: 'task_yuanai', task_id: 'task_yuanai', status: 'queued' });
     });
     const result = await submitVideo({
-      provider: 'yuanai-grok-video', model: 'grok-imagine-video-1.5-preview', prompt: 'portrait product', duration: 6,
+      provider: 'yuanai-grok-video', model: 'grok-imagine-video-1.5-preview', prompt: 'portrait\u2013product', duration: 6,
       aspectRatio: '9:16', resolution: '720p', referenceImages: ['https://assets.example/product.jpg'],
     }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_GROK_VIDEO_API_KEY: 'test-key' }, fetch: fetchMock as typeof fetch });
     expect(result).toMatchObject({ mode: 'live', provider: 'yuanai-grok-video' });
@@ -748,17 +853,15 @@ describe('provider client helpers', () => {
     });
   });
 
-  it('fails over Grok video to a configured sibling supplier after upstream failure', async () => {
+  it('never switches a Grok video request to a sibling supplier after upstream failure', async () => {
     const fetchMock = vi.fn(async (url: string | URL | Request) => {
-      if (String(url) === 'https://yuanai.uk/v1/videos') return new Response(JSON.stringify({ error: { code: 'upstream_task_failed' } }), { status: 503, headers: { 'content-type': 'application/json' } });
-      expect(String(url)).toBe('https://raw.mgrouter.com/v1/videos/generations');
-      return Response.json({ request_id: 'mgrouter-task', status: 'queued' });
+      expect(String(url)).toBe('https://yuanai.uk/v1/videos');
+      return new Response(JSON.stringify({ error: { code: 'upstream_task_failed' } }), { status: 503, headers: { 'content-type': 'application/json' } });
     });
-    const result = await submitVideoWithFallback({
+    await expect(submitVideoWithFallback({
       provider: 'yuanai-grok-video', model: 'grok-imagine-video-1.5-preview', prompt: 'demo', duration: 6, aspectRatio: '9:16', resolution: '480p',
-    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_GROK_VIDEO_API_KEY: 'yuan-key', MGROUTER_API_KEY: 'mg-key' }, fetch: fetchMock as typeof fetch });
-    expect(result).toMatchObject({ provider: 'mgrouter-grok-video', model: 'grok-imagine-video-1.5', fallbackFrom: 'yuanai-grok-video', fallbackProviders: ['mgrouter-grok-video'] });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    }, { env: { WORKSPACE_ENABLE_LIVE_PROVIDERS: 'true', YUANAI_GROK_VIDEO_API_KEY: 'yuan-key', MGROUTER_API_KEY: 'mg-key' }, fetch: fetchMock as typeof fetch })).rejects.toThrow('provider_upstream_failed');
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('submits sd-mini through the same snumom supplier using seconds and image_urls', async () => {

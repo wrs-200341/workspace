@@ -1,6 +1,6 @@
 ﻿'use client';
 
-import { BarChart3, Clapperboard, LayoutDashboard, LogOut, Menu, Settings2, Users, X } from 'lucide-react';
+import { BarChart3, Clapperboard, LayoutDashboard, LogOut, Menu, Send, Settings2, Users, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
@@ -10,13 +10,17 @@ import { useIntentPrefetch } from './intentPrefetch';
 const nav = [
   { label: '放映厅', href: '/', icon: LayoutDashboard },
   { label: '工作台', href: '/workspace', icon: Clapperboard },
+  { label: '生成统计', href: '/generation-stats', icon: BarChart3 },
+  { label: '发布统计', href: '/publishing', icon: Send },
   { label: '下游看板', href: '/downstream', icon: BarChart3 },
   { label: '账号资产', href: '/accounts', icon: Users },
 ];
 
-function permissionKeyForHref(href: string): 'dashboard' | 'workspace' | 'downstream' | 'assets' {
+function permissionKeyForHref(href: string): 'dashboard' | 'workspace' | 'publishing' | 'downstream' | 'assets' | 'generation-stats' {
   if (href === '/') return 'dashboard';
   if (href === '/workspace') return 'workspace';
+  if (href === '/publishing') return 'publishing';
+  if (href === '/generation-stats') return 'generation-stats';
   if (href === '/downstream') return 'downstream';
   return 'assets';
 }
@@ -62,7 +66,7 @@ export function AppShell({ children, user }: { children: React.ReactNode; user?:
           <span>workspace <span style={{ color: '#9aa3b2', fontWeight: 400 }}>/ 放映厅 3000</span></span>
         </div>
         <div className="top-actions">
-          <span className="service-pill"><span className="dot" /> 数据源待同步 · 9001</span>
+          <span className="service-pill"><span className="dot" /> 9001 收益数据</span>
           {user ? (
             <>
               <span>{user.displayName}</span>

@@ -24,6 +24,14 @@ type ReviewTask = {
   outputBase64?: string[];
   outputCount?: number;
   error?: string;
+  errorInfo?: {
+    code: string;
+    category: string;
+    title: string;
+    message: string;
+    action: string;
+    safeToRetry: boolean;
+  };
   metadata?: Record<string, unknown>;
   providerResponse?: unknown;
 };
@@ -66,10 +74,19 @@ export function TaskReviewPage({ accountId, taskId, mode, readOnly = false }: { 
     setBusy(true); setMessage('');
     try {
       const response = await fetch(endpoint, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: actionName }) });
-      const payload = await response.json().catch(() => null) as { success?: boolean; data?: ReviewTask; error?: string } | null;
+      const payload = await response.json().catch(() => null) as {
+        success?: boolean;
+        data?: ReviewTask;
+        nextReviewTask?: Pick<ReviewTask, 'id' | 'accountId' | 'createdAt'> | null;
+        error?: string;
+      } | null;
       if (!response.ok || !payload?.success) throw new Error(payload?.error || '任务操作失败');
       if (payload.data) setTask(payload.data);
       if (actionName === 'save-inventory') {
+        if (mode === 'video' && payload.nextReviewTask) {
+          router.replace(`/workspace/accounts/${encodeURIComponent(payload.nextReviewTask.accountId)}/production/video-tasks/${encodeURIComponent(payload.nextReviewTask.id)}`);
+          return;
+        }
         const savedTask = payload.data ?? task;
         const queueDate = savedTask ? new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai' }).format(new Date(savedTask.createdAt)) : '';
         const query = new URLSearchParams({ mode, focusTaskId: savedTask?.id ?? taskId });
@@ -206,7 +223,7 @@ export function TaskReviewPage({ accountId, taskId, mode, readOnly = false }: { 
       <span className={`status ${task?.status === 'failed' ? 'attention' : ''}`}><span className="dot" />{loading ? '加载中' : task?.status === 'retrying' ? '重试中' : task?.status ?? 'unknown'}</span>
     </div>
     {message && <div className="workspace-alert task-review-alert" role="status"><CircleAlert size={16} /><div><strong>{message}</strong></div></div>}
-    {task?.error && <div className="workspace-alert task-review-alert" role="alert"><CircleAlert size={16} /><div><strong>供应商返回错误</strong><span>{task.error}</span></div></div>}
+    {task?.error && <div className="workspace-alert task-review-alert" role="alert"><CircleAlert size={16} /><div><strong>{task.errorInfo?.title ?? '任务执行失败'}</strong>{task.errorInfo?.message && <span>{task.errorInfo.message}</span>}{task.errorInfo?.action && <small>{task.errorInfo.action}</small>}<em>{task.errorInfo?.safeToRetry ? '可安全恢复' : '需要修改配置或人工确认后重试'}</em></div></div>}
     {Boolean(task?.providerResponse) && <details className="task-provider-response"><summary>查看完整供应商响应</summary><pre>{JSON.stringify(task?.providerResponse, null, 2) ?? ''}</pre></details>}
     <div className="task-review-stage">
       <section className="panel task-review-pane task-output-pane">

@@ -36,6 +36,17 @@ export type ProductImageFolder = ProductImageRecord & {
 };
 
 export type GalleryItem = { pid: string; title?: string; description?: string; coverUrl?: string; [key: string]: unknown };
+export type ProductImageCrawlType = 'clothing' | 'non_clothing';
+export type ProductGalleryPidCheckResult = { existing: string[]; missing: string[] };
+export type ProductImageCrawlBatchResult = {
+  batchId?: string;
+  existing: string[];
+  submitted: string[];
+};
+export type ProductImageCrawlBatchStatus = {
+  status: string;
+  syncStage?: string;
+};
 export type ProductImageCleanupResult = {
   cutoffDate: string;
   dryRun: boolean;
@@ -251,10 +262,10 @@ function normalizeGalleryItem(item: GalleryItem, root: string): GalleryItem {
   return clone({ ...item, ...(coverUrl ? { coverUrl } : {}), ...(typeof raw.image_count === 'number' ? { imageCount: raw.image_count } : {}) });
 }
 
-async function sourceAuthHeaders(fetcher: typeof fetch): Promise<Record<string, string>> {
+async function sourceAuthHeaders(fetcher: typeof fetch, timeoutMs?: number): Promise<Record<string, string>> {
   const root = baseUrl();
   if (sourceToken && sourceTokenBase === root) return { 'X-Clone-Token': sourceToken };
-  const response = await fetchSource(fetcher, `${root}/api/v1/session`, { headers: { accept: 'application/json' } });
+  const response = await fetchSource(fetcher, `${root}/api/v1/session`, { headers: { accept: 'application/json' } }, timeoutMs ?? sourceTimeoutMs());
   if (!response.ok) throw await productSourceHttpError(response);
   const payload = await response.json() as { token?: unknown };
   if (typeof payload.token !== 'string' || !payload.token.trim()) throw new Error('product_source_session_invalid');
@@ -265,16 +276,110 @@ async function sourceAuthHeaders(fetcher: typeof fetch): Promise<Record<string, 
 
 async function authenticatedPost(fetcher: typeof fetch, path: string, body: Record<string, unknown>, accept: string, timeoutMs?: number): Promise<Response> {
   const send = async (headers: Record<string, string>) => fetchSource(fetcher, `${baseUrl()}${path}`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json', accept }, body: JSON.stringify(body) }, timeoutMs ?? sourceTimeoutMs());
-  let response = await send(await sourceAuthHeaders(fetcher));
+  let response = await send(await sourceAuthHeaders(fetcher, timeoutMs));
   // 8765 regenerates its local session token on process restart. Refresh it
   // once on an authorization failure so imports recover without a manual
   // server restart or page reload.
   if (response.status === 401 || response.status === 403) {
     sourceToken = null;
     sourceTokenBase = '';
-    response = await send(await sourceAuthHeaders(fetcher));
+    response = await send(await sourceAuthHeaders(fetcher, timeoutMs));
   }
   return response;
+}
+
+async function authenticatedGet(fetcher: typeof fetch, path: string, accept: string, timeoutMs?: number): Promise<Response> {
+  const send = async (headers: Record<string, string>) => fetchSource(fetcher, `${baseUrl()}${path}`, { headers: { ...headers, accept } }, timeoutMs ?? sourceTimeoutMs());
+  let response = await send(await sourceAuthHeaders(fetcher, timeoutMs));
+  if (response.status === 401 || response.status === 403) {
+    sourceToken = null;
+    sourceTokenBase = '';
+    response = await send(await sourceAuthHeaders(fetcher, timeoutMs));
+  }
+  return response;
+}
+
+/** Check the 8765 gallery in one request. Callers should chunk lists to the
+ * source service's 100-PID operating limit. */
+export async function checkProductGalleryPids(
+  pidsInput: readonly string[],
+  fetcher: typeof fetch = fetch,
+  timeoutMs = sourceTimeoutMs(),
+): Promise<ProductGalleryPidCheckResult> {
+  const pids = normalizePidList(pidsInput);
+  const response = await authenticatedPost(fetcher, '/api/v1/gallery/check', { pids }, 'application/json', timeoutMs);
+  if (!response.ok) throw await productSourceHttpError(response);
+  const payload = await response.json() as { existing?: unknown; missing?: unknown };
+  const requested = new Set(pids);
+  const normalizeReturned = (value: unknown) => Array.isArray(value)
+    ? value.filter((pid): pid is string => typeof pid === 'string' && requested.has(pid))
+    : [];
+  const existing = normalizeReturned(payload.existing);
+  const existingSet = new Set(existing);
+  const reportedMissing = normalizeReturned(payload.missing).filter((pid) => !existingSet.has(pid));
+  const reported = new Set([...existing, ...reportedMissing]);
+  const missing = [...reportedMissing, ...pids.filter((pid) => !reported.has(pid))];
+  return { existing, missing };
+}
+
+/** Create a classified 8765 scrape batch. The source performs a second
+ * gallery check, which protects against a PID completing between our check
+ * and this request. */
+export async function createProductImageCrawlBatch(
+  pidsInput: readonly string[],
+  batchType: ProductImageCrawlType,
+  name: string,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = sourceTimeoutMs(),
+): Promise<ProductImageCrawlBatchResult> {
+  const pids = normalizePidList(pidsInput);
+  const response = await authenticatedPost(fetcher, '/api/v1/batches', {
+    pids,
+    name,
+    batch_type: batchType,
+  }, 'application/json', timeoutMs);
+  if (!response.ok) throw await productSourceHttpError(response);
+  const payload = await response.json() as {
+    batch?: { id?: unknown } | null;
+    existing?: unknown;
+    missing?: unknown;
+  };
+  const requested = new Set(pids);
+  const existing = Array.isArray(payload.existing)
+    ? payload.existing.filter((pid): pid is string => typeof pid === 'string' && requested.has(pid))
+    : [];
+  const submitted = Array.isArray(payload.missing)
+    ? payload.missing.filter((pid): pid is string => typeof pid === 'string' && requested.has(pid))
+    : pids.filter((pid) => !existing.includes(pid));
+  const batchId = typeof payload.batch?.id === 'string' && payload.batch.id.trim()
+    ? payload.batch.id.trim()
+    : undefined;
+  return { batchId, existing, submitted };
+}
+
+export async function runProductImageCrawlBatch(
+  batchIdInput: string,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = sourceTimeoutMs(),
+): Promise<void> {
+  const batchId = safeSegment(batchIdInput, 'product_batch_id_invalid');
+  const response = await authenticatedPost(fetcher, `/api/v1/batches/${encodeURIComponent(batchId)}/run-real`, {}, 'application/json', timeoutMs);
+  if (!response.ok) throw await productSourceHttpError(response);
+}
+
+export async function getProductImageCrawlBatchStatus(
+  batchIdInput: string,
+  fetcher: typeof fetch = fetch,
+  timeoutMs = sourceTimeoutMs(),
+): Promise<ProductImageCrawlBatchStatus> {
+  const batchId = safeSegment(batchIdInput, 'product_batch_id_invalid');
+  const response = await authenticatedGet(fetcher, `/api/v1/batches/${encodeURIComponent(batchId)}`, 'application/json', timeoutMs);
+  if (!response.ok) throw await productSourceHttpError(response);
+  const payload = await response.json() as { batch?: { status?: unknown; sync_stage?: unknown } };
+  const status = typeof payload.batch?.status === 'string' ? payload.batch.status.trim().toLowerCase() : '';
+  if (!status) throw new Error('product_crawl_batch_status_invalid');
+  const syncStage = typeof payload.batch?.sync_stage === 'string' ? payload.batch.sync_stage.trim().toLowerCase() : undefined;
+  return { status, ...(syncStage ? { syncStage } : {}) };
 }
 
 /** Fetch the first image for a remote 8765 PID without exposing its local
@@ -664,10 +769,21 @@ export function cleanupExpiredProductImages(now: Date | number = new Date(), opt
 function countFiles(directory: string): number { try { return fs.readdirSync(directory, { withFileTypes: true }).reduce((total, entry) => total + (entry.isDirectory() ? countFiles(path.join(directory, entry.name)) : 1), 0); } catch { return 0; } }
 
 let cleanupTimer: ReturnType<typeof setTimeout> | undefined;
+
+function runScheduledProductImageCleanup(): void {
+  try {
+    cleanupExpiredProductImages();
+  } catch (error) {
+    // Housekeeping must never take down the provider worker. Imports can
+    // remove a directory between enumeration and cleanup on another process.
+    console.error('Product image cleanup failed:', error instanceof Error ? error.message : 'unknown');
+  }
+}
+
 export function scheduleProductImageCleanup(): () => void {
   if (cleanupTimer) return () => { if (cleanupTimer) clearTimeout(cleanupTimer); cleanupTimer = undefined; };
-  cleanupExpiredProductImages();
-  const scheduleNext = () => { const delay = Math.max(1_000, getNextShanghaiMidnight().getTime() - Date.now()); cleanupTimer = setTimeout(() => { cleanupTimer = undefined; cleanupExpiredProductImages(); scheduleNext(); }, delay); cleanupTimer.unref?.(); };
+  runScheduledProductImageCleanup();
+  const scheduleNext = () => { const delay = Math.max(1_000, getNextShanghaiMidnight().getTime() - Date.now()); cleanupTimer = setTimeout(() => { cleanupTimer = undefined; runScheduledProductImageCleanup(); scheduleNext(); }, delay); cleanupTimer.unref?.(); };
   scheduleNext();
   return () => { if (cleanupTimer) clearTimeout(cleanupTimer); cleanupTimer = undefined; };
 }

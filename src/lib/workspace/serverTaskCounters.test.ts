@@ -12,6 +12,7 @@ vi.mock('@/lib/providers/taskStore', () => ({
   listProviderTaskSummaries: mocks.summaries,
   listProviderTasks: mocks.fullTasks,
   getProviderTaskStoreRevision: mocks.revision,
+  getProviderTaskCounterAggregates: undefined,
 }));
 vi.mock('./accountStore', () => ({ listStoredAccounts: mocks.accounts }));
 vi.mock('./data', () => ({ getWorkspaceAccountById: mocks.accountById }));

@@ -6,7 +6,8 @@ import type { DatabaseSync, SQLInputValue } from 'node:sqlite';
 import { getWorkspacePath } from '../storagePaths';
 import { getProviderCatalog, type ProviderId } from './config';
 import { countVideoOutputs, dedupeVideoOutputUrls } from './videoOutputUrls';
-import { classifyTaskError, type TaskErrorInfo } from './taskErrorInfo';
+import { classifyTaskError, contextualizeTaskError, type TaskErrorInfo } from './taskErrorInfo';
+import { insertProviderGenerationEvent, type GenerationMode } from './providerGenerationStats';
 import { bumpTaskRevision, closeTaskDatabase, taskDatabasePath, taskTransaction, withTaskDatabase } from './taskDatabase';
 
 export type ProviderTaskMode = 'image' | 'video' | 'prompt';
@@ -80,6 +81,29 @@ export type ProviderTaskFilters = Partial<Pick<ProviderTask, 'accountId' | 'mode
   limit?: number;
   offset?: number;
   order?: 'asc' | 'desc';
+};
+
+export type ProviderTaskCounterAggregate = {
+  accountId: string;
+  metadataOwnerId?: string;
+  inventorySavedToday: number;
+  completedNotInInventory: number;
+  running: number;
+  queued: number;
+  failed: number;
+};
+
+export type ProviderTaskStatsAggregate = {
+  total: number;
+  queued: number;
+  running: number;
+  completed: number;
+  failed: number;
+  paused: number;
+  successfulOutputs: number;
+  inventorySavedToday: number;
+  completedNotInInventory: number;
+  activeAccountsToday: number;
 };
 
 
@@ -371,6 +395,12 @@ export function createProviderTasks(inputs: readonly CreateProviderTaskInput[]):
       if (ids.has(task.id) || database.prepare('SELECT id FROM provider_tasks WHERE id=?').get(task.id)) throw new Error('task_id_exists');
       ids.add(task.id);
       putTask(database,task,true);
+      if (task.mode === 'image' || task.mode === 'video') {
+        const mode = task.mode as GenerationMode;
+        insertProviderGenerationEvent(database, { eventKey: `call:${task.id}`, taskId: task.id, accountId: task.accountId, mode, provider: task.provider, eventType: 'call', eventAt: task.createdAt });
+        if (task.status === 'completed') insertProviderGenerationEvent(database, { eventKey: `success:${task.id}`, taskId: task.id, accountId: task.accountId, mode, provider: task.provider, eventType: 'success', eventAt: task.updatedAt });
+        if (task.inventorySavedAt) insertProviderGenerationEvent(database, { eventKey: `inventory:${task.id}`, taskId: task.id, accountId: task.accountId, mode, provider: task.provider, eventType: 'inventory', eventAt: task.inventorySavedAt });
+      }
     }
     bumpTaskRevision(database);
     return clone(created);
@@ -400,6 +430,7 @@ function summaryMetadata(metadata: Record<string, unknown> | undefined): Record<
     'promptGenerationUsedTemplate', 'providerSubmissionStartedAt', 'providerSubmissionUncertain',
     'providerAcceptedAt', 'schedulerRetryExhausted', 'schedulerRetryCount', 'schedulerRetryNotBefore',
     'workerId', 'schedulerWorkerId', 'recoveryRequestedAt', 'modelId', 'maxRetries', 'localCacheExhausted',
+    'failureStage', 'failureProvider', 'failureModel', 'failureAt',
   ]) {
     const value = metadata[key];
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') result[key] = value;
@@ -449,8 +480,192 @@ export function listProviderTaskSummaries(filters: ProviderTaskFilters = {}): Pr
   return withStore((database) => {
     const query = taskQuery(filters);
     return database.prepare(`SELECT t.summary FROM provider_tasks t${query.clause}${query.order}`)
-      .all(...query.params).map((row) => JSON.parse(String(row.summary)) as ProviderTaskSummary);
+      .all(...query.params).map((row) => {
+        const stored = JSON.parse(String(row.summary)) as ProviderTaskSummary;
+        const { errorInfo: storedErrorInfo, ...summary } = stored;
+        if (!summary.error) return summary;
+        const errorInfo = storedErrorInfo
+          ? contextualizeTaskError(summary, storedErrorInfo)
+          : classifyTaskError(summary);
+        return errorInfo ? { ...summary, errorInfo } : summary;
+      });
   });
+}
+
+/**
+ * Find the next reviewable video in the same order used by the production
+ * queue (newest first). The fallback wraps to the first unreviewed row so an
+ * operator can keep reviewing without returning to the queue between tasks.
+ */
+export function findNextUnreviewedVideoTask(
+  accountIds: readonly string[],
+  current: Pick<ProviderTask, 'id' | 'createdAt'>,
+): ProviderTaskSummary | null {
+  const scopedAccountIds = [...new Set(accountIds.map((value) => value.trim()).filter(Boolean))];
+  if (!scopedAccountIds.length) return null;
+  return withStore((database) => {
+    const placeholders = scopedAccountIds.map(() => '?').join(',');
+    const base = `FROM provider_tasks t WHERE t.account_id IN (${placeholders}) `
+      + "AND t.mode = 'video' AND t.status = 'completed' AND t.id <> ? "
+      + "AND json_extract(t.summary, '$.inventorySavedAt') IS NULL "
+      + "AND CAST(COALESCE(json_extract(t.summary, '$.outputCount'), 0) AS INTEGER) > 0 ";
+    const afterCurrent = database.prepare(
+      `SELECT t.summary ${base}`
+        + 'AND (t.created_at < ? OR (t.created_at = ? AND t.id > ?)) '
+        + 'ORDER BY t.created_at DESC, t.id ASC LIMIT 1',
+    ).get(...scopedAccountIds, current.id, current.createdAt, current.createdAt, current.id);
+    const row = afterCurrent ?? database.prepare(
+      `SELECT t.summary ${base}ORDER BY t.created_at DESC, t.id ASC LIMIT 1`,
+    ).get(...scopedAccountIds, current.id);
+    return row ? JSON.parse(String(row.summary)) as ProviderTaskSummary : null;
+  });
+}
+
+/**
+ * Read only inventory-saved video summaries from the requested Shanghai
+ * business date onward. The exact timestamp is applied after the indexed
+ * date lookup so callers do not have to materialize the full task history.
+ */
+export function listInventorySavedVideoTaskSummariesSince(since: string): ProviderTaskSummary[] {
+  const sinceTimestamp = Date.parse(since);
+  if (!Number.isFinite(sinceTimestamp)) return [];
+  const sinceBusinessDate = taskBusinessDate(since);
+  return withStore((database) => database.prepare(
+    "SELECT t.summary FROM provider_tasks t INDEXED BY task_inventory_saved_date "
+      + "WHERE t.mode = 'video' "
+      + "AND json_extract(t.summary, '$.inventorySavedAt') IS NOT NULL "
+      + "AND strftime('%Y-%m-%d', json_extract(t.summary, '$.inventorySavedAt'), '+8 hours') >= ? "
+      + "AND CAST(COALESCE(json_extract(t.summary, '$.outputCount'), 0) AS INTEGER) > 0 "
+      + "ORDER BY json_extract(t.summary, '$.inventorySavedAt') ASC, t.id ASC",
+  ).all(sinceBusinessDate).map((row) => JSON.parse(String(row.summary)) as ProviderTaskSummary)
+    .filter((task) => Boolean(task.inventorySavedAt) && Date.parse(task.inventorySavedAt!) >= sinceTimestamp));
+}
+
+function aggregateScope(filters: Pick<ProviderTaskFilters, 'accountId' | 'mode'>): { clause: string; params: SQLInputValue[] } {
+  const clauses: string[] = [];
+  const params: SQLInputValue[] = [];
+  if (filters.accountId) {
+    clauses.push('t.account_id=?');
+    params.push(filters.accountId);
+  }
+  if (filters.mode) {
+    clauses.push('t.mode=?');
+    params.push(filters.mode);
+  }
+  return { clause: clauses.length ? ' WHERE ' + clauses.join(' AND ') : '', params };
+}
+
+/**
+ * Aggregate landing-page counters inside SQLite. Returning one row per
+ * account/metadata-owner avoids parsing every persisted JSON summary in Node
+ * whenever an active task bumps the global store revision.
+ */
+export function getProviderTaskCounterAggregates(
+  filters: Pick<ProviderTaskFilters, 'accountId' | 'mode'>,
+  businessDate: string,
+): ProviderTaskCounterAggregate[] {
+  return withStore((database) => {
+    const scope = aggregateScope(filters);
+    const scopedWhere = (condition: string) => scope.clause
+      ? scope.clause + ' AND ' + condition
+      : ' WHERE ' + condition;
+    const ownerExpression = "NULLIF(json_extract(t.summary, '$.metadata.ownerId'), '')";
+    const aggregates = new Map<string, ProviderTaskCounterAggregate>();
+    const ensure = (row: Record<string, unknown>): ProviderTaskCounterAggregate => {
+      const accountId = String(row.account_id);
+      const metadataOwnerId = typeof row.metadata_owner_id === 'string' && row.metadata_owner_id ? row.metadata_owner_id : undefined;
+      const key = accountId + '\u0000' + (metadataOwnerId ?? '');
+      const existing = aggregates.get(key);
+      if (existing) return existing;
+      const created: ProviderTaskCounterAggregate = {
+        accountId,
+        ...(metadataOwnerId ? { metadataOwnerId } : {}),
+        inventorySavedToday: 0,
+        completedNotInInventory: 0,
+        running: 0,
+        queued: 0,
+        failed: 0,
+      };
+      aggregates.set(key, created);
+      return created;
+    };
+
+    const statusSql = 'SELECT t.account_id AS account_id, ' + ownerExpression + ' AS metadata_owner_id, t.status, COUNT(*) AS count '
+      + 'FROM provider_tasks t'
+      + scopedWhere("t.status IN ('queued','retrying','running','processing','submitting','submitted','prompting','failed')")
+      + ' GROUP BY t.account_id, metadata_owner_id, t.status';
+    for (const row of database.prepare(statusSql).all(...scope.params) as Array<Record<string, unknown>>) {
+      const aggregate = ensure(row);
+      const count = Number(row.count ?? 0);
+      const status = String(row.status);
+      if (['running', 'processing', 'submitting', 'submitted', 'prompting', 'retrying'].includes(status)) aggregate.running += count;
+      if (status === 'queued' || status === 'retrying') aggregate.queued += count;
+      if (status === 'failed') aggregate.failed += count;
+    }
+
+    const savedSql = 'SELECT t.account_id AS account_id, ' + ownerExpression + ' AS metadata_owner_id, COUNT(*) AS count '
+      + 'FROM provider_tasks t INDEXED BY task_inventory_saved_date'
+      + scopedWhere("json_extract(t.summary, '$.inventorySavedAt') IS NOT NULL AND strftime('%Y-%m-%d', json_extract(t.summary, '$.inventorySavedAt'), '+8 hours') = ? AND CAST(COALESCE(json_extract(t.summary, '$.outputCount'), 0) AS INTEGER) > 0")
+      + ' GROUP BY t.account_id, metadata_owner_id';
+    for (const row of database.prepare(savedSql).all(...scope.params, businessDate) as Array<Record<string, unknown>>) {
+      ensure(row).inventorySavedToday += Number(row.count ?? 0);
+    }
+
+    const unsavedSql = 'SELECT t.account_id AS account_id, ' + ownerExpression + ' AS metadata_owner_id, COUNT(*) AS count '
+      + 'FROM provider_tasks t INDEXED BY task_date_mode'
+      + scopedWhere("t.business_date = ? AND t.status = 'completed' AND json_extract(t.summary, '$.inventorySavedAt') IS NULL AND CAST(COALESCE(json_extract(t.summary, '$.outputCount'), 0) AS INTEGER) > 0")
+      + ' GROUP BY t.account_id, metadata_owner_id';
+    for (const row of database.prepare(unsavedSql).all(...scope.params, businessDate) as Array<Record<string, unknown>>) {
+      ensure(row).completedNotInInventory += Number(row.count ?? 0);
+    }
+
+    return [...aggregates.values()].sort((left, right) =>
+      left.accountId.localeCompare(right.accountId) || (left.metadataOwnerId ?? '').localeCompare(right.metadataOwnerId ?? ''));
+  });
+}
+
+/** Build the all-workspace dashboard snapshot without materializing task JSON. */
+export function getProviderTaskStatsAggregate(businessDate: string): ProviderTaskStatsAggregate {
+  return withStore((database) => {
+    const statusRows = database.prepare('SELECT status, COUNT(*) AS count FROM provider_tasks GROUP BY status')
+      .all() as Array<Record<string, unknown>>;
+    const counts = new Map(statusRows.map((row) => [String(row.status), Number(row.count ?? 0)]));
+    const countStatuses = (statuses: readonly string[]) => statuses.reduce((total, status) => total + (counts.get(status) ?? 0), 0);
+    const successful = database.prepare(
+      "SELECT COALESCE(SUM(CAST(COALESCE(json_extract(summary, '$.outputCount'), 0) AS INTEGER)), 0) AS count FROM provider_tasks WHERE status = 'completed'",
+    ).get() as Record<string, unknown>;
+    const saved = database.prepare(
+      "SELECT COUNT(*) AS count FROM provider_tasks INDEXED BY task_inventory_saved_date WHERE json_extract(summary, '$.inventorySavedAt') IS NOT NULL AND strftime('%Y-%m-%d', json_extract(summary, '$.inventorySavedAt'), '+8 hours') = ? AND CAST(COALESCE(json_extract(summary, '$.outputCount'), 0) AS INTEGER) > 0",
+    ).get(businessDate) as Record<string, unknown>;
+    const unsaved = database.prepare(
+      "SELECT COUNT(*) AS count FROM provider_tasks INDEXED BY task_date_mode WHERE business_date = ? AND status = 'completed' AND json_extract(summary, '$.inventorySavedAt') IS NULL AND CAST(COALESCE(json_extract(summary, '$.outputCount'), 0) AS INTEGER) > 0",
+    ).get(businessDate) as Record<string, unknown>;
+    const activeAccounts = database.prepare(
+      'SELECT COUNT(DISTINCT account_id) AS count FROM provider_tasks WHERE business_date = ?',
+    ).get(businessDate) as Record<string, unknown>;
+    return {
+      total: countStatuses([...VALID_STATUSES]),
+      queued: countStatuses(['queued', 'retrying']),
+      running: countStatuses(['running', 'processing', 'submitting', 'submitted', 'prompting', 'retrying']),
+      completed: countStatuses(['completed']),
+      failed: countStatuses(['failed']),
+      paused: countStatuses(['paused']),
+      successfulOutputs: Number(successful.count ?? 0),
+      inventorySavedToday: Number(saved.count ?? 0),
+      completedNotInInventory: Number(unsaved.count ?? 0),
+      activeAccountsToday: Number(activeAccounts.count ?? 0),
+    };
+  });
+}
+
+/** Count one metered model/operator/day without allocating completed tasks. */
+export function countCompletedProviderTasksForDailyQuota(ownerId: string, model: string, businessDate: string): number {
+  return withStore((database) => Number(database.prepare(
+    "SELECT COUNT(*) AS count FROM provider_tasks t WHERE t.mode = 'video' AND t.status = 'completed' "
+      + "AND COALESCE(NULLIF(json_extract(t.summary, '$.metadata.modelId'), ''), json_extract(t.summary, '$.model')) = ? "
+      + "AND COALESCE(NULLIF(json_extract(t.summary, '$.metadata.ownerId'), ''), t.account_id) = ? "
+      + "AND strftime('%Y-%m-%d', COALESCE(NULLIF(json_extract(t.summary, '$.inventorySavedAt'), ''), t.updated_at), '+8 hours') = ?",
+  ).get(model, ownerId, businessDate)?.count ?? 0));
 }
 
 function countTaskOutputs(task: ProviderTask): number {
@@ -501,15 +716,38 @@ export function updateProviderTask(id: string, patch: ProviderTaskPatch, expecte
     if (expectedUpdatedAt !== undefined && current.updatedAt !== expectedUpdatedAt) return null;
     const next = patchedTask(current,patch);
     putTask(database,next);
+    if (next.mode === 'image' || next.mode === 'video') {
+      const mode = next.mode as GenerationMode;
+      if (current.status !== 'completed' && next.status === 'completed') insertProviderGenerationEvent(database, { eventKey: `success:${next.id}`, taskId: next.id, accountId: next.accountId, mode, provider: next.provider, eventType: 'success', eventAt: next.updatedAt });
+      if (!current.inventorySavedAt && next.inventorySavedAt) insertProviderGenerationEvent(database, { eventKey: `inventory:${next.id}`, taskId: next.id, accountId: next.accountId, mode, provider: next.provider, eventType: 'inventory', eventAt: next.inventorySavedAt });
+    }
     bumpTaskRevision(database);
     return clone(next);
   }));
 }
 
-export function deleteProviderTask(id: string): boolean {
+export function deleteProviderTask(id: string, options: { restoreReason?: 'restore-config' } = {}): boolean {
   const normalizedId = text(id);
   if (!normalizedId) return false;
   return withStore((database) => taskTransaction(database, () => {
+    const current = readTask(database, normalizedId);
+    if (!current) return false;
+    if (options.restoreReason && (current.mode === 'image' || current.mode === 'video')) {
+      const restoreOutcome = current.status === 'completed'
+        ? 'success'
+        : current.status === 'failed' || current.status === 'cancelled' ? 'failed' : undefined;
+      if (restoreOutcome) {
+        insertProviderGenerationEvent(database, {
+          eventKey: `restore-${restoreOutcome}:${current.id}:${options.restoreReason}`,
+          taskId: current.id,
+          accountId: current.accountId,
+          mode: current.mode,
+          provider: current.provider,
+          eventType: 'restore',
+          eventAt: new Date().toISOString(),
+        });
+      }
+    }
     const changed = database.prepare('DELETE FROM provider_tasks WHERE id=?').run(normalizedId).changes > 0;
     if (changed) bumpTaskRevision(database);
     return changed;

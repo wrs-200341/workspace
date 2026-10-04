@@ -23,15 +23,16 @@ export const ROLE_DESCRIPTIONS: Record<Role, string> = {
 export const ROLE_ORDER: Role[] = ['admin', 'workspace', 'operator'];
 
 export const ROLE_PERMISSIONS = {
-  admin: ['dashboard', 'downstream', 'workspace', 'assets', 'account-control'],
+  admin: ['dashboard', 'downstream', 'workspace', 'publishing', 'assets', 'generation-stats', 'account-control'],
   workspace: ['workspace'],
-  operator: ['dashboard', 'downstream', 'workspace', 'assets'],
+  operator: ['dashboard', 'downstream', 'workspace', 'publishing', 'assets'],
 } as const satisfies Record<Role, readonly string[]>;
 
 /** Canonical page access matrix used by the route audit and smoke tests. */
 export const PAGE_ROUTE_ROLES: Readonly<Record<string, readonly Role[]>> = {
   '/': ['admin', 'operator'],
   '/workspace': ['admin', 'workspace', 'operator'],
+  '/publishing': ['admin', 'operator'],
   '/workspace/accounts/:id/assets': ['admin', 'workspace', 'operator'],
   '/workspace/accounts/:id/production': ['admin', 'workspace', 'operator'],
   '/workspace/accounts/:id/production/video-tasks/:taskId': ['admin', 'workspace', 'operator'],
@@ -42,6 +43,7 @@ export const PAGE_ROUTE_ROLES: Readonly<Record<string, readonly Role[]>> = {
   '/records': ['admin', 'operator'],
   '/tracked': ['admin', 'operator'],
   '/admin/accounts': ['admin'],
+  '/generation-stats': ['admin'],
 } as const;
 
 export function routeRoles(route: string): readonly Role[] | undefined {

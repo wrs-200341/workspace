@@ -1,8 +1,8 @@
-import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildApiawSeedanceVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildSeedreamImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, GPT_RESPONSES_MAX_OUTPUT_TOKENS, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
+import { buildGrokVideoPayload, buildYuanAIGrokVideoPayload, buildSdMiniVideoPayload, buildQualityV4VideoPayload, buildMGRouterImagePayload, buildMGRouterVideoPayload, buildWanVideoPayload, buildWanRelayVideoPayload, buildApiawSeedanceVideoPayload, buildMiniMaxVideoPayload, buildMikuVideoPayload, buildPro666VideoPayload, buildPomoAIImagePayload, buildSeedreamImagePayload, buildYuanAIImagePayload, buildYuanAIImageEditFormData, yuanAIImageSize, buildOAIRegboxPayload, buildOAIRegboxFirstFramePayload, buildOAIRegboxMultipartFormData, buildGPTResponsesPayload, GPT_RESPONSES_MAX_OUTPUT_TOKENS, buildOpenAIImagePayload, buildOpenAIImageEditPayload, buildOpenAIImageEditFormData, buildAicloudImagePayload, buildAicloudImageEditPayload, buildAicloudImageEditFormData, buildGeminiNativeImagePayload, buildOriginNanoChatPayload, type GPTPromptAttachment, type MultipartReference } from './payloads';
 import { getProviderConfig, isLiveProvidersAllowed, isProviderLiveEnabled, POMOAI_PROMPT_FALLBACK_MODELS, type ProviderId } from './config';
 import { dedupeVideoOutputUrls } from './videoOutputUrls';
 import { buildDolaSd2VideoPayload } from './payloads';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import dns from 'node:dns/promises';
 import sharp from 'sharp';
 import { assertPublicTarget } from '@/lib/workspace/externalImageImport';
@@ -11,6 +11,10 @@ import { assertPublicTarget } from '@/lib/workspace/externalImageImport';
 // JSON. Keep a bounded limit, but do not reject normal 4K generations.
 const MAX_RESPONSE_BYTES = 80 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 25_000;
+// OAIRegBox can take longer than the generic API timeout to accept multipart
+// video requests. Acceptance is not idempotently queryable without a task id,
+// so aborting too early leaves a paid request in an ambiguous state.
+const OAIREGBOX_VIDEO_SUBMISSION_TIMEOUT_MS = 120_000;
 // Image generation endpoints may spend several minutes rendering an image.
 // Keep the short timeout for task submission/status calls, but allow image
 // providers to complete their synchronous render window.
@@ -254,6 +258,9 @@ export type ProviderErrorInfo = {
   rawBody?: string;
   endpoint?: string;
   method?: string;
+  stage?: 'prompt_generation' | 'video_submission' | 'video_generation' | 'output_download';
+  timeoutMs?: number;
+  reason?: string;
   receivedAt: string;
 };
 
@@ -268,14 +275,35 @@ export class ProviderRequestError extends Error {
   }
 }
 
-export function providerErrorInfo(error: unknown, fallback?: { body?: unknown; endpoint?: string; method?: string }): ProviderErrorInfo {
-  if (error instanceof ProviderRequestError) return error.info;
+type ProviderErrorFallback = {
+  body?: unknown;
+  endpoint?: string;
+  method?: string;
+  stage?: ProviderErrorInfo['stage'];
+  timeoutMs?: number;
+  reason?: string;
+};
+
+export function providerErrorInfo(error: unknown, fallback?: ProviderErrorFallback): ProviderErrorInfo {
+  if (error instanceof ProviderRequestError) {
+    return {
+      ...error.info,
+      ...(!error.info.endpoint && fallback?.endpoint ? { endpoint: fallback.endpoint } : {}),
+      ...(!error.info.method && fallback?.method ? { method: fallback.method } : {}),
+      ...(!error.info.stage && fallback?.stage ? { stage: fallback.stage } : {}),
+      ...(!error.info.timeoutMs && fallback?.timeoutMs ? { timeoutMs: fallback.timeoutMs } : {}),
+      ...(!error.info.reason && fallback?.reason ? { reason: fallback.reason } : {}),
+    };
+  }
   const code = error instanceof Error && /^[a-z][a-z0-9_]{2,64}$/.test(error.message) ? error.message : 'provider_request_failed';
   return {
     code,
     ...(fallback?.body !== undefined ? { body: fallback.body } : {}),
     ...(fallback?.endpoint ? { endpoint: fallback.endpoint } : {}),
     ...(fallback?.method ? { method: fallback.method } : {}),
+    ...(fallback?.stage ? { stage: fallback.stage } : {}),
+    ...(fallback?.timeoutMs ? { timeoutMs: fallback.timeoutMs } : {}),
+    ...(fallback?.reason ? { reason: fallback.reason } : {}),
     receivedAt: new Date().toISOString(),
   };
 }
@@ -285,7 +313,7 @@ export function providerErrorInfo(error: unknown, fallback?: { body?: unknown; e
  * unbounded supplier payload. Error bodies are already limited to 1 MiB at
  * the HTTP boundary; this second guard protects the task store as well.
  */
-export function providerResponseSnapshot(error: unknown, fallback?: { body?: unknown; endpoint?: string; method?: string }): Record<string, unknown> {
+export function providerResponseSnapshot(error: unknown, fallback?: ProviderErrorFallback): Record<string, unknown> {
   const baseInfo = providerErrorInfo(error, fallback);
   const info = error === undefined && fallback?.body !== undefined && !looksLikeFailedProviderBody(fallback.body)
     ? { ...baseInfo, code: 'provider_response_received' }
@@ -293,14 +321,26 @@ export function providerResponseSnapshot(error: unknown, fallback?: { body?: unk
   const redactRaw = (value: string): string => value
     .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
     .replace(/((?:authorization|api[-_]?key|apikey|access[_-]?token|token|secret|password|cookie|set[-_]?cookie|session|jwt)\s*[=:]\s*)(["']?)[^&\s,"'}]+/gi, '$1$2[redacted]')
-    .replace(/("(?:authorization|api[_-]?key|apikey|access[_-]?token|token|secret|password|cookie|set[-_]?cookie|session|jwt)"\s*:\s*")[^"]*(")/gi, '$1[redacted]$2');
-  const redact = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(redact);
-    if (typeof value === 'string') return redactRaw(value);
+    .replace(/("(?:authorization|api[_-]?key|apikey|access[_-]?token|token|secret|password|cookie|set[-_]?cookie|session|jwt)"\s*:\s*")[^"]*(")/gi, '$1[redacted]$2')
+    .replace(/data:(?:image|video|audio)\/[^;,]+;base64,[A-Za-z0-9+/_=-]+/gi, '[media_payload_omitted]')
+    .replace(/("(?:b64_json|base64|outputBase64|image_base64|video_base64|audio_base64)"\s*:\s*")[A-Za-z0-9+/_=-]{128,}(")/gi, '$1[media_payload_omitted]$2');
+  const mediaPayloadSummary = (value: string) => ({
+    omitted: 'media_payload',
+    characters: value.length,
+    sha256: createHash('sha256').update(value).digest('hex'),
+  });
+  const isMediaPayload = (key: string | undefined, parentKey: string | undefined, value: string): boolean => {
+    if (/^data:(?:image|video|audio)\/[^;,]+;base64,/i.test(value)) return true;
+    if ([key, parentKey].some((candidate) => candidate && /^(?:b64_json|b64json|base64|outputBase64|image_base64|video_base64|audio_base64)$/i.test(candidate))) return true;
+    return key === 'data' && Boolean(parentKey && /inline[_-]?data/i.test(parentKey));
+  };
+  const redact = (value: unknown, key?: string, parentKey?: string): unknown => {
+    if (Array.isArray(value)) return value.map((item) => redact(item, undefined, key ?? parentKey));
+    if (typeof value === 'string') return isMediaPayload(key, parentKey, value) ? mediaPayloadSummary(value) : redactRaw(value);
     if (!value || typeof value !== 'object') return value;
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, item]) => {
-      if (/authorization|api[_-]?key|token|secret|password|cookie|set[-_]?cookie|session|jwt/i.test(key)) return [key, '[redacted]'];
-      return [key, redact(item)];
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([propertyKey, item]) => {
+      if (/authorization|api[_-]?key|token|secret|password|cookie|set[-_]?cookie|session|jwt/i.test(propertyKey)) return [propertyKey, '[redacted]'];
+      return [propertyKey, redact(item, propertyKey, key ?? parentKey)];
     }));
   };
   const safeEndpoint = (value: string): string => {
@@ -319,6 +359,9 @@ export function providerResponseSnapshot(error: unknown, fallback?: { body?: unk
     ...(info.statusText ? { statusText: info.statusText } : {}),
     ...(info.endpoint ? { endpoint: safeEndpoint(info.endpoint) } : {}),
     ...(info.method ? { method: info.method } : {}),
+    ...(info.stage ? { stage: info.stage } : {}),
+    ...(info.timeoutMs ? { timeoutMs: info.timeoutMs } : {}),
+    ...(info.reason ? { reason: info.reason } : {}),
     ...(info.body !== undefined ? { body: redact(info.body) } : {}),
     ...(info.rawBody ? { rawBody: redactRaw(info.rawBody) } : {}),
     receivedAt: info.receivedAt,
@@ -331,6 +374,9 @@ export function providerResponseSnapshot(error: unknown, fallback?: { body?: unk
     ...(info.statusText ? { statusText: info.statusText } : {}),
     ...(info.endpoint ? { endpoint: safeEndpoint(info.endpoint) } : {}),
     ...(info.method ? { method: info.method } : {}),
+    ...(info.stage ? { stage: info.stage } : {}),
+    ...(info.timeoutMs ? { timeoutMs: info.timeoutMs } : {}),
+    ...(info.reason ? { reason: info.reason } : {}),
     rawBody: truncateUtf8(redactRaw(info.rawBody ?? serialized), MAX_ERROR_RESPONSE_BYTES),
     truncated: true,
     receivedAt: info.receivedAt,
@@ -685,15 +731,27 @@ async function requestProvider(url: string, apiKey: string, body: Record<string,
   return requestProviderWithFetcher(fetch, url, apiKey, body, timeoutMs);
 }
 
+function networkRequestError(error: unknown, request: { endpoint: string; method: string; timeoutMs: number; stage?: ProviderErrorInfo['stage'] }): ProviderRequestError {
+  const reason = error && typeof error === 'object' && typeof (error as { name?: unknown }).name === 'string'
+    ? String((error as { name: string }).name).slice(0, 80)
+    : 'NetworkError';
+  return new ProviderRequestError({
+    code: isProviderTimeoutError(error) ? 'provider_408' : 'provider_network_error',
+    endpoint: request.endpoint,
+    method: request.method,
+    ...(request.stage ? { stage: request.stage } : {}),
+    timeoutMs: request.timeoutMs,
+    reason,
+    receivedAt: new Date().toISOString(),
+  });
+}
+
 async function requestProviderWithFetcher(fetcher: typeof fetch, url: string, apiKey: string, body: Record<string, unknown>, timeoutMs = REQUEST_TIMEOUT_MS, extraHeaders: Record<string, string> = {}): Promise<unknown> {
   let response: Response;
   try {
     response = await fetcher(url, { method: 'POST', headers: { ...extraHeaders, accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
   } catch (error) {
-    if (isProviderTimeoutError(error)) {
-      throw new ProviderRequestError({ code: 'provider_408', endpoint: url, method: 'POST', receivedAt: new Date().toISOString() });
-    }
-    throw error;
+    throw networkRequestError(error, { endpoint: url, method: 'POST', timeoutMs });
   }
   if (!response.ok) throw await providerHttpError(response, { endpoint: url, method: 'POST' });
   return readJsonLimited(response);
@@ -807,6 +865,10 @@ export async function downloadProviderVideoContent(
 
 export type SubmitVideoInput = { provider: Extract<ProviderId, 'grok-video' | 'yuanai-grok-video' | 'mgrouter-grok-video' | 'wan3-video' | 'wan-3-nsfw' | 'apiaw-seedance-video' | 'dola-sd2' | 'minimax-h3' | 'miku-minimax' | 'pro666-video' | 'quality-v4' | 'oairegbox-omni'>; model: string; prompt: string; duration: number; aspectRatio: string; resolution: string; requestId?: string; referenceImages?: string[]; referenceFiles?: MultipartReference[]; referenceAudios?: string[]; referenceVideos?: string[]; media?: Array<{ type: 'reference_image' | 'reference_video' | 'audio'; url: string }> };
 
+export function providerSubmissionTimeoutMs(provider: SubmitVideoInput['provider']): number {
+  return provider === 'oairegbox-omni' ? OAIREGBOX_VIDEO_SUBMISSION_TIMEOUT_MS : REQUEST_TIMEOUT_MS;
+}
+
 async function submitDolaSd2Video(input: SubmitVideoInput, dependencies: { env: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch }): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {
   const config = getProviderConfig('dola-sd2', dependencies.env);
   if (isLiveProvidersAllowed(dependencies.env) && !config.apiKey) throw new Error('provider_not_configured');
@@ -838,6 +900,25 @@ async function submitDolaSd2Video(input: SubmitVideoInput, dependencies: { env: 
 
 const SNUMOM_GROK_PROMPT_MAX_UTF8_BYTES = 4_096;
 
+export function normalizeGrokVideoPrompt(prompt: string): string {
+  return prompt
+    .normalize('NFKC')
+    .replace(/【/g, '[')
+    .replace(/】/g, ']')
+    .replace(/[‘’]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/\u00a0/g, ' ')
+    .trim();
+}
+
+function videoPromptForSubmission(input: Pick<SubmitVideoInput, 'provider' | 'model' | 'prompt'>): string {
+  const isGrokVideo = input.provider === 'yuanai-grok-video'
+    || input.provider === 'mgrouter-grok-video'
+    || (input.provider === 'grok-video' && input.model.trim().toLowerCase().startsWith('grok-'));
+  return isGrokVideo ? normalizeGrokVideoPrompt(input.prompt) : input.prompt.trim();
+}
+
 function validateVideoPromptLimit(input: Pick<SubmitVideoInput, 'provider' | 'model' | 'prompt'>): void {
   const isSnumomGrok = input.provider === 'grok-video'
     && input.model.trim().toLowerCase().startsWith('grok-imagine-video-1.5');
@@ -858,7 +939,8 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   const isWanRelay = input.provider === 'wan-3-nsfw';
   const isApiawSeedance = input.provider === 'apiaw-seedance-video';
   const config = getProviderConfig(input.provider, env);
-  validateVideoPromptLimit(input);
+  const prompt = videoPromptForSubmission(input);
+  validateVideoPromptLimit({ ...input, prompt });
   if (input.provider === 'mgrouter-grok-video' && (input.referenceAudios?.length || input.media?.some((item) => item.type === 'audio'))) {
     throw new Error('mgrouter_reference_audio_unsupported');
   }
@@ -884,7 +966,6 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
     && (input.referenceVideos?.length ?? 0) === 0) {
     throw new Error('seedance_reference_audio_requires_visual');
   }
-  if (input.provider === 'oairegbox-omni' && (input.referenceImages ?? []).length > 0 && !(input.referenceFiles?.length)) throw new Error('reference_files_required');
   const sdMediaReferences = isSdMini && (!input.referenceImages || input.referenceImages.length === 0)
     ? (input.media ?? []).filter((item) => item.type === 'reference_image').map((item) => item.url)
     : [];
@@ -892,34 +973,42 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   const references = input.provider === 'quality-v4'
     ? validateQualityV4References(rawReferenceImages)
     : isSdMini ? validateHttpReferenceUrls(rawReferenceImages) : validateReferenceUrls(input.referenceImages ?? []);
-  const hasOaiFiles = input.provider === 'oairegbox-omni' && Boolean(input.referenceFiles?.length);
+  const oaiFiles = input.provider === 'oairegbox-omni' ? input.referenceFiles ?? [] : [];
+  const oaiReferenceCount = input.provider === 'oairegbox-omni' ? Math.max(references.length, oaiFiles.length) : 0;
+  if (oaiReferenceCount > 5) throw new Error('oairegbox_too_many_references');
+  if (oaiReferenceCount > 1 && oaiFiles.length !== oaiReferenceCount) throw new Error('reference_files_required');
+  const oaiFirstImageUrl = oaiReferenceCount === 1
+    ? references[0] ?? `data:${oaiFiles[0].mimeType || 'application/octet-stream'};base64,${Buffer.from(oaiFiles[0].bytes).toString('base64')}`
+    : undefined;
   const body = isApiawSeedance
-    ? buildApiawSeedanceVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+    ? buildApiawSeedanceVideoPayload({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
     : isWanRelay
-    ? buildWanRelayVideoPayload({ model: input.model, prompt: input.prompt.trim(), seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+    ? buildWanRelayVideoPayload({ model: input.model, prompt, seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
     : input.provider === 'quality-v4'
-    ? buildQualityV4VideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, resolution: input.resolution, size: input.aspectRatio, referenceImages: references, referenceVideos: validateQualityV4References(input.referenceVideos ?? []), referenceAudios: validateQualityV4References(input.referenceAudios ?? []) })
+    ? buildQualityV4VideoPayload({ model: input.model, prompt, duration: input.duration, resolution: input.resolution, size: input.aspectRatio, referenceImages: references, referenceVideos: validateQualityV4References(input.referenceVideos ?? []), referenceAudios: validateQualityV4References(input.referenceAudios ?? []) })
     : input.provider === 'oairegbox-omni'
-    ? (hasOaiFiles
-      ? buildOAIRegboxMultipartFormData({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, references: input.referenceFiles })
-      : buildOAIRegboxPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, references: [] }))
+    ? (oaiFirstImageUrl
+      ? buildOAIRegboxFirstFramePayload({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, firstImageUrl: oaiFirstImageUrl })
+      : oaiFiles.length > 1
+        ? buildOAIRegboxMultipartFormData({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, references: oaiFiles })
+        : buildOAIRegboxPayload({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, references: [] }))
     : input.provider === 'minimax-h3'
-    ? buildMiniMaxVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+    ? buildMiniMaxVideoPayload({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
     : isMiku
-    ? buildMikuVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+    ? buildMikuVideoPayload({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceVideos: validateReferenceUrls(input.referenceVideos ?? []), referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
     : isPro666
-    ? buildPro666VideoPayload({ prompt: input.prompt.trim(), images: validateReferenceUrls(input.referenceImages ?? []), audios: validateReferenceUrls(input.referenceAudios ?? []) })
+    ? buildPro666VideoPayload({ prompt, images: validateReferenceUrls(input.referenceImages ?? []), audios: validateReferenceUrls(input.referenceAudios ?? []) })
     : isSdMini
-    ? buildSdMiniVideoPayload({ model: input.model, prompt: input.prompt.trim(), seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
+    ? buildSdMiniVideoPayload({ model: input.model, prompt, seconds: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
     : isYuanAIGrok
-    ? buildYuanAIGrokVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
+    ? buildYuanAIGrokVideoPayload({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
     : input.provider === 'grok-video'
-    ? buildGrokVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
+    ? buildGrokVideoPayload({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references })
     : input.provider === 'mgrouter-grok-video'
-      ? buildMGRouterVideoPayload({ model: input.model, prompt: input.prompt.trim(), duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
+      ? buildMGRouterVideoPayload({ model: input.model, prompt, duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution, referenceImages: references, referenceAudios: validateReferenceUrls(input.referenceAudios ?? []) })
       : buildWanVideoPayload({
         model: input.model,
-        prompt: input.prompt.trim(),
+        prompt,
         duration: input.duration,
         ratio: input.aspectRatio,
         resolution: input.resolution,
@@ -941,107 +1030,37 @@ export async function submitVideo(input: SubmitVideoInput, dependencies: { env?:
   }
   if (body instanceof FormData) {
     const endpoint = providerEndpoint(input.provider, 'create', env);
-    const response = await (dependencies.fetch ?? fetch)(endpoint, { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body, signal: AbortSignal.timeout(25_000), cache: 'no-store' });
+    const timeoutMs = providerSubmissionTimeoutMs(input.provider);
+    let response: Response;
+    try {
+      response = await (dependencies.fetch ?? fetch)(endpoint, { method: 'POST', headers: { accept: 'application/json', authorization: `Bearer ${config.apiKey}`, 'user-agent': 'WorkspaceProduction/1.0' }, body, signal: AbortSignal.timeout(timeoutMs), cache: 'no-store' });
+    } catch (error) {
+      throw networkRequestError(error, { endpoint, method: 'POST', timeoutMs, stage: 'video_submission' });
+    }
     if (!response.ok) throw await providerHttpError(response, { endpoint, method: 'POST' });
     return { mode: 'live', provider: input.provider, response: await readJsonLimited(response) };
   }
-  return { mode: 'live', provider: input.provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, providerEndpoint(input.provider, 'create', env), config.apiKey, body) };
-}
-
-const FALLBACK_PROVIDER_ERRORS = new Set([
-  'provider_upstream_failed', 'provider_request_failed', 'provider_408', 'provider_429',
-  'provider_500', 'provider_502', 'provider_503', 'provider_504', 'provider_524',
-  'provider_not_configured', 'provider_unauthorized', 'provider_model_unavailable',
-]);
-
-function grokFallbackProviders(provider: SubmitVideoInput['provider'], model: string, env: Readonly<Record<string, string | undefined>>): SubmitVideoInput['provider'][] {
-  if (!['grok-video', 'mgrouter-grok-video', 'yuanai-grok-video'].includes(provider)) return [];
-  if (model.trim().toLowerCase() === 'sd-mini') return [];
-  const candidates: SubmitVideoInput['provider'][] = ['grok-video', 'mgrouter-grok-video', 'yuanai-grok-video'];
-  return candidates.filter((candidate) => candidate !== provider && isProviderLiveEnabled(candidate, env));
-}
-
-function grokFallbackModel(provider: SubmitVideoInput['provider']): string {
-  if (provider === 'yuanai-grok-video') return 'grok-imagine-video-1.5-preview';
-  if (provider === 'mgrouter-grok-video') return 'grok-imagine-video-1.5';
-  return getProviderConfig('grok-video').model;
-}
-
-function adaptGrokFallbackInput(input: SubmitVideoInput, provider: SubmitVideoInput['provider'], env: Readonly<Record<string, string | undefined>>): Pick<SubmitVideoInput, 'duration' | 'aspectRatio' | 'resolution'> {
-  const supports = getProviderConfig(provider, env).supports;
-  const durations = supports.durations ? [...supports.durations] : [];
-  const duration = durations.length && !durations.includes(input.duration)
-    ? durations.reduce((best, value) => Math.abs(value - input.duration) < Math.abs(best - input.duration) ? value : best, durations[0])
-    : input.duration;
-  const ratios = supports.ratios;
-  const aspectRatio = ratios.some((value) => value.toLowerCase() === input.aspectRatio.toLowerCase())
-    ? input.aspectRatio
-    : (ratios.find((value) => value === '9:16') ?? ratios[0] ?? input.aspectRatio);
-  const resolutions = supports.resolutions;
-  const exactResolution = resolutions.find((value) => value.toLowerCase() === input.resolution.toLowerCase());
-  const resolution = exactResolution ?? (resolutions.length ? resolutions.reduce((best, value) => {
-    const numeric = Number.parseInt(value, 10) || 0;
-    const bestNumeric = Number.parseInt(best, 10) || 0;
-    const requestedNumeric = Number.parseInt(input.resolution, 10) || 0;
-    // Prefer the highest available resolution that does not exceed the
-    // requested one; if all are larger, use the smallest supported value.
-    if (numeric <= requestedNumeric && bestNumeric > requestedNumeric) return value;
-    if (numeric <= requestedNumeric && bestNumeric <= requestedNumeric) return numeric > bestNumeric ? value : best;
-    return bestNumeric > requestedNumeric && numeric < bestNumeric ? value : best;
-  }, resolutions[0]) : input.resolution);
-  return { duration, aspectRatio, resolution };
-}
-
-function canFallbackFromProviderError(error: unknown): boolean {
-  const info = providerErrorInfo(error);
-  return FALLBACK_PROVIDER_ERRORS.has(info.code);
+  const endpoint = providerEndpoint(input.provider, 'create', env);
+  const timeoutMs = providerSubmissionTimeoutMs(input.provider);
+  try {
+    return { mode: 'live', provider: input.provider, response: await requestProviderWithFetcher(dependencies.fetch ?? fetch, endpoint, config.apiKey, body, timeoutMs) };
+  } catch (error) {
+    const info = providerErrorInfo(error, { endpoint, method: 'POST', timeoutMs, stage: 'video_submission' });
+    throw new ProviderRequestError(info);
+  }
 }
 
 /**
- * Submit a video and fail over between suppliers of the same Grok model when
- * the upstream is unavailable. Validation and capability errors are returned
- * immediately; only provider/network failures are eligible for failover.
+ * Submit only to the supplier explicitly selected by the operator. Automatic
+ * task retries may call this function again, but they must never move a Grok
+ * request to another supplier with different billing or moderation rules.
  */
 export async function submitVideoWithFallback(
   input: SubmitVideoInput,
   dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch; skipProviders?: readonly ProviderId[]; preventAmbiguousResubmission?: boolean } = {},
 ): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; model: string; response: unknown; fallbackFrom?: ProviderId; fallbackProviders?: ProviderId[]; fallbackParameters?: Pick<SubmitVideoInput, 'duration' | 'aspectRatio' | 'resolution'> }> {
-  const env = dependencies.env ?? process.env;
-  const allCandidates = [input.provider, ...grokFallbackProviders(input.provider, input.model, env)];
-  const skipped = new Set(dependencies.skipProviders ?? []);
-  const availableCandidates = allCandidates.filter((candidate) => !skipped.has(candidate));
-  const candidates = availableCandidates.length ? availableCandidates : [input.provider];
-  let lastError: unknown;
-  let attemptedFallbacks: ProviderId[] = [];
-  for (const provider of candidates) {
-    if (provider !== input.provider) attemptedFallbacks = [...attemptedFallbacks, provider];
-    const model = provider === input.provider ? input.model : grokFallbackModel(provider);
-    const parameters = provider === input.provider ? { duration: input.duration, aspectRatio: input.aspectRatio, resolution: input.resolution } : adaptGrokFallbackInput(input, provider, env);
-    try {
-      const result = await submitVideo({ ...input, provider, model, ...parameters }, dependencies);
-      const normalized = normalizeProviderResponse(provider, result.response);
-      if (dependencies.preventAmbiguousResubmission && normalized.providerTaskId) {
-        return { ...result, provider, model, ...(attemptedFallbacks.length ? { fallbackFrom: input.provider, fallbackProviders: attemptedFallbacks, fallbackParameters: parameters } : {}) };
-      }
-      if (normalized.status === 'failed') {
-        const code = normalized.error ?? 'provider_upstream_failed';
-        if (!FALLBACK_PROVIDER_ERRORS.has(code) || provider === candidates.at(-1)) {
-          return { ...result, provider, model, ...(attemptedFallbacks.length ? { fallbackFrom: input.provider, fallbackProviders: attemptedFallbacks, fallbackParameters: parameters } : {}) };
-        }
-        continue;
-      }
-      return { ...result, provider, model, ...(attemptedFallbacks.length ? { fallbackFrom: input.provider, fallbackProviders: attemptedFallbacks, fallbackParameters: parameters } : {}) };
-    } catch (error) {
-      lastError = error;
-      if (dependencies.preventAmbiguousResubmission) {
-        const info = providerErrorInfo(error);
-        const rejected = /^(provider_(400|401|403|404|422|429)|provider_not_configured|provider_unauthorized|provider_model_unavailable)$/.test(info.code);
-        if (!rejected) throw error;
-      }
-      if (!canFallbackFromProviderError(error) || provider === candidates.at(-1)) throw error;
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error('provider_request_failed');
+  const result = await submitVideo(input, dependencies);
+  return { ...result, provider: input.provider, model: input.model };
 }
 
 export async function generatePomoAIImage(input: { model: string; prompt: string; references?: Array<{ mimeType: string; dataBase64: string }>; aspectRatio?: string; resolution?: string }, dependencies: { env?: Readonly<Record<string, string | undefined>>; fetch?: typeof fetch } = {}): Promise<{ mode: 'live' | 'mock'; provider: ProviderId; response: unknown }> {

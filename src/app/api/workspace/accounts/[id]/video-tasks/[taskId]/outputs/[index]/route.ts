@@ -6,8 +6,9 @@ import { canAccessWorkspaceAccount } from '@/lib/workspace/access';
 import { getProviderTask } from '@/lib/providers/taskStore';
 import { getStoredVideoOutputFileInfo } from '@/lib/providers/outputStore';
 import { dedupeVideoOutputUrls } from '@/lib/providers/videoOutputUrls';
-import { cacheVideoTaskOutputLocally } from '@/lib/workspace/videoInventory';
+import { cacheVideoTaskOutputLocally, isVideoOutputIntentionallyDeleted } from '@/lib/workspace/videoInventory';
 import { getAssetFileInfo } from '@/lib/workspace/assetStore';
+import { parseHttpByteRange } from '@/lib/httpByteRange';
 
 export const runtime = 'nodejs';
 
@@ -40,6 +41,7 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
   if (!task || task.accountId !== id || task.mode !== 'video') return NextResponse.json({ success: false, error: 'task_not_found' }, { status: 404 });
   const index = Number(rawIndex);
   if (!Number.isInteger(index) || index < 0 || index > 63) return NextResponse.json({ success: false, error: 'output_not_found' }, { status: 404 });
+  if (isVideoOutputIntentionallyDeleted(task, index)) return NextResponse.json({ success: false, error: 'output_deleted' }, { status: 410 });
 
   const urls = dedupeVideoOutputUrls(task.provider, task.outputUrls);
   const base64Index = index - urls.length;
@@ -66,11 +68,9 @@ export async function GET(request: NextRequest, { params }: { params: Promise<{ 
     };
     const range = request.headers.get('range');
     if (range) {
-      const match = /^bytes=(\d*)-(\d*)$/i.exec(range.trim());
-      if (!match) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${cached.size}` } });
-      const start = match[1] ? Number(match[1]) : Math.max(0, cached.size - Number(match[2] || 0));
-      const end = Math.min(cached.size - 1, match[2] ? Number(match[2]) : cached.size - 1);
-      if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start > end || start >= cached.size) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${cached.size}` } });
+      const parsed = parseHttpByteRange(range, cached.size);
+      if (!parsed) return new Response(null, { status: 416, headers: { 'content-range': `bytes */${cached.size}` } });
+      const { start, end } = parsed;
       const headers = new Headers({ ...baseHeaders, 'content-length': String(end - start + 1), 'content-range': `bytes ${start}-${end}/${cached.size}` });
       return new Response(Readable.toWeb(fs.createReadStream(cached.filePath, { start, end })) as ReadableStream, { status: 206, headers });
     }
